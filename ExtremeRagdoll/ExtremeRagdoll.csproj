@@ -84,7 +84,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Bannerlord.MCM" Version="5.10.1" IncludeAssets="compile" PrivateAssets="all" />
+    <PackageReference Include="Bannerlord.MCM" Version="5.10.1" IncludeAssets="compile" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="ER_KnockbackAmplifier.cs" />
