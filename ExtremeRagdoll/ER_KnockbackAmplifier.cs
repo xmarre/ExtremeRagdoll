@@ -30,8 +30,29 @@ namespace ExtremeRagdoll
 
         static MethodBase TargetMethod()
         {
-            var byRefACD = typeof(AttackCollisionData).MakeByRefType();
-            return AccessTools.Method(typeof(Agent), nameof(Agent.RegisterBlow), new Type[] { typeof(Blow), byRefACD });
+            var agent = typeof(Agent);
+            var want = typeof(AttackCollisionData);
+            var byRef = want.MakeByRefType();
+
+            var method = AccessTools.Method(agent, nameof(Agent.RegisterBlow), new[] { typeof(Blow), byRef });
+            if (method != null) return method;
+
+            foreach (var candidate in AccessTools.GetDeclaredMethods(agent))
+            {
+                if (candidate.Name != nameof(Agent.RegisterBlow)) continue;
+
+                var parameters = candidate.GetParameters();
+                if (parameters.Length < 2) continue;
+                if (parameters[0].ParameterType != typeof(Blow)) continue;
+
+                var second = parameters[1].ParameterType;
+                if (!second.IsByRef) continue;
+                if (second.GetElementType() != want) continue;
+
+                return candidate;
+            }
+
+            return null;
         }
 
         [HarmonyPostfix]
