@@ -9,8 +9,9 @@ namespace ExtremeRagdoll
 {
     internal static class ER_Config
     {
-        public static float KnockbackMultiplier = 3.0f; // 1 = vanilla
+        public static float KnockbackMultiplier = 6.0f; // temporarily crank up for visibility
         public static float MaxExtraMagnitude   = 2500f;
+        public static bool  DebugLogging        = true;
 
         public static float ClampExtra(float magnitude)
         {
@@ -78,6 +79,11 @@ namespace ExtremeRagdoll
             finally
             {
                 _guard = false;
+            }
+
+            if (ER_Config.DebugLogging)
+            {
+                Debug.Print($"[ExtremeRagdoll] death shove extra={extra:F1} dir={dir}");
             }
         }
     }
