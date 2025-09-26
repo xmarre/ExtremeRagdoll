@@ -12,14 +12,10 @@
     <DependedModule Id="Sandbox" />
     <DependedModule Id="StoryMode" />
 
-    <!-- MCM v5 runtime deps -->
     <DependedModule Id="Bannerlord.Harmony" />
     <DependedModule Id="Bannerlord.UIExtenderEx" />
     <DependedModule Id="Bannerlord.ButterLib" />
     <DependedModule Id="Bannerlord.MBOptionScreen" />
-
-    <!-- if you use TOR -->
-    <!-- <DependedModule Id="TOR_Core" /> -->
   </DependedModules>
   <SubModules>
     <SubModule>
