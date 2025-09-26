@@ -43,18 +43,19 @@ namespace ExtremeRagdoll
                 if (d > b.Radius) continue;
 
                 float falloff = 1f / (1f + d * d);
-                float baseForce = b.Force * falloff;
+                float baseForce = ER_Config.ClampExtra(b.Force * falloff);
+                if (baseForce <= 0f) continue;
 
                 Vec3 dir = (vPos - b.Pos).NormalizedCopy();
                 if (dir.X == 0f && dir.Y == 0f && dir.Z == 0f) dir = new Vec3(0f, 0f, 1f);
 
                 var blow = new Blow(-1)
                 {
-                    DamageType = DamageTypes.Blunt,
-                    BlowFlag = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                    BaseMagnitude = baseForce,
-                    SwingDirection = dir,
-                    GlobalPosition = vPos,
+                    DamageType      = DamageTypes.Blunt,
+                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                    BaseMagnitude   = baseForce,
+                    SwingDirection  = dir,
+                    GlobalPosition  = vPos,
                     InflictedDamage = 0
                 };
 
