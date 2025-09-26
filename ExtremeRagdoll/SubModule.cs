@@ -14,11 +14,7 @@ namespace ExtremeRagdoll
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
         {
-            _ = Settings.Instance; // lets MCM pick it up; earliest safe point per docs
-            TaleWorlds.Core.InformationManager.DisplayMessage(
-                new TaleWorlds.Core.InformationMessage($"[ExtremeRagdoll] Settings discovered: {Settings.Instance != null}"));
-            TaleWorlds.Core.InformationManager.DisplayMessage(
-                new TaleWorlds.Core.InformationMessage("[ExtremeRagdoll] Startup loading confirmed."));
+            _ = Settings.Instance; // ensure discovery at main menu
             if (_adapted) return;
             try { _adapted = ER_TOR_Adapter.TryEnableShockwaves(); }
             catch { _adapted = false; }
