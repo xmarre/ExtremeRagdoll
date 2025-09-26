@@ -10,12 +10,14 @@ namespace ExtremeRagdoll
         protected override void OnSubModuleLoad()
         {
             new Harmony("extremeragdoll.patch").PatchAll();
-            _ = Settings.Instance;
         }
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
         {
+            _ = Settings.Instance; // registration point for MCM v5
+
             if (_adapted) return;
+
             try
             {
                 _adapted = ER_TOR_Adapter.TryEnableShockwaves();

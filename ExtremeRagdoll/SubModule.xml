@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Module>
+  <Name value="Extreme Ragdoll" />
+  <Id value="ExtremeRagdoll" />
+  <Version value="v1.0.0" />
+  <DefaultModule value="false" />
+  <SingleplayerModule value="true" />
+  <MultiplayerModule value="false" />
+  <DependedModules>
+    <DependedModule Id="Native" />
+    <DependedModule Id="SandBoxCore" />
+    <DependedModule Id="Sandbox" />
+    <DependedModule Id="StoryMode" />
+
+    <!-- MCM v5 runtime deps -->
+    <DependedModule Id="Bannerlord.Harmony" />
+    <DependedModule Id="Bannerlord.UIExtenderEx" />
+    <DependedModule Id="Bannerlord.ButterLib" />
+    <DependedModule Id="Bannerlord.MBOptionScreen" />
+
+    <!-- if you use TOR -->
+    <!-- <DependedModule Id="TOR_Core" /> -->
+  </DependedModules>
+  <SubModules>
+    <SubModule>
+      <Name value="Extreme Ragdoll" />
+      <DLLName value="ExtremeRagdoll.dll" />
+      <SubModuleClassType value="ExtremeRagdoll.SubModule" />
+      <Tags>
+        <Tag key="DedicatedServerType" value="none" />
+        <Tag key="IsNoRenderModeElement" value="false" />
+      </Tags>
+    </SubModule>
+  </SubModules>
+</Module>

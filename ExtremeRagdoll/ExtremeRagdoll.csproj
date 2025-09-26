@@ -84,9 +84,11 @@
     </Reference>
     <Reference Include="MCMv5">
       <HintPath>D:\Spiele\Mount and Blade II Bannerlord\Modules\MCMv5\bin\Win64_Shipping_Client\MCMv5.dll</HintPath>
+      <Private>False</Private>
     </Reference>
     <Reference Include="MCMv5.Abstractions">
       <HintPath>D:\Spiele\Mount and Blade II Bannerlord\Modules\MCMv5\bin\Win64_Shipping_Client\MCMv5.Abstractions.dll</HintPath>
+      <Private>False</Private>
     </Reference>
   </ItemGroup>
   <ItemGroup>
