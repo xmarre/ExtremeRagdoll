@@ -10,6 +10,7 @@ namespace ExtremeRagdoll
         protected override void OnSubModuleLoad()
         {
             new Harmony("extremeragdoll.patch").PatchAll();
+            _ = Settings.Instance;
         }
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
