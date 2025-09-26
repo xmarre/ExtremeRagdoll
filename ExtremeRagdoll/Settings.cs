@@ -8,7 +8,7 @@ namespace ExtremeRagdoll
     public sealed class Settings : AttributeGlobalSettings<Settings>
     {
         // Keep Id stable & unique; matching module Id is fine
-        public override string Id => "ExtremeRagdoll";
+        public override string Id => "ExtremeRagdoll_v1";
         public override string DisplayName => "Extreme Ragdoll";
         public override string FolderName => "ExtremeRagdoll";
         public override string FormatType => "json";

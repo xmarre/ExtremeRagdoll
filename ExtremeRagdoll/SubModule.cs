@@ -1,5 +1,5 @@
 using HarmonyLib;
-using TaleWorlds.Library;
+using TaleWorlds.Core;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
@@ -10,14 +10,14 @@ namespace ExtremeRagdoll
 
         protected override void OnSubModuleLoad()
         {
+            _ = Settings.Instance;
             new Harmony("extremeragdoll.patch").PatchAll();
         }
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
         {
-            // Force MCM to discover our attribute settings at main menu
-            _ = Settings.Instance;
-
+            InformationManager.DisplayMessage(
+                new InformationMessage("[ExtremeRagdoll] MCM settings loaded"));
             if (_adapted) return;
             try { _adapted = ER_TOR_Adapter.TryEnableShockwaves(); }
             catch { _adapted = false; }
@@ -25,10 +25,6 @@ namespace ExtremeRagdoll
 
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
-            if (!_adapted)
-                try { _adapted = ER_TOR_Adapter.TryEnableShockwaves(); }
-                catch { _adapted = false; }
-
             mission.AddMissionBehavior(new ER_DeathBlastBehavior());
         }
     }
