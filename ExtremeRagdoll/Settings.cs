@@ -6,7 +6,7 @@ namespace ExtremeRagdoll
 {
     public sealed class Settings : AttributeGlobalSettings<Settings>
     {
-        public override string Id => "ExtremeRagdoll.Settings";
+        public override string Id => "ExtremeRagdoll_v1";
         public override string DisplayName => "Extreme Ragdoll";
         public override string FolderName => "ExtremeRagdoll";
         public override string FormatType => "json";

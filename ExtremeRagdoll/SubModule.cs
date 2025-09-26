@@ -1,4 +1,5 @@
 ﻿using HarmonyLib;
+using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
@@ -15,6 +16,7 @@ namespace ExtremeRagdoll
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
         {
             _ = Settings.Instance; // registration point for MCM v5
+            Debug.Print("[ExtremeRagdoll] MCM settings instance touched");
 
             if (_adapted) return;
 
