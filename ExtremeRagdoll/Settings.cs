@@ -4,9 +4,11 @@ using MCM.Abstractions.Attributes.v2;
 
 namespace ExtremeRagdoll
 {
+    // Attribute settings => automatically discovered by MCM
     public sealed class Settings : AttributeGlobalSettings<Settings>
     {
-        public override string Id => "ExtremeRagdoll_v1";
+        // Keep Id stable & unique; matching module Id is fine
+        public override string Id => "ExtremeRagdoll";
         public override string DisplayName => "Extreme Ragdoll";
         public override string FolderName => "ExtremeRagdoll";
         public override string FormatType => "json";
@@ -23,7 +25,7 @@ namespace ExtremeRagdoll
 
         [SettingPropertyGroup("General")]
         [SettingPropertyBool("Debug Logging",
-            Order = 2, RequireRestart = false, HintText = "Print shove lines to rgl_log.")]
+            Order = 2, RequireRestart = false, HintText = "Print shove lines to log.")]
         public bool DebugLogging { get; set; } = true;
     }
 }

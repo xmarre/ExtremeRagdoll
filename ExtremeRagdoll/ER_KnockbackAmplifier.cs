@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.Core;
@@ -9,14 +9,9 @@ namespace ExtremeRagdoll
 {
     internal static class ER_Config
     {
-        public static float KnockbackMultiplier =>
-            Settings.Instance?.KnockbackMultiplier ?? 6.0f;
-
-        public static float MaxExtraMagnitude =>
-            Settings.Instance?.MaxExtraMagnitude ?? 2500;
-
-        public static bool DebugLogging =>
-            Settings.Instance?.DebugLogging ?? true;
+        public static float KnockbackMultiplier => Settings.Instance?.KnockbackMultiplier ?? 6f;
+        public static float MaxExtraMagnitude   => Settings.Instance?.MaxExtraMagnitude ?? 2500;
+        public static bool  DebugLogging        => Settings.Instance?.DebugLogging ?? true;
 
         public static float ClampExtra(float magnitude)
         {
