@@ -70,6 +70,47 @@ namespace ExtremeRagdoll
             return null;
         }
 
+        [HarmonyPrefix, HarmonyPriority(HarmonyLib.Priority.First)]
+        private static void Prefix(Agent __instance, [HarmonyArgument(0)] ref Blow blow)
+        {
+            if (_guard) return;
+            if (__instance == null) return;
+
+            float hp = __instance.Health;
+            if (hp <= 0f) return;
+            if (blow.InflictedDamage <= 0f) return;
+            // optional: comment out for a quick A/B to confirm engine accepts huge impulses
+            // if (hp > 0f && blow.InflictedDamage < hp * 0.7f) return;
+
+            Vec3 flat = __instance.Position - blow.GlobalPosition;
+            flat = new Vec3(flat.X, flat.Y, 0f);
+            if (flat.LengthSquared < 1e-4f)
+            {
+                var look = __instance.LookDirection;
+                flat = new Vec3(look.X, look.Y, 0f);
+            }
+            if (flat.LengthSquared < 1e-6f)
+            {
+                flat = new Vec3(0f, 1f, 0f);
+            }
+
+            Vec3 dir = (flat.NormalizedCopy() * 0.35f + new Vec3(0f, 0f, 1.05f)).NormalizedCopy();
+
+            float scale = MathF.Max(1f, ER_Config.KnockbackMultiplier);
+            float target = (10000f + blow.InflictedDamage * 120f) * scale;
+            if (blow.BaseMagnitude < target)
+            {
+                blow.BaseMagnitude = target;
+            }
+            blow.SwingDirection = dir;
+            blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound;
+
+            if (ER_Config.DebugLogging)
+            {
+                ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude}");
+            }
+        }
+
         [HarmonyPostfix]
         private static void Postfix(Agent __instance, [HarmonyArgument(0)] Blow blow)
         {
