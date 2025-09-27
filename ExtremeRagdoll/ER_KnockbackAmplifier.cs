@@ -99,8 +99,12 @@ namespace ExtremeRagdoll
             ER_Log.Info($"death shove: hadKb={hadKb} dmg={dmg} baseMag={blow.BaseMagnitude} extra={extra}");
 
             Vec3 flat = __instance.Position - blow.GlobalPosition;
-            flat.Z = 0f;
-            if (flat.LengthSquared < 1e-4f) flat = __instance.LookDirection;
+            flat = new Vec3(flat.X, flat.Y, 0f);
+            if (flat.LengthSquared < 1e-4f)
+            {
+                var look = __instance.LookDirection;
+                flat = new Vec3(look.X, look.Y, 0f);
+            }
             Vec3 dir = (flat.NormalizedCopy() * 0.85f + new Vec3(0f, 0f, 0.53f)).NormalizedCopy();
 
             var push = new Blow(-1)
