@@ -18,7 +18,7 @@ namespace ExtremeRagdoll
 
         public override void OnBehaviorInitialize() => Instance = this;
 
-        public override void OnMissionEnded() => Instance = null;
+        public override void OnRemoveBehavior() => Instance = null;
 
         public void RecordBlast(Vec3 center, float radius, float force)
         {
