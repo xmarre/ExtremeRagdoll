@@ -10,7 +10,7 @@ namespace ExtremeRagdoll
     {
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
-        private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; }
+        private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
         private readonly List<Launch> _launches = new List<Launch>();
@@ -42,12 +42,14 @@ namespace ExtremeRagdoll
             _kicks.Add(new Kick { A = a, Dir = dir, Force = force, T0 = Mission.CurrentTime, Dur = duration });
         }
 
-        public void EnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f)
+        public void EnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f, int retries = 8)
         {
             if (a == null) return;
             if (mag <= 0f) return;
             if (delaySec < 0f) delaySec = 0f;
-            _launches.Add(new Launch { A = a, Dir = dir, Mag = mag, Pos = pos, T = Mission.CurrentTime + delaySec });
+            if (retries < 0) retries = 0;
+            if (retries > 12) retries = 12;
+            _launches.Add(new Launch { A = a, Dir = dir, Mag = mag, Pos = pos, T = Mission.CurrentTime + delaySec, Tries = retries });
         }
 
         public override void OnMissionTick(float dt)
@@ -86,7 +88,10 @@ namespace ExtremeRagdoll
                 var L = _launches[i];
                 if (now < L.T) continue;
                 _launches.RemoveAt(i);
-                if (L.A == null || !L.A.IsActive() || L.A.Health > 0f) continue; // only launch ragdolls
+                if (L.A == null || L.A.Health > 0f || L.A.Mission != Mission) continue; // only launch ragdolls still in mission
+
+                Vec3 posBefore = L.A.Position;
+                float vBefore2 = L.A.Velocity.LengthSquared;
                 var blow = new Blow(-1)
                 {
                     DamageType      = DamageTypes.Blunt,
@@ -98,8 +103,23 @@ namespace ExtremeRagdoll
                 };
                 AttackCollisionData acd = default;
                 L.A.RegisterBlow(blow, in acd);
-                if (ER_Config.DebugLogging)
-                    ER_Log.Info($"death shove applied to Agent#{L.A.Index} dir={L.Dir} mag={L.Mag}");
+                float vAfter2 = L.A.Velocity.LengthSquared;
+                float moved = posBefore.Distance(L.A.Position);
+                bool took = (vAfter2 > vBefore2 + 0.05f) || (moved > 0.01f);
+
+                if (!took && L.Tries > 0)
+                {
+                    L.Tries--;
+                    L.T = now + 0.06f;
+                    L.Pos = L.A.Position;
+                    _launches.Add(L);
+                    if (ER_Config.DebugLogging)
+                        ER_Log.Info($"corpse launch re-queued for Agent#{L.A.Index} tries={L.Tries}");
+                }
+                else if (ER_Config.DebugLogging)
+                {
+                    ER_Log.Info($"death shove applied to Agent#{L.A.Index} took={took} mag={L.Mag}");
+                }
             }
             if (_recent.Count == 0) return;
 
@@ -150,6 +170,37 @@ namespace ExtremeRagdoll
                 }
                 if (affected && ++worked >= MAX_WORK) break;
             }
+        }
+
+        // Fire post-death fallback if MakeDead scheduling failed to consume the pending entry
+        public override void OnAgentRemoved(Agent affected, Agent affector, AgentState state, KillingBlow killingBlow)
+        {
+            if (affected == null || state != AgentState.Killed) return;
+
+            // Direction & contact from the kill info (fallbacks if missing)
+            Vec3 hitPos = (killingBlow.GlobalPosition.LengthSquared > 1e-6f) ? killingBlow.GlobalPosition : affected.Position;
+            Vec3 flat   = affected.Position - hitPos; flat = new Vec3(flat.X, flat.Y, 0f);
+            if (flat.LengthSquared < 1e-6f) { var look = affected.LookDirection; flat = new Vec3(look.X, look.Y, 0f); }
+            if (flat.LengthSquared < 1e-6f) flat = new Vec3(0f, 1f, 0f);
+            Vec3 dir = (flat.NormalizedCopy() * 0.35f + new Vec3(0f, 0f, 1.05f)).NormalizedCopy();
+
+            // Fallback only if MakeDead didn’t consume the pending entry
+            if (!ER_Amplify_RegisterBlowPatch._pending.TryGetValue(affected.Index, out var p))
+                return;
+
+            ER_Amplify_RegisterBlowPatch._pending.Remove(affected.Index);
+
+            float mag = p.mag;
+            if (p.dir.LengthSquared > 1e-6f) dir = p.dir;
+            if (p.pos.LengthSquared > 1e-6f) hitPos = p.pos;
+
+            // Schedule with retries (safety net in case MakeDead timing was late)
+            EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: 8);
+            EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: 4);
+            EnqueueKick  (affected, dir, mag, 1.2f);
+            RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
+            if (ER_Config.DebugLogging)
+                ER_Log.Info($"OnAgentRemoved fallback: scheduled corpse launch Agent#{affected.Index} mag={mag}");
         }
 
         public override MissionBehaviorType BehaviorType => MissionBehaviorType.Other;

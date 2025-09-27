@@ -139,6 +139,7 @@ namespace ExtremeRagdoll
         }
     }
 
+    // Schedule corpse launch right after death (ragdoll just activated)
     [HarmonyPatch(typeof(Agent), nameof(Agent.MakeDead))]
     internal static class ER_Probe_MakeDead
     {
@@ -146,20 +147,16 @@ namespace ExtremeRagdoll
         static void Post(Agent __instance)
         {
             if (__instance == null) return;
-            if (!ER_Amplify_RegisterBlowPatch._pending.TryGetValue(__instance.Index, out var pending)) return;
-
+            if (!ER_Amplify_RegisterBlowPatch._pending.TryGetValue(__instance.Index, out var p)) return;
             ER_Amplify_RegisterBlowPatch._pending.Remove(__instance.Index);
 
-            // delay slightly more so ragdoll is fully active, then give a follow-up pulse (all tunable via MCM)
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, pending.dir, pending.mag,                         pending.pos, ER_Config.LaunchDelay1);
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, pending.dir, pending.mag * ER_Config.LaunchPulse2Scale, pending.pos, ER_Config.LaunchDelay2);
-            ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, pending.dir, pending.mag, 1.20f);
-            ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, pending.mag);
-
-            if (ER_Config.DebugLogging)
-            {
-                ER_Log.Info($"ragdoll shove scheduled for Agent#{__instance.Index} mag={pending.mag}");
-            }
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, p.dir, p.mag,                         p.pos, ER_Config.LaunchDelay1, retries: 10);
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, p.dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 6);
+            ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, p.dir, p.mag, 1.2f);
+            ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, p.mag);
+            if (ER_Config.DebugLogging) ER_Log.Info($"MakeDead: scheduled corpse launch Agent#{__instance.Index} mag={p.mag}");
         }
     }
+
+    // (MakeDead schedules primary launch; OnAgentRemoved only falls back if pending is still present)
 }
