@@ -20,7 +20,8 @@ namespace ExtremeRagdoll
     [HarmonyPatch]
     internal static class ER_Amplify_RegisterBlowPatch
     {
-        internal static readonly Dictionary<int, (Vec3 dir, float mag, Vec3 pos)> _pending = new();
+        internal static readonly Dictionary<int, (Vec3 dir, float mag, Vec3 pos)> _pending =
+            new Dictionary<int, (Vec3 dir, float mag, Vec3 pos)>();
 
         [HarmonyPrepare]
         static bool Prepare()
