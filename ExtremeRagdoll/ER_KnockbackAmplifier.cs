@@ -117,8 +117,17 @@ namespace ExtremeRagdoll
             {
                 _guard = true;
                 __instance.RegisterBlow(push, in dummy);
-                __instance.ApplyExternalForceToBones(dir * (extra * ER_Config.ExtraForceMultiplier),
-                    MBActionSet.BoneUsage.Movement, 0.45f);
+                // zusätzlicher Impuls für stärkeren Start
+                var micro = new Blow(-1)
+                {
+                    DamageType      = DamageTypes.Blunt,
+                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                    BaseMagnitude   = extra * ER_Config.ExtraForceMultiplier * 0.35f,
+                    SwingDirection  = dir,
+                    GlobalPosition  = blow.GlobalPosition,
+                    InflictedDamage = 0
+                };
+                __instance.RegisterBlow(micro, in dummy);
                 ER_DeathBlastBehavior.Instance?.EnqueueKick(__instance, dir, extra * ER_Config.ExtraForceMultiplier, 0.90f);
                 _lastPushedId = __instance.Index;
                 _lastPushedIdValid = true;
