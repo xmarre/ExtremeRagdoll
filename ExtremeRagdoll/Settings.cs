@@ -35,5 +35,20 @@ namespace ExtremeRagdoll
         [SettingPropertyFloatingInteger("Death Blast Force Multiplier", 0f, 1000f, "0.0",
             Order = 4, RequireRestart = false)]
         public float DeathBlastForceMultiplier { get; set; } = 4.0f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Corpse Launch Delay #1 (s)", 0f, 0.25f, "0.00",
+            Order = 100, RequireRestart = false)]
+        public float LaunchDelay1 { get; set; } = 0.06f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Corpse Launch Delay #2 (s)", 0f, 0.30f, "0.00",
+            Order = 101, RequireRestart = false)]
+        public float LaunchDelay2 { get; set; } = 0.14f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Second Pulse Scale", 0f, 2.0f, "0.00",
+            Order = 102, RequireRestart = false)]
+        public float LaunchPulse2Scale { get; set; } = 0.80f;
     }
 }

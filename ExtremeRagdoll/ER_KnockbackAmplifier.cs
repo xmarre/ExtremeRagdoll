@@ -15,6 +15,9 @@ namespace ExtremeRagdoll
         public static float DeathBlastRadius          => Settings.Instance?.DeathBlastRadius ?? 3.0f;
         public static float DeathBlastForceMultiplier => Settings.Instance?.DeathBlastForceMultiplier ?? 1f;
         public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? true;
+        public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.05f;
+        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.12f;
+        public static float LaunchPulse2Scale         => Settings.Instance?.LaunchPulse2Scale ?? 0.60f;
     }
 
     [HarmonyPatch]
@@ -147,24 +150,15 @@ namespace ExtremeRagdoll
 
             ER_Amplify_RegisterBlowPatch._pending.Remove(__instance.Index);
 
-            var launch = new Blow(-1)
-            {
-                DamageType      = DamageTypes.Blunt,
-                BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                BaseMagnitude   = pending.mag,
-                SwingDirection  = pending.dir,
-                GlobalPosition  = pending.pos,
-                InflictedDamage = 0
-            };
-            AttackCollisionData acd = default;
-            __instance.RegisterBlow(launch, in acd);
-
-            ER_DeathBlastBehavior.Instance?.EnqueueKick(__instance, pending.dir, pending.mag, 1.0f);
+            // delay slightly more so ragdoll is fully active, then give a follow-up pulse (all tunable via MCM)
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, pending.dir, pending.mag,                         pending.pos, ER_Config.LaunchDelay1);
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, pending.dir, pending.mag * ER_Config.LaunchPulse2Scale, pending.pos, ER_Config.LaunchDelay2);
+            ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, pending.dir, pending.mag, 1.20f);
             ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, pending.mag);
 
             if (ER_Config.DebugLogging)
             {
-                ER_Log.Info($"ragdoll shove queued for Agent#{__instance.Index} mag={pending.mag}");
+                ER_Log.Info($"ragdoll shove scheduled for Agent#{__instance.Index} mag={pending.mag}");
             }
         }
     }

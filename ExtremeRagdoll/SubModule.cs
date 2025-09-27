@@ -68,5 +68,6 @@ namespace ExtremeRagdoll
             }
             ER_Log.Info("MissionBehavior added: ER_DeathBlastBehavior");
         }
+        // No OnMissionEnded override needed; pending gets cleared on behavior removal and mission start.
     }
 }
