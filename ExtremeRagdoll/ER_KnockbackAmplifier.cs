@@ -24,6 +24,26 @@ namespace ExtremeRagdoll
     [HarmonyPatch]
     internal static class ER_Amplify_RegisterBlowPatch
     {
+        [HarmonyPrepare]
+        static bool Prepare()
+        {
+            var method = TargetMethod();
+            if (method == null)
+            {
+                foreach (var cand in AccessTools.GetDeclaredMethods(typeof(Agent)))
+                {
+                    if (cand.Name != nameof(Agent.RegisterBlow)) continue;
+                    var sig = string.Join(", ", Array.ConvertAll(cand.GetParameters(), p => p.ParameterType.FullName));
+                    ER_Log.Info("RegisterBlow overload: (" + sig + ")");
+                }
+                ER_Log.Error("Harmony target not found: Agent.RegisterBlow with byref AttackCollisionData");
+                return false;
+            }
+
+            ER_Log.Info("Patching: " + method);
+            return true;
+        }
+
         [System.ThreadStatic] private static bool _guard;
         [System.ThreadStatic] private static int _lastPushedId;
         [System.ThreadStatic] private static bool _lastPushedIdValid;
@@ -56,9 +76,10 @@ namespace ExtremeRagdoll
         }
 
         [HarmonyPostfix]
-        private static void Postfix(Agent __instance, Blow blow)
+        private static void Postfix(Agent __instance, [HarmonyArgument(0)] Blow blow)
         {
             if (_guard) return;
+            if (__instance == null) return;
 
             if (_lastPushedIdValid && _lastPushedId == __instance.Index) return;
 
@@ -75,6 +96,7 @@ namespace ExtremeRagdoll
             float source = hadKb ? blow.BaseMagnitude : MathF.Max(150f, 4f * dmg);
             float extra = ER_Config.ClampExtra((ER_Config.KnockbackMultiplier - 1f) * source);
             if (extra <= 0f) return;
+            ER_Log.Info($"death shove: hadKb={hadKb} dmg={dmg} baseMag={blow.BaseMagnitude} extra={extra}");
 
             Vec3 dir = (__instance.Position - blow.GlobalPosition).NormalizedCopy();
             if (dir.X == 0f && dir.Y == 0f && dir.Z == 0f) dir = __instance.LookDirection;
@@ -103,10 +125,17 @@ namespace ExtremeRagdoll
                 _guard = false;
             }
 
-            if (ER_Config.DebugLogging)
-            {
-                Debug.Print($"[ExtremeRagdoll] death shove extra={extra:F1} dir={dir}");
-            }
+            ER_Log.Info($"death shove applied to Agent#{__instance.Index} dir={dir}");
+        }
+    }
+
+    [HarmonyPatch(typeof(Agent), nameof(Agent.MakeDead))]
+    internal static class ER_Probe_MakeDead
+    {
+        [HarmonyPostfix]
+        static void Post(Agent __instance)
+        {
+            ER_Log.Info($"MakeDead: Agent#{__instance?.Index} dead");
         }
     }
 }
