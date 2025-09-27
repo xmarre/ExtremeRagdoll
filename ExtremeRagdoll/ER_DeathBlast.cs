@@ -90,7 +90,6 @@ namespace ExtremeRagdoll
         public void EnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f, int retries = 8)
         {
             if (a == null) return;
-            if (!a.IsActive()) return;
             var mission = Mission;
             if (mission == null) return;
             if (a.Mission != mission) return;
@@ -190,11 +189,6 @@ namespace ExtremeRagdoll
                 DecQueue(agentIndex);
                 if (agent == null)
                 {
-                    continue;
-                }
-                if (!agent.IsActive())
-                {
-                    _launchFailLogged.Remove(agentIndex);
                     continue;
                 }
                 if (agent.Health > 0f || agent.Mission != mission)
@@ -406,8 +400,8 @@ namespace ExtremeRagdoll
             if (p.pos.LengthSquared > 1e-6f) hitPos = p.pos;
 
             // Schedule with retries (safety net in case MakeDead timing was late)
-            EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: 6);
-            EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: 3);
+            EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: 10);
+            EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: 6);
             EnqueueKick  (affected, dir, mag, 1.2f);
             RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
             if (ER_Config.DebugLogging)

@@ -39,12 +39,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #1 (s)", 0f, 0.25f, "0.00",
             Order = 100, RequireRestart = false)]
-        public float LaunchDelay1 { get; set; } = 0.02f;
+        public float LaunchDelay1 { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #2 (s)", 0f, 0.30f, "0.00",
             Order = 101, RequireRestart = false)]
-        public float LaunchDelay2 { get; set; } = 0.07f;
+        public float LaunchDelay2 { get; set; } = 0.12f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Second Pulse Scale", 0f, 2.0f, "0.00",
@@ -54,22 +54,22 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Velocity Scale Threshold", 1.0f, 2.0f, "0.00",
             Order = 103, RequireRestart = false)]
-        public float CorpseLaunchVelocityScaleThreshold { get; set; } = 1.02f;
+        public float CorpseLaunchVelocityScaleThreshold { get; set; } = 1.08f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Velocity Offset", 0f, 1f, "0.000",
             Order = 104, RequireRestart = false)]
-        public float CorpseLaunchVelocityOffset { get; set; } = 0.01f;
+        public float CorpseLaunchVelocityOffset { get; set; } = 0.02f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Vertical Delta", 0f, 1f, "0.000",
             Order = 105, RequireRestart = false)]
-        public float CorpseLaunchVerticalDelta { get; set; } = 0.05f;
+        public float CorpseLaunchVerticalDelta { get; set; } = 0.10f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Displacement Threshold", 0f, 0.5f, "0.000",
             Order = 106, RequireRestart = false)]
-        public float CorpseLaunchDisplacement { get; set; } = 0.005f;
+        public float CorpseLaunchDisplacement { get; set; } = 0.020f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Max Corpse Launch Magnitude", 0f, 500_000_000f, "0.0",
