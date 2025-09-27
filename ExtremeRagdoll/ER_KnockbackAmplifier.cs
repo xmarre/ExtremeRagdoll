@@ -11,20 +11,83 @@ namespace ExtremeRagdoll
     internal static class ER_Config
     {
         public static float KnockbackMultiplier       => Settings.Instance?.KnockbackMultiplier ?? 6f;
-        public static float ExtraForceMultiplier      => Settings.Instance?.ExtraForceMultiplier ?? 1f;
+        public static float ExtraForceMultiplier      => MathF.Max(0f, Settings.Instance?.ExtraForceMultiplier ?? 1f);
         public static float DeathBlastRadius          => Settings.Instance?.DeathBlastRadius ?? 3.0f;
-        public static float DeathBlastForceMultiplier => Settings.Instance?.DeathBlastForceMultiplier ?? 1f;
+        public static float DeathBlastForceMultiplier => MathF.Max(0f, Settings.Instance?.DeathBlastForceMultiplier ?? 1f);
         public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? true;
-        public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.05f;
-        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.12f;
-        public static float LaunchPulse2Scale         => Settings.Instance?.LaunchPulse2Scale ?? 0.60f;
+        public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;
+        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.07f;
+        public static float LaunchPulse2Scale
+        {
+            get
+            {
+                float scale = Settings.Instance?.LaunchPulse2Scale ?? 0.60f;
+                if (scale < 0f) scale = 0f;
+                else if (scale > 2f) scale = 2f;
+                return scale;
+            }
+        }
+        public static float CorpseLaunchVelocityScaleThreshold => MathF.Max(1f, Settings.Instance?.CorpseLaunchVelocityScaleThreshold ?? 1.02f);
+        public static float CorpseLaunchVelocityOffset         => Settings.Instance?.CorpseLaunchVelocityOffset ?? 0.01f;
+        public static float CorpseLaunchVerticalDelta           => Settings.Instance?.CorpseLaunchVerticalDelta ?? 0.05f;
+        public static float CorpseLaunchDisplacement            => Settings.Instance?.CorpseLaunchDisplacement ?? 0.005f;
+        public static float MaxCorpseLaunchMagnitude            => Settings.Instance?.MaxCorpseLaunchMagnitude ?? 200_000_000f;
+        public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
+        public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
+        public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
+        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
+        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.045f);
+        public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
+        public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
+        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.12f);
+        public static int   CorpseLaunchQueueCap                => Math.Max(0, Settings.Instance?.CorpseLaunchQueueCap ?? 3);
     }
 
     [HarmonyPatch]
     internal static class ER_Amplify_RegisterBlowPatch
     {
-        internal static readonly Dictionary<int, (Vec3 dir, float mag, Vec3 pos)> _pending =
-            new Dictionary<int, (Vec3 dir, float mag, Vec3 pos)>();
+        internal struct PendingLaunch
+        {
+            public Vec3 dir;
+            public float mag;
+            public Vec3 pos;
+            public float time;
+        }
+
+        internal static readonly Dictionary<int, PendingLaunch> _pending =
+            new Dictionary<int, PendingLaunch>();
+        private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
+        private const float SCHEDULE_WINDOW = 0.01f;
+
+        internal static void ClearPending()
+        {
+            _pending.Clear();
+            _lastScheduled.Clear();
+        }
+
+        internal static bool TryTakePending(int agentId, out PendingLaunch pending)
+        {
+            if (_pending.TryGetValue(agentId, out pending))
+            {
+                _pending.Remove(agentId);
+                return true;
+            }
+            pending = default;
+            return false;
+        }
+
+        internal static void ForgetScheduled(int agentId)
+        {
+            _lastScheduled.Remove(agentId);
+        }
+
+        internal static bool TryMarkScheduled(int agentId, float now, float windowSec = SCHEDULE_WINDOW)
+        {
+            if (_lastScheduled.TryGetValue(agentId, out var last) && now - last < windowSec)
+                return false;
+            _lastScheduled[agentId] = now;
+            return true;
+        }
 
         [HarmonyPrepare]
         static bool Prepare()
@@ -95,11 +158,11 @@ namespace ExtremeRagdoll
             bool lethal = hp - blow.InflictedDamage <= 0f;
 
             Vec3 flat = __instance.Position - blow.GlobalPosition;
-            flat = new Vec3(flat.X, flat.Y, 0f);
+            flat = new Vec3(flat.x, flat.y, 0f);
             if (flat.LengthSquared < 1e-4f)
             {
                 var look = __instance.LookDirection;
-                flat = new Vec3(look.X, look.Y, 0f);
+                flat = new Vec3(look.x, look.y, 0f);
             }
             if (flat.LengthSquared < 1e-6f)
             {
@@ -114,18 +177,41 @@ namespace ExtremeRagdoll
             {
                 blow.BaseMagnitude = target;
             }
+            float clampMax = lethal ? ER_Config.MaxCorpseLaunchMagnitude : ER_Config.MaxNonLethalKnockback;
+            if (clampMax > 0f && blow.BaseMagnitude > clampMax)
+            {
+                blow.BaseMagnitude = clampMax;
+            }
             blow.SwingDirection = dir;
             blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound;
 
             if (lethal)
             {
-                float extraMult = ER_Config.ExtraForceMultiplier <= 0f ? 1f : ER_Config.ExtraForceMultiplier;
-                float mag = blow.BaseMagnitude * extraMult;
-                Vec3 contact = blow.GlobalPosition;
-                _pending[__instance.Index] = (dir, mag, contact);
-                if (ER_Config.DebugLogging)
+                if (ER_Config.MaxCorpseLaunchMagnitude > 0f)
                 {
-                    ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude} mag={mag}");
+                    float extraMult = ER_Config.ExtraForceMultiplier <= 0f ? 1f : ER_Config.ExtraForceMultiplier;
+                    float mag = blow.BaseMagnitude * extraMult;
+                    float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
+                    if (mag > maxMag)
+                    {
+                        mag = maxMag;
+                    }
+                    if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
+                    {
+                        _pending.Remove(__instance.Index);
+                        return;
+                    }
+                    Vec3 contact = blow.GlobalPosition;
+                    float recorded = __instance.Mission?.CurrentTime ?? 0f;
+                    _pending[__instance.Index] = new PendingLaunch { dir = dir, mag = mag, pos = contact, time = recorded };
+                    if (ER_Config.DebugLogging)
+                    {
+                        ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude} mag={mag}");
+                    }
+                }
+                else
+                {
+                    _pending.Remove(__instance.Index);
                 }
             }
             else
@@ -140,19 +226,33 @@ namespace ExtremeRagdoll
     }
 
     // Schedule corpse launch right after death (ragdoll just activated)
-    [HarmonyPatch(typeof(Agent), nameof(Agent.MakeDead))]
+    [HarmonyPatch(typeof(Agent))]
     internal static class ER_Probe_MakeDead
     {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var m in AccessTools.GetDeclaredMethods(typeof(Agent)))
+            {
+                if (m.Name == nameof(Agent.MakeDead))
+                    yield return m;
+            }
+        }
+
         [HarmonyPostfix, HarmonyPriority(HarmonyLib.Priority.Last)]
         static void Post(Agent __instance)
         {
             if (__instance == null) return;
-            if (!ER_Amplify_RegisterBlowPatch._pending.TryGetValue(__instance.Index, out var p)) return;
-            ER_Amplify_RegisterBlowPatch._pending.Remove(__instance.Index);
+            if (ER_DeathBlastBehavior.Instance == null || __instance.Mission == null) return;
+            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p)) return;
+            float now = __instance.Mission.CurrentTime;
+            if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
+            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
 
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, p.dir, p.mag,                         p.pos, ER_Config.LaunchDelay1, retries: 10);
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, p.dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 6);
-            ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, p.dir, p.mag, 1.2f);
+            var dir = p.dir.LengthSquared > 1e-6f ? p.dir : new Vec3(0f, 1f, 0f);
+
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag,                         p.pos, ER_Config.LaunchDelay1, retries: 6);
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 3);
+            ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, dir, p.mag, 1.2f);
             ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, p.mag);
             if (ER_Config.DebugLogging) ER_Log.Info($"MakeDead: scheduled corpse launch Agent#{__instance.Index} mag={p.mag}");
         }
