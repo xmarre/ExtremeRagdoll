@@ -54,6 +54,7 @@ namespace ExtremeRagdoll
 
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
+            ER_Amplify_RegisterBlowPatch._pending.Clear();
             mission.AddMissionBehavior(new ER_DeathBlastBehavior());
             if (!_adapted)
             {
