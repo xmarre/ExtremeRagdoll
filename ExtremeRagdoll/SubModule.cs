@@ -7,12 +7,14 @@ namespace ExtremeRagdoll
 {
     public class SubModule : MBSubModuleBase
     {
-        private static bool _adapted;
+        private static bool _adapted, _patched;
 
         protected override void OnSubModuleLoad()
         {
             ER_Log.Info($"Debug logging enabled: writing to {ER_Log.LogFilePath}");
+            if (_patched) return;
             new Harmony("extremeragdoll.patch").PatchAll();
+            _patched = true;
             ER_Log.Info("OnSubModuleLoad: PatchAll requested");
         }
 
@@ -53,6 +55,16 @@ namespace ExtremeRagdoll
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
             mission.AddMissionBehavior(new ER_DeathBlastBehavior());
+            if (!_adapted)
+            {
+                try
+                {
+                    _adapted = ER_TOR_Adapter.TryEnableShockwaves();
+                }
+                catch
+                {
+                }
+            }
             ER_Log.Info("MissionBehavior added: ER_DeathBlastBehavior");
         }
     }
