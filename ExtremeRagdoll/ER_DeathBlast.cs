@@ -18,6 +18,8 @@ namespace ExtremeRagdoll
 
         public override void OnBehaviorInitialize() => Instance = this;
 
+        public override void OnMissionEnded() => Instance = null;
+
         public void RecordBlast(Vec3 center, float radius, float force)
         {
             _recent.Add(new Blast { Pos = center, Radius = radius, Force = force, T = Mission.CurrentTime });
@@ -41,9 +43,21 @@ namespace ExtremeRagdoll
                 float age = now - k.T0;
                 if (age > k.Dur) { _kicks.RemoveAt(i); continue; }
                 float gain = 1f - (age / k.Dur);
-                float dur = MathF.Min(0.06f, k.Dur - (now - k.T0));
-                if (dur > 0f)
-                    k.A.ApplyExternalForceToBones(k.Dir * (k.Force * gain), MBActionSet.BoneUsage.Movement, dur);
+                float mag = k.Force * gain * 0.30f;
+                if (mag > 0f)
+                {
+                    var kb = new Blow(-1)
+                    {
+                        DamageType      = DamageTypes.Blunt,
+                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                        BaseMagnitude   = mag,
+                        SwingDirection  = k.Dir,
+                        GlobalPosition  = k.A.Position,
+                        InflictedDamage = 0
+                    };
+                    AttackCollisionData acd = default;
+                    k.A.RegisterBlow(kb, in acd);
+                }
             }
             if (_recent.Count == 0) return;
 
@@ -61,7 +75,17 @@ namespace ExtremeRagdoll
                     Vec3 flat = pos - b.Pos; flat = new Vec3(flat.X, flat.Y, 0f);
                     if (flat.LengthSquared < 1e-4f) flat = new Vec3(0f, 0f, 1f);
                     Vec3 dir = (flat.NormalizedCopy() * 0.70f + new Vec3(0f, 0f, 0.72f)).NormalizedCopy();
-                    a.ApplyExternalForceToBones(dir * force, MBActionSet.BoneUsage.Movement, 0.45f);
+                    var aoe = new Blow(-1)
+                    {
+                        DamageType      = DamageTypes.Blunt,
+                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                        BaseMagnitude   = force,
+                        SwingDirection  = dir,
+                        GlobalPosition  = b.Pos,
+                        InflictedDamage = 0
+                    };
+                    AttackCollisionData aoeAcd = default;
+                    a.RegisterBlow(aoe, in aoeAcd);
                     if (d < b.Radius * 0.55f && a.Health > 0f)
                     {
                         var kb = new Blow(-1)
@@ -73,9 +97,10 @@ namespace ExtremeRagdoll
                             GlobalPosition  = b.Pos,
                             InflictedDamage = 0
                         };
-                        AttackCollisionData acd = default;
-                        a.RegisterBlow(kb, in acd);
+                        AttackCollisionData kbAcd = default;
+                        a.RegisterBlow(kb, in kbAcd);
                     }
+                    break; // pro Agent nur ein Blast pro Tick
                 }
             }
         }
