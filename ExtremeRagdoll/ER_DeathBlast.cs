@@ -10,18 +10,29 @@ namespace ExtremeRagdoll
     {
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
+        private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
+        private readonly List<Launch> _launches = new List<Launch>();
         private const float TTL = 0.75f;
 
         public static ER_DeathBlastBehavior Instance;
 
         public override void OnBehaviorInitialize() => Instance = this;
 
-        public override void OnRemoveBehavior() => Instance = null;
+        public override void OnRemoveBehavior()
+        {
+            Instance = null;
+            _recent.Clear();
+            _kicks.Clear();
+            _launches.Clear();
+            // also clear any cross-behavior pending impulses
+            try { ER_Amplify_RegisterBlowPatch._pending.Clear(); } catch { }
+        }
 
         public void RecordBlast(Vec3 center, float radius, float force)
         {
+            if (radius <= 0f || force <= 0f) return;
             _recent.Add(new Blast { Pos = center, Radius = radius, Force = force, T = Mission.CurrentTime });
         }
 
@@ -31,8 +42,17 @@ namespace ExtremeRagdoll
             _kicks.Add(new Kick { A = a, Dir = dir, Force = force, T0 = Mission.CurrentTime, Dur = duration });
         }
 
+        public void EnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f)
+        {
+            if (a == null) return;
+            if (mag <= 0f) return;
+            if (delaySec < 0f) delaySec = 0f;
+            _launches.Add(new Launch { A = a, Dir = dir, Mag = mag, Pos = pos, T = Mission.CurrentTime + delaySec });
+        }
+
         public override void OnMissionTick(float dt)
         {
+            if (Mission == null || Mission.Agents == null) return;
             float now = Mission.CurrentTime;
             for (int i = _recent.Count - 1; i >= 0; i--)
                 if (now - _recent[i].T > TTL) _recent.RemoveAt(i);
@@ -59,11 +79,36 @@ namespace ExtremeRagdoll
                     k.A.RegisterBlow(kb, in acd);
                 }
             }
+
+            // delayed corpse launches (run AFTER ragdoll is active)
+            for (int i = _launches.Count - 1; i >= 0; i--)
+            {
+                var L = _launches[i];
+                if (now < L.T) continue;
+                _launches.RemoveAt(i);
+                if (L.A == null || !L.A.IsActive() || L.A.Health > 0f) continue; // only launch ragdolls
+                var blow = new Blow(-1)
+                {
+                    DamageType      = DamageTypes.Blunt,
+                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                    BaseMagnitude   = L.Mag,
+                    SwingDirection  = L.Dir,
+                    GlobalPosition  = L.Pos,
+                    InflictedDamage = 0
+                };
+                AttackCollisionData acd = default;
+                L.A.RegisterBlow(blow, in acd);
+                if (ER_Config.DebugLogging)
+                    ER_Log.Info($"death shove applied to Agent#{L.A.Index} dir={L.Dir} mag={L.Mag}");
+            }
             if (_recent.Count == 0) return;
 
+            const int MAX_WORK = 256;
+            int worked = 0;
             foreach (var a in Mission.Agents)
             {
                 if (a == null || a.Health <= 0f) continue; // ragdoll corpse already handled on kill
+                bool affected = false;
                 Vec3 pos = a.Position;
                 for (int i = _recent.Count - 1; i >= 0; i--)
                 {
@@ -86,6 +131,7 @@ namespace ExtremeRagdoll
                     };
                     AttackCollisionData aoeAcd = default;
                     a.RegisterBlow(aoe, in aoeAcd);
+                    affected = true;
                     if (d < b.Radius * 0.55f && a.Health > 0f)
                     {
                         var kb = new Blow(-1)
@@ -102,6 +148,7 @@ namespace ExtremeRagdoll
                     }
                     break; // pro Agent nur ein Blast pro Tick
                 }
+                if (affected && ++worked >= MAX_WORK) break;
             }
         }
 
