@@ -177,8 +177,8 @@ namespace ExtremeRagdoll
         {
             if (affected == null || state != AgentState.Killed) return;
 
-            // Direction & contact from the kill info (fallbacks if missing)
-            Vec3 hitPos = (killingBlow.GlobalPosition.LengthSquared > 1e-6f) ? killingBlow.GlobalPosition : affected.Position;
+            // Kontaktpunkt: konservativ das Agent-Center verwenden (kein KillingBlow.GlobalPosition vorhanden)
+            Vec3 hitPos = affected.Position;
             Vec3 flat   = affected.Position - hitPos; flat = new Vec3(flat.X, flat.Y, 0f);
             if (flat.LengthSquared < 1e-6f) { var look = affected.LookDirection; flat = new Vec3(look.X, look.Y, 0f); }
             if (flat.LengthSquared < 1e-6f) flat = new Vec3(0f, 1f, 0f);
