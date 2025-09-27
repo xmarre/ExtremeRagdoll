@@ -25,5 +25,10 @@ namespace ExtremeRagdoll
         [SettingPropertyBool("Debug Logging",
             Order = 2, RequireRestart = false)]
         public bool DebugLogging { get; set; } = true;
+
+        [SettingPropertyGroup("General")]
+        [SettingPropertyFloatingInteger("Death Blast Radius", 0f, 10f, "0.0",
+            Order = 3, RequireRestart = false)]
+        public float DeathBlastRadius { get; set; } = 3.0f;
     }
 }

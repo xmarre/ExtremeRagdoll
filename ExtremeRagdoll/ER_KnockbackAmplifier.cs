@@ -98,9 +98,10 @@ namespace ExtremeRagdoll
             if (extra <= 0f) return;
             ER_Log.Info($"death shove: hadKb={hadKb} dmg={dmg} baseMag={blow.BaseMagnitude} extra={extra}");
 
-            Vec3 dir = (__instance.Position - blow.GlobalPosition).NormalizedCopy();
-            if (dir.X == 0f && dir.Y == 0f && dir.Z == 0f) dir = __instance.LookDirection;
-            dir = new Vec3(dir.X, dir.Y, dir.Z + 0.25f).NormalizedCopy();
+            Vec3 flat = __instance.Position - blow.GlobalPosition;
+            flat.Z = 0f;
+            if (flat.LengthSquared < 1e-4f) flat = __instance.LookDirection;
+            Vec3 dir = (flat.NormalizedCopy() * 0.85f + new Vec3(0f, 0f, 0.53f)).NormalizedCopy();
 
             var push = new Blow(-1)
             {
@@ -126,6 +127,19 @@ namespace ExtremeRagdoll
             }
 
             ER_Log.Info($"death shove applied to Agent#{__instance.Index} dir={dir}");
+
+            // fire local AOE blast (independent of TOR)
+            try
+            {
+                ER_DeathBlastBehavior.Instance?.RecordBlast(
+                    __instance.Position,
+                    Settings.Instance?.DeathBlastRadius ?? 3.0f,
+                    extra);
+            }
+            catch
+            {
+                // ignore
+            }
         }
     }
 
