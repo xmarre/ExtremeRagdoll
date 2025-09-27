@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.Core;
@@ -19,6 +20,8 @@ namespace ExtremeRagdoll
     [HarmonyPatch]
     internal static class ER_Amplify_RegisterBlowPatch
     {
+        internal static readonly Dictionary<int, (Vec3 dir, float mag, Vec3 pos)> _pending = new();
+
         [HarmonyPrepare]
         static bool Prepare()
         {
@@ -38,10 +41,6 @@ namespace ExtremeRagdoll
             ER_Log.Info("Patching: " + method);
             return true;
         }
-
-        [System.ThreadStatic] private static bool _guard;
-        [System.ThreadStatic] private static int _lastPushedId;
-        [System.ThreadStatic] private static bool _lastPushedIdValid;
 
         static MethodBase TargetMethod()
         {
@@ -73,14 +72,23 @@ namespace ExtremeRagdoll
         [HarmonyPrefix, HarmonyPriority(HarmonyLib.Priority.First)]
         private static void Prefix(Agent __instance, [HarmonyArgument(0)] ref Blow blow)
         {
-            if (_guard) return;
             if (__instance == null) return;
 
             float hp = __instance.Health;
-            if (hp <= 0f) return;
-            if (blow.InflictedDamage <= 0f) return;
+            if (hp <= 0f)
+            {
+                _pending.Remove(__instance.Index);
+                return;
+            }
+            if (blow.InflictedDamage <= 0f)
+            {
+                _pending.Remove(__instance.Index);
+                return;
+            }
             // optional: comment out for a quick A/B to confirm engine accepts huge impulses
             // if (hp > 0f && blow.InflictedDamage < hp * 0.7f) return;
+
+            bool lethal = hp - blow.InflictedDamage <= 0f;
 
             Vec3 flat = __instance.Position - blow.GlobalPosition;
             flat = new Vec3(flat.X, flat.Y, 0f);
@@ -105,92 +113,24 @@ namespace ExtremeRagdoll
             blow.SwingDirection = dir;
             blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound;
 
-            if (ER_Config.DebugLogging)
+            if (lethal)
             {
-                ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude}");
-            }
-        }
-
-        [HarmonyPostfix]
-        private static void Postfix(Agent __instance, [HarmonyArgument(0)] Blow blow)
-        {
-            if (_guard) return;
-            if (__instance == null) return;
-
-            if (_lastPushedIdValid && _lastPushedId == __instance.Index) return;
-
-            if (__instance.Health > 0f)
-            {
-                _lastPushedIdValid = false;
-                return;
-            }
-
-            var flags = blow.BlowFlag;
-            bool hadKb = (flags & BlowFlags.KnockBack) != 0 || (flags & BlowFlags.KnockDown) != 0;
-
-            float dmg = blow.InflictedDamage > 0 ? blow.InflictedDamage : 0f;
-            float source = hadKb ? blow.BaseMagnitude : MathF.Max(150f, 4f * dmg);
-            float extra = MathF.Max(0f, (ER_Config.KnockbackMultiplier - 1f) * source);
-            if (extra <= 0f) return;
-            ER_Log.Info($"death shove: hadKb={hadKb} dmg={dmg} baseMag={blow.BaseMagnitude} extra={extra}");
-
-            Vec3 flat = __instance.Position - blow.GlobalPosition;
-            flat = new Vec3(flat.X, flat.Y, 0f);
-            if (flat.LengthSquared < 1e-4f)
-            {
-                var look = __instance.LookDirection;
-                flat = new Vec3(look.X, look.Y, 0f);
-            }
-            Vec3 dir = (flat.NormalizedCopy() * 0.70f + new Vec3(0f, 0f, 0.72f)).NormalizedCopy();
-
-            var push = new Blow(-1)
-            {
-                DamageType      = DamageTypes.Blunt,
-                BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                BaseMagnitude   = extra,
-                SwingDirection  = dir,
-                GlobalPosition  = blow.GlobalPosition,
-                InflictedDamage = 0
-            };
-
-            AttackCollisionData dummy = default;
-            try
-            {
-                _guard = true;
-                __instance.RegisterBlow(push, in dummy);
-                // zusätzlicher Impuls für stärkeren Start
-                var micro = new Blow(-1)
+                float extraMult = ER_Config.ExtraForceMultiplier <= 0f ? 1f : ER_Config.ExtraForceMultiplier;
+                float mag = blow.BaseMagnitude * extraMult;
+                Vec3 contact = blow.GlobalPosition;
+                _pending[__instance.Index] = (dir, mag, contact);
+                if (ER_Config.DebugLogging)
                 {
-                    DamageType      = DamageTypes.Blunt,
-                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                    BaseMagnitude   = extra * ER_Config.ExtraForceMultiplier * 0.35f,
-                    SwingDirection  = dir,
-                    GlobalPosition  = blow.GlobalPosition,
-                    InflictedDamage = 0
-                };
-                __instance.RegisterBlow(micro, in dummy);
-                ER_DeathBlastBehavior.Instance?.EnqueueKick(__instance, dir, extra * ER_Config.ExtraForceMultiplier, 0.90f);
-                _lastPushedId = __instance.Index;
-                _lastPushedIdValid = true;
+                    ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude} mag={mag}");
+                }
             }
-            finally
+            else
             {
-                _guard = false;
-            }
-
-            ER_Log.Info($"death shove applied to Agent#{__instance.Index} dir={dir}");
-
-            // fire local AOE blast (independent of TOR); tick sweep applies scaling
-            try
-            {
-                ER_DeathBlastBehavior.Instance?.RecordBlast(
-                    __instance.Position,
-                    ER_Config.DeathBlastRadius,
-                    extra);
-            }
-            catch
-            {
-                // ignore
+                _pending.Remove(__instance.Index);
+                if (ER_Config.DebugLogging)
+                {
+                    ER_Log.Info($"non-lethal boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude}");
+                }
             }
         }
     }
@@ -198,10 +138,33 @@ namespace ExtremeRagdoll
     [HarmonyPatch(typeof(Agent), nameof(Agent.MakeDead))]
     internal static class ER_Probe_MakeDead
     {
-        [HarmonyPostfix]
+        [HarmonyPostfix, HarmonyPriority(HarmonyLib.Priority.Last)]
         static void Post(Agent __instance)
         {
-            ER_Log.Info($"MakeDead: Agent#{__instance?.Index} dead");
+            if (__instance == null) return;
+            if (!ER_Amplify_RegisterBlowPatch._pending.TryGetValue(__instance.Index, out var pending)) return;
+
+            ER_Amplify_RegisterBlowPatch._pending.Remove(__instance.Index);
+
+            var launch = new Blow(-1)
+            {
+                DamageType      = DamageTypes.Blunt,
+                BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                BaseMagnitude   = pending.mag,
+                SwingDirection  = pending.dir,
+                GlobalPosition  = pending.pos,
+                InflictedDamage = 0
+            };
+            AttackCollisionData acd = default;
+            __instance.RegisterBlow(launch, in acd);
+
+            ER_DeathBlastBehavior.Instance?.EnqueueKick(__instance, pending.dir, pending.mag, 1.0f);
+            ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, pending.mag);
+
+            if (ER_Config.DebugLogging)
+            {
+                ER_Log.Info($"ragdoll shove queued for Agent#{__instance.Index} mag={pending.mag}");
+            }
         }
     }
 }
