@@ -250,8 +250,8 @@ namespace ExtremeRagdoll
 
             var dir = p.dir.LengthSquared > 1e-6f ? p.dir : new Vec3(0f, 1f, 0f);
 
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag,                         p.pos, ER_Config.LaunchDelay1, retries: 6);
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 3);
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag,                         p.pos, ER_Config.LaunchDelay1, retries: 10);
+            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 6);
             ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, dir, p.mag, 1.2f);
             ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, p.mag);
             if (ER_Config.DebugLogging) ER_Log.Info($"MakeDead: scheduled corpse launch Agent#{__instance.Index} mag={p.mag}");
