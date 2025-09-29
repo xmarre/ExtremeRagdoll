@@ -6,6 +6,7 @@ using TaleWorlds.Engine;           // for GameEntity, Skeleton
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using System.Reflection;           // reflection fallback for impulse API
+using System.Linq;
 
 namespace ExtremeRagdoll
 {
@@ -14,41 +15,86 @@ namespace ExtremeRagdoll
         // Cache possible impulse methods across TW versions
         private static MethodInfo _entImp2, _entImp3, _entImp1;
         private static MethodInfo _skelImp2, _skelImp1;
+        private static bool _scanLogged;
         private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos)
         {
             bool ok = false;
+            if (!_scanLogged && ER_Config.DebugLogging)
+            {
+                _scanLogged = true;
+                void Dump(string who, Type t)
+                {
+                    if (t == null) return;
+                    foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        var n = m.Name;
+                        if (n.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            n.IndexOf("Force", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            n.IndexOf("Velocity", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            n.IndexOf("Ragdoll", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            var ps = m.GetParameters();
+                            ER_Log.Info($"IMPULSE_SCAN {who}.{t.FullName}::{n}({string.Join(",", ps.Select(p => p.ParameterType.Name))})");
+                        }
+                    }
+                }
+                Dump("ent", ent?.GetType());
+                Dump("GameEntity", typeof(GameEntity));
+                Dump("skel", skel?.GetType());
+            }
+
+            IEnumerable<MethodInfo> Cand(Type t) =>
+                t?.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ?? Array.Empty<MethodInfo>();
             // --- GameEntity route ---
             if (ent != null)
             {
                 if (_entImp2 == null && _entImp3 == null && _entImp1 == null)
                 {
-                    var t = typeof(GameEntity);
-                    foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    var ms = Cand(ent?.GetType()).Concat(Cand(typeof(GameEntity)));
+                    foreach (var m in ms)
                     {
                         var ps = m.GetParameters();
-                        bool looksImpulse =
-                            (m.Name.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("Force",   StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("Apply",   StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("AddForce",StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("AddImpulse",StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("AtPosition",StringComparison.OrdinalIgnoreCase) >= 0);
-                        if (!looksImpulse) continue;
-                        if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool))
-                            _entImp3 = m;
-                        else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
-                            _entImp2 = m;
-                        else if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
-                            _entImp1 = m;
+                        var name = m.Name.ToLowerInvariant();
+                        bool looks = name.Contains("impulse") || name.Contains("force") || name.Contains("apply")
+                                     || name.Contains("addforce") || name.Contains("addimpulse") || name.Contains("atposition")
+                                     || name.Contains("velocity");
+                        if (!looks) continue;
+                        if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool)) _entImp3 = m;
+                        else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3)) _entImp2 = m;
+                        else if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3)) _entImp1 = m;
                     }
                     if (_entImp3 == null)
                         _entImp3 = typeof(GameEntity).GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
                 }
                 try
                 {
-                    if (_entImp3 != null) { try { _entImp3.Invoke(ent, new object[] { impulse, pos, false }); ok = true; } catch { _entImp3.Invoke(ent, new object[] { impulse, pos, true }); ok = true; } }
-                    else if (_entImp2 != null) { _entImp2.Invoke(ent, new object[] { impulse, pos }); ok = true; }
-                    else if (_entImp1 != null) { _entImp1.Invoke(ent, new object[] { impulse }); ok = true; }
+                    if (_entImp3 != null)
+                    {
+                        try
+                        {
+                            _entImp3.Invoke(ent, new object[] { impulse, pos, false });
+                            ER_Log.Info("IMPULSE_USE ent3(false)");
+                            ok = true;
+                        }
+                        catch
+                        {
+                            _entImp3.Invoke(ent, new object[] { impulse, pos, true });
+                            ER_Log.Info("IMPULSE_USE ent3(true)");
+                            ok = true;
+                        }
+                    }
+                    else if (_entImp2 != null)
+                    {
+                        _entImp2.Invoke(ent, new object[] { impulse, pos });
+                        ER_Log.Info("IMPULSE_USE ent2");
+                        ok = true;
+                    }
+                    else if (_entImp1 != null)
+                    {
+                        _entImp1.Invoke(ent, new object[] { impulse });
+                        ER_Log.Info("IMPULSE_USE ent1");
+                        ok = true;
+                    }
                 }
                 catch { /* keep ok as-is */ }
             }
@@ -75,8 +121,18 @@ namespace ExtremeRagdoll
                 }
                 try
                 {
-                    if (_skelImp2 != null) { _skelImp2.Invoke(skel, new object[] { impulse, pos }); ok = true; }
-                    else if (_skelImp1 != null) { _skelImp1.Invoke(skel, new object[] { impulse }); ok = true; }
+                    if (_skelImp2 != null)
+                    {
+                        _skelImp2.Invoke(skel, new object[] { impulse, pos });
+                        ER_Log.Info("IMPULSE_USE skel2");
+                        ok = true;
+                    }
+                    else if (_skelImp1 != null)
+                    {
+                        _skelImp1.Invoke(skel, new object[] { impulse });
+                        ER_Log.Info("IMPULSE_USE skel1");
+                        ok = true;
+                    }
                 }
                 catch { }
             }
@@ -87,9 +143,9 @@ namespace ExtremeRagdoll
         {
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
             // Conservative default. Tune if needed.
-            float imp = mag * 5e-5f;
-            if (imp < 200f) imp = 200f;
-            if (imp > 200_000f) imp = 200_000f;
+            float imp = mag * 1e-4f;
+            if (imp < 50000f) imp = 50000f;
+            if (imp > 400_000f) imp = 400_000f;
             if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp)) return 0f;
             return imp;
         }
