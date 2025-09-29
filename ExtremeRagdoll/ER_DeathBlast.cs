@@ -64,24 +64,12 @@ namespace ExtremeRagdoll
         private const float TTL = 0.75f;
 
         // --- API shims for TaleWorlds versions lacking these helpers ---
-        private static PropertyInfo _isRemovedProp;
+        // Nur wirklich 'weg', wenn Mission fehlt oder Agent nicht mehr aktiv ist.
         private static bool AgentRemoved(Agent a)
         {
-            if (a == null || a.Mission == null) return true;
-            try
-            {
-                if (_isRemovedProp == null)
-                    _isRemovedProp = a.GetType().GetProperty("IsRemoved");
-                if (_isRemovedProp != null && (bool?)_isRemovedProp.GetValue(a) == true)
-                    return true;
-            }
-            catch { }
-            try
-            {
-                if (!a.IsActive())
-                    return true;
-            }
-            catch { }
+            if (a == null) return true;
+            try { if (a.Mission == null) return true; } catch { return true; }
+            try { if (!a.IsActive()) return true; } catch { /* ältere Builds: IsActive fehlt */ }
             return false;
         }
         private static PropertyInfo _ragdollProp;
@@ -111,8 +99,8 @@ namespace ExtremeRagdoll
             {
                 // ignored - fall back below
             }
-            // Unknown flag: only proceed once we've given physics a warm-up tick.
-            return warmed;
+            // Fallback: auf manchen Builds gibt's das Flag nicht → trotzdem fortfahren.
+            return true;
         }
 
         private void IncQueue(int agentId)
@@ -233,15 +221,6 @@ namespace ExtremeRagdoll
             float now = mission.CurrentTime;
             const int MAX_LAUNCHES_PER_TICK = 128;
             int launchesWorked = 0;
-            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f)
-            {
-                for (int i = _launches.Count - 1; i >= 0; i--)
-                {
-                    DecQueue(_launches[i].AgentId);
-                    _launches.RemoveAt(i);
-                }
-                return;
-            }
             float tookScale = ER_Config.CorpseLaunchVelocityScaleThreshold;
             float tookOffset = ER_Config.CorpseLaunchVelocityOffset;
             float tookVertical = ER_Config.CorpseLaunchVerticalDelta;
@@ -251,6 +230,8 @@ namespace ExtremeRagdoll
             int queueCap = ER_Config.CorpseLaunchQueueCap;
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
+            float tickMaxSetting = ER_Config.MaxCorpseLaunchMagnitude;
+            bool clampMag = tickMaxSetting > 0f; // <=0 bedeutet: nicht kappen
             for (int i = _recent.Count - 1; i >= 0; i--)
                 if (now - _recent[i].T > TTL) _recent.RemoveAt(i);
             for (int i = _kicks.Count - 1; i >= 0; i--)
@@ -295,7 +276,7 @@ namespace ExtremeRagdoll
                     }
                 }
                 _launches.RemoveAt(i);
-                if (AgentRemoved(agent))
+                if (agent == null)
                 {
                     DecOnce();
                     continue;
@@ -317,10 +298,9 @@ namespace ExtremeRagdoll
                     continue;
                 }
                 float mag = L.Mag;
-                float tickMax = ER_Config.MaxCorpseLaunchMagnitude;
-                if (tickMax > 0f && mag > tickMax)
+                if (clampMag && mag > tickMaxSetting)
                 {
-                    mag = tickMax;
+                    mag = tickMaxSetting;
                 }
                 if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 {
@@ -363,7 +343,26 @@ namespace ExtremeRagdoll
                     _launches.Add(L);
                     continue;
                 }
-                if (agent.AgentVisuals == null || AgentRemoved(agent))
+                // Ragdoll/Visuals kommen oft 1–2 Ticks verspätet. Requeue statt Drop.
+                if (agent.AgentVisuals == null)
+                {
+                    if (!AgentRemoved(agent) && L.Tries > 0)
+                    {
+                        L.Tries--;
+                        L.Warmed = false;                 // neu messen, wenn Visuals dran sind
+                        L.T      = now + MathF.Max(0.05f, retryDelay);
+                        L.Pos    = agent.Position;
+                        _launches.Add(L);
+                        IncQueue(agentIndex);
+                        if (ER_Config.DebugLogging && agentIndex >= 0)
+                            ER_Log.Info($"corpse launch re-queued (no visuals yet) Agent#{agentIndex} tries={L.Tries}");
+                        DecOnce(); // alten Eintrag sauber abbuchen
+                        continue;
+                    }
+                    DecOnce();
+                    continue;
+                }
+                if (AgentRemoved(agent))
                 {
                     DecOnce();
                     continue;
@@ -404,10 +403,9 @@ namespace ExtremeRagdoll
                         Vec3 retryPos = XYJitter(agent.Position);
                         retryPos.z = MathF.Min(retryPos.z + zNudge, agent.Position.z + zClamp);
 
-                        float maxMagSetting = ER_Config.MaxCorpseLaunchMagnitude;
-                        if (maxMagSetting > 0f && L.Mag > maxMagSetting)
+                        if (clampMag && L.Mag > tickMaxSetting)
                         {
-                            L.Mag = maxMagSetting;
+                            L.Mag = tickMaxSetting;
                         }
 
                         bool canQueue = true;
