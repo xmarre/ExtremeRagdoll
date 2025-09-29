@@ -7,18 +7,626 @@ using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using System.Reflection;           // reflection fallback for impulse API
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace ExtremeRagdoll
 {
     public sealed class ER_DeathBlastBehavior : MissionBehavior
     {
         // Cache possible impulse methods across TW versions
-        private static MethodInfo _entImp2, _entImp3, _entImp1;
-        private static MethodInfo _skelImp2, _skelImp1;
+        private static MethodInfo _extEntImp3, _extEntImp2, _extEntImp1;
+        private static int _extImpulseScannedInt;
+        private static bool _deepFieldLog;
         private static bool _scanLogged;
-        private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos)
+        private static bool _extImpulseLogged;
+        private static readonly object _fallbackWarnLock = new();
+        private static readonly HashSet<string> _fallbackWarnedSet = new();
+        private static readonly Queue<string> _fallbackWarnOrder = new();
+        private const int FallbackWarnLimit = 32;
+        private sealed class EntImpulseEntry
         {
+            public MethodInfo M3;
+            public MethodInfo M2;
+            public MethodInfo M1;
+            public Action<GameEntity, Vec3, Vec3, bool> D3;
+            public Action<GameEntity, Vec3, Vec3> D2;
+            public Action<GameEntity, Vec3> D1;
+            public bool D3Failed;
+            public bool D2Failed;
+            public bool D1Failed;
+        }
+
+        private sealed class SkelImpulseEntry
+        {
+            public MethodInfo M2;
+            public MethodInfo M1;
+            public Action<Skeleton, Vec3, Vec3> D2;
+            public Action<Skeleton, Vec3> D1;
+            public bool D2Failed;
+            public bool D1Failed;
+        }
+
+        private static readonly Dictionary<Type, EntImpulseEntry> _entImpCache = new();
+        private static readonly object _entImpLock = new();
+        private static readonly Dictionary<Type, SkelImpulseEntry> _skelImpCache = new();
+        private static readonly object _skelImpLock = new();
+        // Caches for deep fallback
+        private static readonly Dictionary<Type, (MethodInfo m2, MethodInfo m1)> _forceMethodCache = new();
+        private static readonly object _forceMethodLock = new();
+        private static readonly Dictionary<Type, MemberInfo[]> _physChildCache = new();
+        private static readonly object _physChildLock = new();
+        private static readonly Dictionary<Type, Func<object, bool>> _ragdollStateCache = new();
+        private static readonly object _ragdollStateLock = new();
+        private static readonly List<object> _childScratch = new List<object>(64);
+        private static readonly List<object> _grandChildScratch = new List<object>(64);
+        private static readonly Dictionary<Type, Func<GameEntity, string>> _entityIdAccessorCache = new();
+        private static readonly object _entityIdAccessorLock = new();
+        private static Action<GameEntity, Vec3, Vec3, bool> _extEntImp3Delegate;
+        private static Action<GameEntity, Vec3, Vec3> _extEntImp2Delegate;
+        private static Action<GameEntity, Vec3> _extEntImp1Delegate;
+        private static readonly ConditionalWeakTable<GameEntity, object> _preparedEntities = new();
+        private static readonly object _preparedMarker = new object();
+        private static Func<GameEntity, bool> _isDynamicBodyAccessor;
+        private static bool _dynamicBodyChecked;
+
+        private static bool LooksImpulseName(string n, bool allowVelocityFallback, out bool velocityOnly)
+        {
+            velocityOnly = false;
+            if (string.IsNullOrEmpty(n))
+                return false;
+            n = n.ToLowerInvariant();
+            bool primary = n.Contains("impulse") || n.Contains("force") || n.Contains("apply") ||
+                           n.Contains("addforce") || n.Contains("addimpulse") || n.Contains("atposition") ||
+                           n.Contains("atpos") || n.Contains("atpoint") || n.Contains("angular");
+            if (primary)
+                return true;
+            if (!allowVelocityFallback)
+                return false;
+            if (n.Contains("velocity"))
+            {
+                velocityOnly = true;
+                return true;
+            }
+            return false;
+        }
+        private static bool IsVec3Like(Type t) =>
+            t == typeof(Vec3) || t == typeof(Vec3).MakeByRefType();
+
+        static ER_DeathBlastBehavior()
+        {
+            try { EnsureExtensionImpulseMethods(); }
+            catch { }
+        }
+
+        private static void EnsureExtensionImpulseMethods()
+        {
+            if (Interlocked.Exchange(ref _extImpulseScannedInt, 1) == 1)
+                return;
+
+            static bool Looks(string n)
+            {
+                if (string.IsNullOrEmpty(n))
+                    return false;
+                return LooksImpulseName(n, allowVelocityFallback: false, out _);
+            }
+
+            Assembly[] assemblies;
+            try
+            {
+                assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            }
+            catch
+            {
+                return;
+            }
+
+            foreach (var asm in assemblies)
+            {
+                if (asm == null || asm.IsDynamic)
+                    continue;
+                bool reflectionOnly = false;
+                try { reflectionOnly = asm.ReflectionOnly; }
+                catch { }
+                if (reflectionOnly)
+                    continue;
+                string an = null;
+                try { an = asm.GetName().Name; }
+                catch { }
+                if (an == null)
+                    continue;
+                if (an.IndexOf("TaleWorlds.Engine", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    an.IndexOf("TaleWorlds.Core", StringComparison.OrdinalIgnoreCase) < 0 &&
+                    an.IndexOf("TaleWorlds.MountAndBlade", StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch (ReflectionTypeLoadException rtle)
+                {
+                    types = rtle.Types;
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (types == null)
+                    continue;
+
+                foreach (var t in types)
+                {
+                    if (t == null)
+                        continue;
+                    MethodInfo[] methods;
+                    try { methods = t.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic); }
+                    catch { continue; }
+
+                    foreach (var m in methods)
+                    {
+                        if (m == null || !Looks(m.Name))
+                            continue;
+                        var ps = m.GetParameters();
+                        if (ps.Length == 0)
+                            continue;
+                        if (!typeof(GameEntity).IsAssignableFrom(ps[0].ParameterType))
+                            continue;
+
+                        if (ps.Length == 4 && IsVec3Like(ps[1].ParameterType) && IsVec3Like(ps[2].ParameterType) &&
+                            ps[3].ParameterType == typeof(bool))
+                        {
+                            _extEntImp3 ??= m;
+                            if (!ps[1].ParameterType.IsByRef && !ps[2].ParameterType.IsByRef)
+                                _extEntImp3Delegate ??= TryCreateExtDelegate<Action<GameEntity, Vec3, Vec3, bool>>(m);
+                        }
+                        else if (ps.Length == 3 && IsVec3Like(ps[1].ParameterType) && IsVec3Like(ps[2].ParameterType))
+                        {
+                            _extEntImp2 ??= m;
+                            if (!ps[1].ParameterType.IsByRef && !ps[2].ParameterType.IsByRef)
+                                _extEntImp2Delegate ??= TryCreateExtDelegate<Action<GameEntity, Vec3, Vec3>>(m);
+                        }
+                        else if (ps.Length == 2 && IsVec3Like(ps[1].ParameterType))
+                        {
+                            _extEntImp1 ??= m;
+                            if (!ps[1].ParameterType.IsByRef)
+                                _extEntImp1Delegate ??= TryCreateExtDelegate<Action<GameEntity, Vec3>>(m);
+                        }
+
+                        if (_extEntImp3 != null && _extEntImp2 != null && _extEntImp1 != null)
+                            break;
+                    }
+
+                    if (_extEntImp3 != null && _extEntImp2 != null && _extEntImp1 != null)
+                        break;
+                }
+
+                if (_extEntImp3 != null && _extEntImp2 != null && _extEntImp1 != null)
+                    break;
+            }
+
+            if (ER_Config.DebugLogging && !Volatile.Read(ref _extImpulseLogged))
+            {
+                Volatile.Write(ref _extImpulseLogged, true);
+                void Log(MethodInfo mi, string label)
+                {
+                    if (mi == null) return;
+                    var ps = mi.GetParameters();
+                    ER_Log.Info($"IMPULSE_EXT {label} {mi.DeclaringType?.FullName}::{mi.Name}({string.Join(",", ps.Select(p => p.ParameterType.Name))})");
+                }
+
+                Log(_extEntImp3, "ent3");
+                Log(_extEntImp2, "ent2");
+                Log(_extEntImp1, "ent1");
+            }
+        }
+
+        private static TDelegate TryCreateExtDelegate<TDelegate>(MethodInfo method) where TDelegate : class
+        {
+            if (method == null || !method.IsStatic)
+                return null;
+            var expected = typeof(TDelegate);
+            var invoke = expected.GetMethod("Invoke");
+            var parameters = method.GetParameters();
+            var invokeParameters = invoke?.GetParameters();
+            if (invokeParameters == null)
+                return null;
+            if (parameters.Length != invokeParameters.Length)
+                return null;
+            // Ensure first parameter types match expected GameEntity usage
+            if (!typeof(GameEntity).IsAssignableFrom(invokeParameters[0].ParameterType))
+                return null;
+            if (parameters.Length == 0 || parameters[0].ParameterType.IsByRef)
+                return null;
+            if (!typeof(GameEntity).IsAssignableFrom(parameters[0].ParameterType))
+                return null;
+            if (parameters.Skip(1).Any(p => p.ParameterType.IsByRef))
+                return null;
+            if (invokeParameters.Skip(1).Select(p => p.ParameterType)
+                .SequenceEqual(parameters.Skip(1).Select(p => p.ParameterType)))
+            {
+                try
+                {
+                    return method.CreateDelegate(expected) as TDelegate;
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static TDelegate TryCreateInstanceDelegate<TDelegate>(MethodInfo method) where TDelegate : class
+        {
+            if (method == null || method.IsStatic)
+                return null;
+            try
+            {
+                return method.CreateDelegate(typeof(TDelegate)) as TDelegate;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool Vec3IsFinite(Vec3 v) =>
+            !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsNaN(v.z) &&
+            !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
+
+        private static bool NearZero(Vec3 v)
+        {
+            float s = v.x * v.x + v.y * v.y + v.z * v.z;
+            return s < 1e-8f || float.IsNaN(s) || float.IsInfinity(s);
+        }
+
+        private static void MarkRagdollPrepared(GameEntity ent)
+        {
+            if (ent == null)
+                return;
+            try
+            {
+                _preparedEntities.Add(ent, _preparedMarker);
+            }
+            catch (ArgumentException)
+            {
+                // already tracked
+            }
+        }
+
+        private static bool WasRagdollPrepared(GameEntity ent)
+        {
+            if (ent == null)
+                return false;
+            return _preparedEntities.TryGetValue(ent, out _);
+        }
+
+        private static bool EntIsDynamic(GameEntity ent)
+        {
+            if (ent == null)
+                return false;
+            if (!_dynamicBodyChecked)
+            {
+                _dynamicBodyChecked = true;
+                try
+                {
+                    var method = typeof(GameEntity).GetMethod("IsDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+                    if (method != null)
+                        _isDynamicBodyAccessor = TryCreateInstanceDelegate<Func<GameEntity, bool>>(method);
+                }
+                catch
+                {
+                    _isDynamicBodyAccessor = null;
+                }
+            }
+            if (_isDynamicBodyAccessor == null)
+                return false;
+            try
+            {
+                return _isDynamicBodyAccessor(ent);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static EntImpulseEntry GetEntImpulseEntry(Type type)
+        {
+            if (type == null)
+                return null;
+            if (_entImpCache.TryGetValue(type, out var entry))
+                return entry;
+
+            lock (_entImpLock)
+            {
+                if (_entImpCache.TryGetValue(type, out entry))
+                    return entry;
+
+                entry = ResolveEntImpulseMethods(type);
+                _entImpCache[type] = entry;
+                return entry;
+            }
+        }
+
+        private static SkelImpulseEntry GetSkelImpulseEntry(Type type)
+        {
+            if (type == null)
+                return null;
+            if (_skelImpCache.TryGetValue(type, out var entry))
+                return entry;
+
+            lock (_skelImpLock)
+            {
+                if (_skelImpCache.TryGetValue(type, out entry))
+                    return entry;
+
+                entry = ResolveSkelImpulseMethods(type);
+                _skelImpCache[type] = entry;
+                return entry;
+            }
+        }
+
+        private static void CaptureEntImpulseMethods(Type type, EntImpulseEntry entry)
+        {
+            if (type == null || entry == null)
+                return;
+            MethodInfo[] methods;
+            try
+            {
+                methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+            catch
+            {
+                return;
+            }
+            foreach (var m in methods)
+            {
+                if (m == null)
+                    continue;
+                if (!LooksImpulseName(m.Name, allowVelocityFallback: false, out _))
+                    continue;
+                var ps = m.GetParameters();
+                if (entry.M3 == null && ps.Length == 3 && IsVec3Like(ps[0].ParameterType) && IsVec3Like(ps[1].ParameterType) && ps[2].ParameterType == typeof(bool))
+                {
+                    entry.M3 = m;
+                    continue;
+                }
+                if (entry.M2 == null && ps.Length == 2 && IsVec3Like(ps[0].ParameterType) && IsVec3Like(ps[1].ParameterType))
+                {
+                    entry.M2 = m;
+                    continue;
+                }
+                if (entry.M1 == null && ps.Length == 1 && IsVec3Like(ps[0].ParameterType))
+                {
+                    entry.M1 = m;
+                }
+                if (entry.M3 != null && entry.M2 != null && entry.M1 != null)
+                    return;
+            }
+        }
+
+        private static EntImpulseEntry ResolveEntImpulseMethods(Type type)
+        {
+            var entry = new EntImpulseEntry();
+            for (var t = type; t != null && typeof(GameEntity).IsAssignableFrom(t); t = t.BaseType)
+            {
+                CaptureEntImpulseMethods(t, entry);
+                if (entry.M3 != null && entry.M2 != null && entry.M1 != null)
+                    break;
+            }
+            if (entry.M3 == null || entry.M2 == null || entry.M1 == null)
+            {
+                CaptureEntImpulseMethods(typeof(GameEntity), entry);
+            }
+            if (entry.M3 == null)
+            {
+                try
+                {
+                    entry.M3 = typeof(GameEntity).GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
+                }
+                catch
+                {
+                    entry.M3 = null;
+                }
+            }
+            return entry;
+        }
+
+        private static void CaptureSkelImpulseMethods(Type type, SkelImpulseEntry entry)
+        {
+            if (type == null || entry == null)
+                return;
+            MethodInfo[] methods;
+            try
+            {
+                methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+            catch
+            {
+                return;
+            }
+            foreach (var m in methods)
+            {
+                if (m == null)
+                    continue;
+                if (!LooksImpulseName(m.Name, allowVelocityFallback: false, out _))
+                    continue;
+                var ps = m.GetParameters();
+                if (entry.M2 == null && ps.Length == 2 && IsVec3Like(ps[0].ParameterType) && IsVec3Like(ps[1].ParameterType))
+                {
+                    entry.M2 = m;
+                    continue;
+                }
+                if (entry.M1 == null && ps.Length == 1 && IsVec3Like(ps[0].ParameterType))
+                {
+                    entry.M1 = m;
+                }
+                if (entry.M2 != null && entry.M1 != null)
+                    return;
+            }
+        }
+
+        private static SkelImpulseEntry ResolveSkelImpulseMethods(Type type)
+        {
+            var entry = new SkelImpulseEntry();
+            for (var t = type; t != null && typeof(Skeleton).IsAssignableFrom(t); t = t.BaseType)
+            {
+                CaptureSkelImpulseMethods(t, entry);
+                if (entry.M2 != null && entry.M1 != null)
+                    break;
+            }
+            if (entry.M2 == null || entry.M1 == null)
+            {
+                CaptureSkelImpulseMethods(typeof(Skeleton), entry);
+            }
+            return entry;
+        }
+
+        private static Func<GameEntity, string> CreateEntityIdAccessor(Type type)
+        {
+            if (type == null)
+                return _ => null;
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy;
+            PropertyInfo prop = null;
+            try { prop = type.GetProperty("Id", flags); }
+            catch { prop = null; }
+            if (prop == null || !prop.CanRead)
+            {
+                try { prop = type.GetProperty("StringId", flags) ?? type.GetProperty("Name", flags); }
+                catch { prop = null; }
+            }
+            if (prop != null && prop.CanRead)
+            {
+                return ent =>
+                {
+                    if (ent == null)
+                        return null;
+                    try
+                    {
+                        var value = prop.GetValue(ent, null);
+                        return value?.ToString();
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                };
+            }
+
+            FieldInfo field = null;
+            try { field = type.GetField("Id", flags); }
+            catch { field = null; }
+            if (field != null)
+            {
+                return ent =>
+                {
+                    if (ent == null)
+                        return null;
+                    try
+                    {
+                        var value = field.GetValue(ent);
+                        return value?.ToString();
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                };
+            }
+
+            MethodInfo getName = null;
+            try { getName = type.GetMethod("GetName", flags, null, Type.EmptyTypes, null); }
+            catch { getName = null; }
+            if (getName != null)
+            {
+                return ent =>
+                {
+                    if (ent == null)
+                        return null;
+                    try
+                    {
+                        var value = getName.Invoke(ent, Array.Empty<object>());
+                        return value?.ToString();
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                };
+            }
+
+            return _ => null;
+        }
+
+        private static string TryGetGameEntityId(GameEntity ent)
+        {
+            if (ent == null)
+                return null;
+            var type = ent.GetType();
+            if (type == null)
+                return null;
+            if (!_entityIdAccessorCache.TryGetValue(type, out var accessor))
+            {
+                lock (_entityIdAccessorLock)
+                {
+                    if (!_entityIdAccessorCache.TryGetValue(type, out accessor))
+                    {
+                        accessor = CreateEntityIdAccessor(type);
+                        _entityIdAccessorCache[type] = accessor;
+                    }
+                }
+            }
+            if (accessor == null)
+                return null;
+            try
+            {
+                return accessor(ent);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool ShouldLogFallback(string key)
+        {
+            if (string.IsNullOrEmpty(key))
+                return false;
+            lock (_fallbackWarnLock)
+            {
+                if (_fallbackWarnedSet.Contains(key))
+                    return false;
+                _fallbackWarnedSet.Add(key);
+                _fallbackWarnOrder.Enqueue(key);
+                while (_fallbackWarnOrder.Count > FallbackWarnLimit)
+                {
+                    var removed = _fallbackWarnOrder.Dequeue();
+                    _fallbackWarnedSet.Remove(removed);
+                }
+                return true;
+            }
+        }
+
+        private static string BuildFallbackContextId(int agentId, GameEntity ent, Skeleton skel)
+        {
+            if (agentId >= 0)
+                return $"agent#{agentId}";
+            if (ent != null)
+            {
+                var stable = TryGetGameEntityId(ent);
+                if (!string.IsNullOrEmpty(stable))
+                    return $"ent#{stable}";
+                return $"ent#{ent.GetHashCode():X}";
+            }
+            if (skel != null)
+                return $"skel#{skel.GetHashCode():X}";
+            return "agent#?";
+        }
+
+        private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos, int agentId = -1)
+        {
+            if (!Vec3IsFinite(impulse) || !Vec3IsFinite(pos) || NearZero(impulse))
+                return false;
             bool ok = false;
+            string fallbackContextId = BuildFallbackContextId(agentId, ent, skel);
             if (!_scanLogged && ER_Config.DebugLogging)
             {
                 _scanLogged = true;
@@ -43,100 +651,664 @@ namespace ExtremeRagdoll
                 Dump("skel", skel?.GetType());
             }
 
-            IEnumerable<MethodInfo> Cand(Type t) =>
-                t?.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) ?? Array.Empty<MethodInfo>();
+            bool prepared = false;
+            void EnsureRagdollReady()
+            {
+                if (prepared || ok)
+                    return;
+                if (ent == null && skel == null)
+                {
+                    prepared = true;
+                    return;
+                }
+                if (ent != null && WasRagdollPrepared(ent))
+                {
+                    prepared = true;
+                    return;
+                }
+                if (skel != null && SkeletonAlreadyRagdolled(skel))
+                {
+                    prepared = true;
+                    MarkRagdollPrepared(ent);
+                    return;
+                }
+                if (EntIsDynamic(ent))
+                {
+                    prepared = true;
+                    MarkRagdollPrepared(ent);
+                    return;
+                }
+                prepared = true;
+                try { ent?.ActivateRagdoll(); } catch { }
+                try { skel?.ActivateRagdoll(); } catch { }
+                try { skel?.ForceUpdateBoneFrames(); } catch { }
+                MarkRagdollPrepared(ent);
+            }
+
             // --- GameEntity route ---
             if (ent != null)
             {
-                if (_entImp2 == null && _entImp3 == null && _entImp1 == null)
+                EnsureRagdollReady();
+                var entEntry = GetEntImpulseEntry(ent.GetType());
+                if (entEntry != null)
                 {
-                    var ms = Cand(ent?.GetType()).Concat(Cand(typeof(GameEntity)));
-                    foreach (var m in ms)
+                    try
                     {
-                        var ps = m.GetParameters();
-                        var name = m.Name.ToLowerInvariant();
-                        bool looks = name.Contains("impulse") || name.Contains("force") || name.Contains("apply")
-                                     || name.Contains("addforce") || name.Contains("addimpulse") || name.Contains("atposition")
-                                     || name.Contains("velocity");
-                        if (!looks) continue;
-                        if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool)) _entImp3 = m;
-                        else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3)) _entImp2 = m;
-                        else if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3)) _entImp1 = m;
-                    }
-                    if (_entImp3 == null)
-                        _entImp3 = typeof(GameEntity).GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
-                }
-                try
-                {
-                    if (_entImp3 != null)
-                    {
-                        try
+                        if (entEntry.M3 != null)
                         {
-                            _entImp3.Invoke(ent, new object[] { impulse, pos, false });
-                            ER_Log.Info("IMPULSE_USE ent3(false)");
+                            var ps = entEntry.M3.GetParameters();
+                            if (entEntry.D3 == null && !entEntry.D3Failed && ps.Length == 3 && !ps[0].ParameterType.IsByRef && !ps[1].ParameterType.IsByRef)
+                            {
+                                var del = TryCreateInstanceDelegate<Action<GameEntity, Vec3, Vec3, bool>>(entEntry.M3);
+                                if (del != null) entEntry.D3 = del; else entEntry.D3Failed = true;
+                            }
+                            try
+                            {
+                                if (entEntry.D3 != null)
+                                    entEntry.D3(ent, impulse, pos, false);
+                                else
+                                    entEntry.M3.Invoke(ent, new object[] { impulse, pos, false });
+                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ent3(false)");
+                                ok = true;
+                            }
+                            catch
+                            {
+                                try
+                                {
+                                    if (entEntry.D3 != null)
+                                        entEntry.D3(ent, impulse, pos, true);
+                                    else
+                                        entEntry.M3.Invoke(ent, new object[] { impulse, pos, true });
+                                    if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ent3(true)");
+                                    ok = true;
+                                }
+                                catch
+                                {
+                                    // ignore and allow fallthrough
+                                }
+                            }
+                        }
+                        if (!ok && entEntry.M2 != null)
+                        {
+                            var ps = entEntry.M2.GetParameters();
+                            if (entEntry.D2 == null && !entEntry.D2Failed && ps.Length == 2 && !ps[0].ParameterType.IsByRef && !ps[1].ParameterType.IsByRef)
+                            {
+                                var del = TryCreateInstanceDelegate<Action<GameEntity, Vec3, Vec3>>(entEntry.M2);
+                                if (del != null) entEntry.D2 = del; else entEntry.D2Failed = true;
+                            }
+                            if (entEntry.D2 != null)
+                                entEntry.D2(ent, impulse, pos);
+                            else
+                                entEntry.M2.Invoke(ent, new object[] { impulse, pos });
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ent2");
                             ok = true;
                         }
-                        catch
+                        if (!ok && entEntry.M1 != null)
                         {
-                            _entImp3.Invoke(ent, new object[] { impulse, pos, true });
-                            ER_Log.Info("IMPULSE_USE ent3(true)");
+                            var ps = entEntry.M1.GetParameters();
+                            if (entEntry.D1 == null && !entEntry.D1Failed && ps.Length == 1 && !ps[0].ParameterType.IsByRef)
+                            {
+                                var del = TryCreateInstanceDelegate<Action<GameEntity, Vec3>>(entEntry.M1);
+                                if (del != null) entEntry.D1 = del; else entEntry.D1Failed = true;
+                            }
+                            if (entEntry.D1 != null)
+                                entEntry.D1(ent, impulse);
+                            else
+                                entEntry.M1.Invoke(ent, new object[] { impulse });
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ent1");
                             ok = true;
                         }
                     }
-                    else if (_entImp2 != null)
+                    catch
                     {
-                        _entImp2.Invoke(ent, new object[] { impulse, pos });
-                        ER_Log.Info("IMPULSE_USE ent2");
-                        ok = true;
-                    }
-                    else if (_entImp1 != null)
-                    {
-                        _entImp1.Invoke(ent, new object[] { impulse });
-                        ER_Log.Info("IMPULSE_USE ent1");
-                        ok = true;
+                        // keep ok as-is
                     }
                 }
-                catch { /* keep ok as-is */ }
             }
-            // --- Skeleton route (ragdoll bones) ---
-            if (!ok && skel != null)
+            if (!ok && ent != null)
             {
-                if (_skelImp2 == null && _skelImp1 == null)
-                {
-                    var ts = skel.GetType();
-                    foreach (var m in ts.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-                    {
-                        var ps = m.GetParameters();
-                        bool looksImpulse =
-                            (m.Name.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("Force",   StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("Velocity",StringComparison.OrdinalIgnoreCase) >= 0) ||
-                            (m.Name.IndexOf("Ragdoll", StringComparison.OrdinalIgnoreCase) >= 0);
-                        if (!looksImpulse) continue;
-                        if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
-                            _skelImp2 = m; // (force, atPos)
-                        else if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
-                            _skelImp1 = m; // (force)
-                    }
-                }
+                EnsureRagdollReady();
+                EnsureExtensionImpulseMethods();
                 try
                 {
-                    if (_skelImp2 != null)
+                    if (_extEntImp3 != null)
                     {
-                        _skelImp2.Invoke(skel, new object[] { impulse, pos });
-                        ER_Log.Info("IMPULSE_USE skel2");
+                        if (_extEntImp3Delegate != null)
+                        {
+                            try
+                            {
+                                _extEntImp3Delegate(ent, impulse, pos, false);
+                            }
+                            catch
+                            {
+                                _extEntImp3Delegate(ent, impulse, pos, true);
+                            }
+                        }
+                        else
+                        {
+                            var args = new object[] { ent, impulse, pos, false };
+                            try
+                            {
+                                _extEntImp3.Invoke(null, args);
+                            }
+                            catch
+                            {
+                                args[3] = true;
+                                _extEntImp3.Invoke(null, args);
+                            }
+                        }
                         ok = true;
+                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3");
                     }
-                    else if (_skelImp1 != null)
+                    else if (_extEntImp2 != null)
                     {
-                        _skelImp1.Invoke(skel, new object[] { impulse });
-                        ER_Log.Info("IMPULSE_USE skel1");
+                        if (_extEntImp2Delegate != null)
+                            _extEntImp2Delegate(ent, impulse, pos);
+                        else
+                            _extEntImp2.Invoke(null, new object[] { ent, impulse, pos });
                         ok = true;
+                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2");
+                    }
+                    else if (_extEntImp1 != null)
+                    {
+                        if (_extEntImp1Delegate != null)
+                            _extEntImp1Delegate(ent, impulse);
+                        else
+                            _extEntImp1.Invoke(null, new object[] { ent, impulse });
+                        ok = true;
+                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent1");
                     }
                 }
                 catch { }
             }
+            // --- Skeleton route (ragdoll bones) ---
+            if (!ok && skel != null)
+            {
+                EnsureRagdollReady();
+                var skelEntry = GetSkelImpulseEntry(skel.GetType());
+                if (skelEntry != null)
+                {
+                    try
+                    {
+                        if (skelEntry.M2 != null)
+                        {
+                            var ps = skelEntry.M2.GetParameters();
+                            if (skelEntry.D2 == null && !skelEntry.D2Failed && ps.Length == 2 && !ps[0].ParameterType.IsByRef && !ps[1].ParameterType.IsByRef)
+                            {
+                                var del = TryCreateInstanceDelegate<Action<Skeleton, Vec3, Vec3>>(skelEntry.M2);
+                                if (del != null) skelEntry.D2 = del; else skelEntry.D2Failed = true;
+                            }
+                            if (skelEntry.D2 != null)
+                                skelEntry.D2(skel, impulse, pos);
+                            else
+                                skelEntry.M2.Invoke(skel, new object[] { impulse, pos });
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE skel2");
+                            ok = true;
+                        }
+                        if (!ok && skelEntry.M1 != null)
+                        {
+                            var ps = skelEntry.M1.GetParameters();
+                            if (skelEntry.D1 == null && !skelEntry.D1Failed && ps.Length == 1 && !ps[0].ParameterType.IsByRef)
+                            {
+                                var del = TryCreateInstanceDelegate<Action<Skeleton, Vec3>>(skelEntry.M1);
+                                if (del != null) skelEntry.D1 = del; else skelEntry.D1Failed = true;
+                            }
+                            if (skelEntry.D1 != null)
+                                skelEntry.D1(skel, impulse);
+                            else
+                                skelEntry.M1.Invoke(skel, new object[] { impulse });
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE skel1");
+                            ok = true;
+                        }
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+                }
+            }
+            // ---- DEEP FALLBACK: hunt physics-y subobjects and call any force-like API ----
+            if (!ok)
+            {
+                EnsureRagdollReady();
+                try { skel?.ForceUpdateBoneFrames(); } catch { }
+
+                (MethodInfo m2, MethodInfo m1) BuildForceMethodPair(Type type)
+                {
+                    var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                    MethodInfo[] methods;
+                    try { methods = type.GetMethods(flags); }
+                    catch { methods = Array.Empty<MethodInfo>(); }
+                    MethodInfo m2 = null, m1 = null;
+                    MethodInfo m2Velocity = null, m1Velocity = null;
+                    foreach (var m in methods)
+                    {
+                        if (m == null)
+                            continue;
+                        var ps = m.GetParameters();
+                        if (ps.Any(p => p.ParameterType.IsByRef))
+                            continue;
+                        bool velocityOnly;
+                        if (!LooksImpulseName(m.Name, allowVelocityFallback: true, out velocityOnly))
+                            continue;
+                        if (ps.Length == 2 && IsVec3Like(ps[0].ParameterType) && IsVec3Like(ps[1].ParameterType))
+                        {
+                            if (velocityOnly)
+                                m2Velocity ??= m;
+                            else if (m2 == null)
+                                m2 = m;
+                        }
+                        else if (ps.Length == 1 && IsVec3Like(ps[0].ParameterType))
+                        {
+                            if (velocityOnly)
+                                m1Velocity ??= m;
+                            else if (m1 == null)
+                                m1 = m;
+                        }
+                    }
+                    if (m2 == null) m2 = m2Velocity;
+                    if (m1 == null) m1 = m1Velocity;
+                    return (m2, m1);
+                }
+
+                bool TryInvokeForceLike(object target, Vec3 impulse, Vec3 pos, string tag)
+                {
+                    if (target == null)
+                        return false;
+                    var t = target.GetType();
+                    if (t == null)
+                        return false;
+                    if (!_forceMethodCache.TryGetValue(t, out var pair))
+                    {
+                        pair = BuildForceMethodPair(t);
+                        lock (_forceMethodLock)
+                        {
+                            if (!_forceMethodCache.TryGetValue(t, out var existing))
+                            {
+                                _forceMethodCache[t] = pair;
+                            }
+                            else
+                            {
+                                pair = existing;
+                            }
+                        }
+                    }
+                    var typeName = t?.FullName ?? t?.Name ?? "<unknown>";
+                    try
+                    {
+                        if (pair.m2 != null)
+                        {
+                            pair.m2.Invoke(target, new object[] { impulse, pos });
+                            int token = 0;
+                            try { token = pair.m2.MetadataToken; }
+                            catch { token = 0; }
+                            var warnKey = $"{fallbackContextId}:{tag}:{typeName}:{token}";
+                            if (ShouldLogFallback(warnKey))
+                                ER_Log.Warning($"IMPULSE_FALLBACK_USED {fallbackContextId} {tag} {typeName}::{pair.m2.Name}");
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info($"IMPULSE_USE {tag}.m2 {typeName}::{pair.m2.Name}");
+                            return true;
+                        }
+                        if (pair.m1 != null)
+                        {
+                            pair.m1.Invoke(target, new object[] { impulse });
+                            int token = 0;
+                            try { token = pair.m1.MetadataToken; }
+                            catch { token = 0; }
+                            var warnKey = $"{fallbackContextId}:{tag}:{typeName}:{token}";
+                            if (ShouldLogFallback(warnKey))
+                                ER_Log.Warning($"IMPULSE_FALLBACK_USED {fallbackContextId} {tag} {typeName}::{pair.m1.Name}");
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info($"IMPULSE_USE {tag}.m1 {typeName}::{pair.m1.Name}");
+                            return true;
+                        }
+                    }
+                    catch
+                    {
+                        // ignored
+                    }
+                    return false;
+                }
+
+                MemberInfo[] GetPhysicsMembers(Type type)
+                {
+                    if (type == null)
+                        return Array.Empty<MemberInfo>();
+                    if (_physChildCache.TryGetValue(type, out var cached))
+                        return cached;
+
+                    bool Looks(string s)
+                    {
+                        s = s?.ToLowerInvariant() ?? string.Empty;
+                        return s.Contains("body") || s.Contains("phys") || s.Contains("rigid") || s.Contains("actor") || s.Contains("ragdoll") || s.Contains("collid") || s.Contains("capsule") || s.Contains("shape");
+                    }
+
+                    var list = new List<MemberInfo>();
+                    var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+                    MemberInfo[] CacheResult()
+                    {
+                        var result = list.ToArray();
+                        lock (_physChildLock)
+                        {
+                            if (!_physChildCache.TryGetValue(type, out var existing))
+                            {
+                                _physChildCache[type] = result;
+                                return result;
+                            }
+                            return existing;
+                        }
+                    }
+
+                    FieldInfo[] fields;
+                    try { fields = type.GetFields(flags); }
+                    catch { fields = Array.Empty<FieldInfo>(); }
+                    foreach (var f in fields)
+                    {
+                        if (f == null)
+                            continue;
+                        if (!Looks(f.Name) && !Looks(f.FieldType?.Name))
+                            continue;
+                        list.Add(f);
+                        if (list.Count >= 64)
+                            return CacheResult();
+                    }
+                    if (list.Count < 64)
+                    {
+                        PropertyInfo[] props;
+                        try { props = type.GetProperties(flags); }
+                        catch { props = Array.Empty<PropertyInfo>(); }
+                        foreach (var p in props)
+                        {
+                            if (p == null || !p.CanRead)
+                                continue;
+                            if (!Looks(p.Name) && !Looks(p.PropertyType?.Name))
+                                continue;
+                            list.Add(p);
+                            if (list.Count >= 64)
+                                return CacheResult();
+                        }
+                    }
+                    if (list.Count < 64)
+                    {
+                        MethodInfo[] methods;
+                        try { methods = type.GetMethods(flags); }
+                        catch { methods = Array.Empty<MethodInfo>(); }
+                        foreach (var m in methods)
+                        {
+                            if (m == null || m.IsStatic)
+                                continue;
+                            if (m.GetParameters().Length != 0)
+                                continue;
+                            var name = m.Name ?? string.Empty;
+                            if (!name.StartsWith("get", StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            if (!Looks(name) && !Looks(m.ReturnType?.Name))
+                                continue;
+                            list.Add(m);
+                            if (list.Count >= 64)
+                                return CacheResult();
+                        }
+                    }
+
+                    return CacheResult();
+                }
+
+                int CollectPhysicsChildren(object owner, List<object> buffer)
+                {
+                    buffer.Clear();
+                    if (owner == null)
+                        return 0;
+                    var type = owner.GetType();
+                    if (type == null)
+                        return 0;
+                    var members = GetPhysicsMembers(type);
+                    if (members == null || members.Length == 0)
+                        return 0;
+                    foreach (var member in members)
+                    {
+                        if (member == null)
+                            continue;
+                        object val = null;
+                        try
+                        {
+                            switch (member)
+                            {
+                                case FieldInfo field:
+                                    val = field.GetValue(owner);
+                                    break;
+                                case PropertyInfo prop:
+                                    val = prop.GetValue(owner, null);
+                                    break;
+                                case MethodInfo method:
+                                    val = method.Invoke(owner, Array.Empty<object>());
+                                    break;
+                            }
+                        }
+                        catch
+                        {
+                            val = null;
+                        }
+                        if (val != null)
+                        {
+                            buffer.Add(val);
+                            if (buffer.Count >= 64)
+                                break;
+                        }
+                    }
+                    return buffer.Count;
+                }
+
+                bool TryDescend(object owner, string tag)
+                {
+                    if (owner == null)
+                        return false;
+                    if (TryInvokeForceLike(owner, impulse, pos, tag))
+                        return true;
+
+                    lock (_childScratch)
+                    {
+                        var childCount = CollectPhysicsChildren(owner, _childScratch);
+                        for (int i = 0; i < childCount; i++)
+                        {
+                            var child = _childScratch[i];
+                            var childName = child?.GetType()?.Name ?? "?";
+                            if (TryInvokeForceLike(child, impulse, pos, $"{tag}->{childName}"))
+                            {
+                                _childScratch.Clear();
+                                return true;
+                            }
+                        }
+                        if (childCount > 12)
+                        {
+                            _childScratch.Clear();
+                            return false;
+                        }
+                        lock (_grandChildScratch)
+                        {
+                            for (int i = 0; i < childCount; i++)
+                            {
+                                var child = _childScratch[i];
+                                var childName = child?.GetType()?.Name ?? "?";
+                                var grandCount = CollectPhysicsChildren(child, _grandChildScratch);
+                                for (int g = 0; g < grandCount; g++)
+                                {
+                                    var grand = _grandChildScratch[g];
+                                    var grandName = grand?.GetType()?.Name ?? "?";
+                                    if (TryInvokeForceLike(grand, impulse, pos, $"{tag}->{childName}->{grandName}"))
+                                    {
+                                        _grandChildScratch.Clear();
+                                        _childScratch.Clear();
+                                        return true;
+                                    }
+                                }
+                                _grandChildScratch.Clear();
+                            }
+                        }
+                        _childScratch.Clear();
+                    }
+                    return false;
+                }
+
+                if (!ok)
+                    ok = TryDescend(ent, "ent");
+                if (!ok)
+                    ok = TryDescend(skel, "skel");
+
+                if (!ok && ER_Config.DebugLogging && !_deepFieldLog)
+                {
+                    _deepFieldLog = true;
+                    void DumpPhysicsMembers(object owner, string tag)
+                    {
+                        if (owner == null)
+                            return;
+                        var type = owner.GetType();
+                        if (type == null)
+                            return;
+                        var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                        static bool LooksPhysicsName(string s)
+                        {
+                            s = s?.ToLowerInvariant() ?? string.Empty;
+                            return s.Contains("body") || s.Contains("phys") || s.Contains("rigid") || s.Contains("actor") || s.Contains("ragdoll") || s.Contains("collid") || s.Contains("capsule") || s.Contains("shape");
+                        }
+
+                        FieldInfo[] fields;
+                        try { fields = type.GetFields(flags); }
+                        catch { fields = Array.Empty<FieldInfo>(); }
+                        foreach (var f in fields)
+                        {
+                            if (f == null)
+                                continue;
+                            if (!LooksPhysicsName(f.Name) && !LooksPhysicsName(f.FieldType?.Name))
+                                continue;
+                            var typeName = type.FullName ?? type.Name ?? "<unknown>";
+                            ER_Log.Info($"IMPULSE_SCAN_FIELD {tag}.{typeName}::{f.Name}:{f.FieldType?.FullName}");
+                        }
+
+                        PropertyInfo[] props;
+                        try { props = type.GetProperties(flags); }
+                        catch { props = Array.Empty<PropertyInfo>(); }
+                        foreach (var p in props)
+                        {
+                            if (p == null || !p.CanRead)
+                                continue;
+                            if (!LooksPhysicsName(p.Name) && !LooksPhysicsName(p.PropertyType?.Name))
+                                continue;
+                            var typeName = type.FullName ?? type.Name ?? "<unknown>";
+                            ER_Log.Info($"IMPULSE_SCAN_PROP {tag}.{typeName}::{p.Name}:{p.PropertyType?.FullName}");
+                        }
+
+                        MethodInfo[] methods;
+                        try { methods = type.GetMethods(flags); }
+                        catch { methods = Array.Empty<MethodInfo>(); }
+                        foreach (var m in methods)
+                        {
+                            if (m == null || m.IsStatic)
+                                continue;
+                            if (m.GetParameters().Length != 0)
+                                continue;
+                            var name = m.Name ?? string.Empty;
+                            if (!name.StartsWith("get", StringComparison.OrdinalIgnoreCase))
+                                continue;
+                            if (!LooksPhysicsName(name) && !LooksPhysicsName(m.ReturnType?.Name))
+                                continue;
+                            var typeName = type.FullName ?? type.Name ?? "<unknown>";
+                            ER_Log.Info($"IMPULSE_SCAN_METHOD {tag}.{typeName}::{name}:{m.ReturnType?.FullName}");
+                        }
+                    }
+
+                    DumpPhysicsMembers(ent, "ent");
+                    DumpPhysicsMembers(skel, "skel");
+                }
+            }
             return ok;
+        }
+
+        private static Func<object, bool> CreateRagdollStateEvaluator(Type type)
+        {
+            if (type == null)
+                return _ => false;
+            MethodInfo getter = null;
+            try
+            {
+                getter = type.GetMethod("GetCurrentRagdollState", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+            }
+            catch { }
+            if (getter == null)
+                return _ => false;
+
+            object activeValue = null;
+            bool activeValueResolved = false;
+            return target =>
+            {
+                try
+                {
+                    var state = getter.Invoke(target, Array.Empty<object>());
+                    if (state == null)
+                        return false;
+                    if (state is bool b)
+                        return b;
+                    var stType = state.GetType();
+                    if (stType.IsEnum)
+                    {
+                        if (!activeValueResolved)
+                        {
+                            foreach (var name in Enum.GetNames(stType))
+                            {
+                                if (name.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    name.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    name.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    try { activeValue = Enum.Parse(stType, name); }
+                                    catch { activeValue = null; }
+                                    break;
+                                }
+                            }
+                            activeValueResolved = true;
+                        }
+                        if (activeValue != null)
+                            return Equals(state, activeValue);
+                        var enumText = state.ToString();
+                        return enumText.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                               enumText.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                               enumText.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0;
+                    }
+                    var text = state.ToString();
+                    return text.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           text.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           text.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0;
+                }
+                catch
+                {
+                    return false;
+                }
+            };
+        }
+
+        private static bool SkeletonAlreadyRagdolled(Skeleton skel)
+        {
+            if (skel == null)
+                return false;
+            var type = skel.GetType();
+            if (!_ragdollStateCache.TryGetValue(type, out var eval))
+            {
+                lock (_ragdollStateLock)
+                {
+                    if (!_ragdollStateCache.TryGetValue(type, out eval))
+                    {
+                        eval = CreateRagdollStateEvaluator(type);
+                        _ragdollStateCache[type] = eval;
+                    }
+                }
+            }
+            try
+            {
+                return eval?.Invoke(skel) ?? false;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static float ToPhysicsImpulse(float mag)
@@ -144,8 +1316,22 @@ namespace ExtremeRagdoll
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
             // Conservative default. Tune if needed.
             float imp = mag * 1e-4f;
-            if (imp < 50000f) imp = 50000f;
-            if (imp > 400_000f) imp = 400_000f;
+            float minImpulse = ER_Config.CorpseImpulseMinimum;
+            if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
+                minImpulse = 0f;
+            minImpulse = MathF.Max(0f, minImpulse);
+            const float MinImpulseCeiling = 150000f;
+            if (minImpulse > MinImpulseCeiling)
+                minImpulse = MinImpulseCeiling;
+            if (imp < minImpulse) imp = minImpulse;
+            float maxImpulse = ER_Config.CorpseImpulseMaximum;
+            if (float.IsNaN(maxImpulse) || float.IsInfinity(maxImpulse))
+                maxImpulse = 0f;
+            if (maxImpulse < 0f)
+                maxImpulse = 0f;
+            if (maxImpulse > 0f && maxImpulse < minImpulse)
+                maxImpulse = minImpulse;
+            if (maxImpulse > 0f && imp > maxImpulse) imp = maxImpulse;
             if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp)) return 0f;
             return imp;
         }
@@ -394,7 +1580,7 @@ namespace ExtremeRagdoll
                         if (impMag > 0f)
                         {
                             var contactMiss = XYJitter(L.Pos); contactMiss.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactMiss);
+                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactMiss, agentIndex);
                             nudged |= ok;
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -499,7 +1685,7 @@ namespace ExtremeRagdoll
                             float impMag2 = ToPhysicsImpulse(mag);
                             if (impMag2 > 0f)
                             {
-                                bool ok2 = TryApplyImpulse(ent2, skel, L.Dir * impMag2, contactPoint);
+                                bool ok2 = TryApplyImpulse(ent2, skel, L.Dir * impMag2, contactPoint, agentIndex);
                                 nudged |= ok2;
                                 if (ER_Config.DebugLogging)
                                     ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
@@ -517,7 +1703,7 @@ namespace ExtremeRagdoll
                         if (impMag > 0f)
                         {
                             var contactEntity = XYJitter(L.Pos); contactEntity.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactEntity);
+                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactEntity, agentIndex);
                             nudged |= ok;
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -547,7 +1733,7 @@ namespace ExtremeRagdoll
                         if ((entLocal != null || skelLocal != null) && impMag > 0f)
                         {
                             var impulse = dir * impMag;
-                            bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint);
+                            bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint, agentIndex);
                             nudged |= ok;
                             if (ok && ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
@@ -735,7 +1921,7 @@ namespace ExtremeRagdoll
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     float imp = ToPhysicsImpulse(mag);
                     if (imp > 0f)
-                        TryApplyImpulse(ent, skel, dir * imp, contactImmediate);
+                        TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
                 }
             }
             catch { }

@@ -120,5 +120,15 @@ namespace ExtremeRagdoll
         [SettingPropertyInteger("Corpse Launch Queue Cap", 0, 20,
             Order = 116, RequireRestart = false)]
         public int CorpseLaunchQueueCap { get; set; } = 3;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
+            Order = 117, RequireRestart = false)]
+        public float CorpseImpulseMinimum { get; set; } = 15_000f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
+            Order = 118, RequireRestart = false)]
+        public float CorpseImpulseMaximum { get; set; } = 400_000f;
     }
 }

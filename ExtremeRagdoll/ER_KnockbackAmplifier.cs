@@ -34,6 +34,8 @@ namespace ExtremeRagdoll
         public static float MaxCorpseLaunchMagnitude            => Settings.Instance?.MaxCorpseLaunchMagnitude ?? 200_000_000f;
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
+        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 15_000f);
+        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 400_000f);
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
         public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
         public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.11f);
