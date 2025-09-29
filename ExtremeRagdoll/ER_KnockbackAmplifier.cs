@@ -29,14 +29,14 @@ namespace ExtremeRagdoll
         }
         public static float CorpseLaunchVelocityScaleThreshold => MathF.Max(1f, Settings.Instance?.CorpseLaunchVelocityScaleThreshold ?? 1.02f);
         public static float CorpseLaunchVelocityOffset         => Settings.Instance?.CorpseLaunchVelocityOffset ?? 0.01f;
-        public static float CorpseLaunchVerticalDelta           => Settings.Instance?.CorpseLaunchVerticalDelta ?? 0.05f;
+        public static float CorpseLaunchVerticalDelta           => Settings.Instance?.CorpseLaunchVerticalDelta ?? 0.07f;
         public static float CorpseLaunchDisplacement            => Settings.Instance?.CorpseLaunchDisplacement ?? 0.005f;
         public static float MaxCorpseLaunchMagnitude            => Settings.Instance?.MaxCorpseLaunchMagnitude ?? 200_000_000f;
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
         public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
-        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.08f);
+        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.11f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
         public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.12f);

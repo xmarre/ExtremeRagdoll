@@ -59,6 +59,39 @@ namespace ExtremeRagdoll
         private readonly Dictionary<int, int> _queuedPerAgent = new Dictionary<int, int>();
         private const float TTL = 0.75f;
 
+        // --- API shims for TaleWorlds versions lacking these helpers ---
+        private static bool AgentRemoved(Agent a) => a == null || a.Mission == null || !a.IsActive();
+        private static PropertyInfo _ragdollProp;
+        private static bool RagdollActive(Agent a)
+        {
+            if (a == null || a.Health > 0f) return false;
+            try
+            {
+                var visuals = a.AgentVisuals;
+                var skeleton = visuals?.GetSkeleton();
+                if (skeleton != null)
+                {
+                    var skelType = skeleton.GetType();
+                    if (_ragdollProp == null || _ragdollProp.DeclaringType == null || !_ragdollProp.DeclaringType.IsAssignableFrom(skelType))
+                    {
+                        _ragdollProp = skelType.GetProperty("IsRagdollActive")
+                                       ?? skelType.GetProperty("IsRagdollEnabled")
+                                       ?? skelType.GetProperty("IsRagdolled");
+                        if (_ragdollProp != null && _ragdollProp.PropertyType != typeof(bool))
+                            _ragdollProp = null;
+                    }
+                    if (_ragdollProp != null)
+                        return (bool)_ragdollProp.GetValue(skeleton);
+                }
+            }
+            catch
+            {
+                // ignored - fall back below
+            }
+            // Fallback: Flag evtl. nicht vorhanden → trotzdem weiter machen.
+            return true;
+        }
+
         private void IncQueue(int agentId)
         {
             if (agentId < 0) return;
@@ -236,12 +269,12 @@ namespace ExtremeRagdoll
                     }
                 }
                 _launches.RemoveAt(i);
-                if (agent == null || agent.IsRemoved)
+                if (AgentRemoved(agent))
                 {
                     DecOnce();
                     continue;
                 }
-                if (agent.Health > 0f || agent.Mission != mission)
+                if (agent.Health > 0f || agent.Mission == null || agent.Mission != mission)
                 {
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
@@ -288,15 +321,15 @@ namespace ExtremeRagdoll
                 };
                 AttackCollisionData acd = default;
                 agent.RegisterBlow(blow, in acd);
-                if (!agent.IsRagdollActive)
+                if (!RagdollActive(agent))
                 {
                     // too early: requeue same launch shortly, keep queue counts unchanged
-                    L.T   = now + ApplyDelayJitter(MathF.Max(0.02f, retryDelay));
+                    L.T   = now + ApplyDelayJitter(MathF.Max(0.04f, retryDelay)); // mehr Luft bis Ragdoll aktiv
                     L.Pos = XYJitter(agent.Position);
                     _launches.Add(L);
                     continue;
                 }
-                if (agent.AgentVisuals == null || agent.IsRemoved)
+                if (agent.AgentVisuals == null || AgentRemoved(agent))
                 {
                     DecOnce();
                     continue;
@@ -348,7 +381,7 @@ namespace ExtremeRagdoll
                         {
                             _queuedPerAgent.TryGetValue(agentIndex, out existingQueued);
                         }
-                        if (!agent.IsActive() || agent.IsRemoved)
+                        if (AgentRemoved(agent))
                         {
                             canQueue = false;
                         }
