@@ -20,9 +20,9 @@ namespace ExtremeRagdoll
         private static bool _deepFieldLog;
         private static bool _scanLogged;
         private static bool _extImpulseLogged;
-        private static readonly object _fallbackWarnLock = new();
-        private static readonly HashSet<string> _fallbackWarnedSet = new();
-        private static readonly Queue<string> _fallbackWarnOrder = new();
+        private static readonly object _fallbackWarnLock = new object();
+        private static readonly HashSet<string> _fallbackWarnedSet = new HashSet<string>();
+        private static readonly Queue<string> _fallbackWarnOrder = new Queue<string>();
         private const int FallbackWarnLimit = 32;
         private sealed class EntImpulseEntry
         {
@@ -47,25 +47,25 @@ namespace ExtremeRagdoll
             public bool D1Failed;
         }
 
-        private static readonly Dictionary<Type, EntImpulseEntry> _entImpCache = new();
-        private static readonly object _entImpLock = new();
-        private static readonly Dictionary<Type, SkelImpulseEntry> _skelImpCache = new();
-        private static readonly object _skelImpLock = new();
+        private static readonly Dictionary<Type, EntImpulseEntry> _entImpCache = new Dictionary<Type, EntImpulseEntry>();
+        private static readonly object _entImpLock = new object();
+        private static readonly Dictionary<Type, SkelImpulseEntry> _skelImpCache = new Dictionary<Type, SkelImpulseEntry>();
+        private static readonly object _skelImpLock = new object();
         // Caches for deep fallback
-        private static readonly Dictionary<Type, (MethodInfo m2, MethodInfo m1)> _forceMethodCache = new();
-        private static readonly object _forceMethodLock = new();
-        private static readonly Dictionary<Type, MemberInfo[]> _physChildCache = new();
-        private static readonly object _physChildLock = new();
-        private static readonly Dictionary<Type, Func<object, bool>> _ragdollStateCache = new();
-        private static readonly object _ragdollStateLock = new();
+        private static readonly Dictionary<Type, (MethodInfo m2, MethodInfo m1)> _forceMethodCache = new Dictionary<Type, (MethodInfo m2, MethodInfo m1)>();
+        private static readonly object _forceMethodLock = new object();
+        private static readonly Dictionary<Type, MemberInfo[]> _physChildCache = new Dictionary<Type, MemberInfo[]>();
+        private static readonly object _physChildLock = new object();
+        private static readonly Dictionary<Type, Func<object, bool>> _ragdollStateCache = new Dictionary<Type, Func<object, bool>>();
+        private static readonly object _ragdollStateLock = new object();
         private static readonly List<object> _childScratch = new List<object>(64);
         private static readonly List<object> _grandChildScratch = new List<object>(64);
-        private static readonly Dictionary<Type, Func<GameEntity, string>> _entityIdAccessorCache = new();
-        private static readonly object _entityIdAccessorLock = new();
+        private static readonly Dictionary<Type, Func<GameEntity, string>> _entityIdAccessorCache = new Dictionary<Type, Func<GameEntity, string>>();
+        private static readonly object _entityIdAccessorLock = new object();
         private static Action<GameEntity, Vec3, Vec3, bool> _extEntImp3Delegate;
         private static Action<GameEntity, Vec3, Vec3> _extEntImp2Delegate;
         private static Action<GameEntity, Vec3> _extEntImp1Delegate;
-        private static readonly ConditionalWeakTable<GameEntity, object> _preparedEntities = new();
+        private static readonly ConditionalWeakTable<GameEntity, object> _preparedEntities = new ConditionalWeakTable<GameEntity, object>();
         private static readonly object _preparedMarker = new object();
         private static Func<GameEntity, bool> _isDynamicBodyAccessor;
         private static bool _dynamicBodyChecked;
@@ -90,6 +90,14 @@ namespace ExtremeRagdoll
             }
             return false;
         }
+
+        private static bool LooksPhysicsName(string s)
+        {
+            s = (s ?? string.Empty).ToLowerInvariant();
+            return s.Contains("body") || s.Contains("phys") || s.Contains("rigid") ||
+                   s.Contains("actor") || s.Contains("ragdoll") || s.Contains("collid") ||
+                   s.Contains("capsule") || s.Contains("shape");
+        }
         private static bool IsVec3Like(Type t) =>
             t == typeof(Vec3) || t == typeof(Vec3).MakeByRefType();
 
@@ -103,13 +111,6 @@ namespace ExtremeRagdoll
         {
             if (Interlocked.Exchange(ref _extImpulseScannedInt, 1) == 1)
                 return;
-
-            static bool Looks(string n)
-            {
-                if (string.IsNullOrEmpty(n))
-                    return false;
-                return LooksImpulseName(n, allowVelocityFallback: false, out _);
-            }
 
             Assembly[] assemblies;
             try
@@ -164,7 +165,7 @@ namespace ExtremeRagdoll
 
                     foreach (var m in methods)
                     {
-                        if (m == null || !Looks(m.Name))
+                        if (m == null || !LooksImpulseName(m.Name, false, out _))
                             continue;
                         var ps = m.GetParameters();
                         if (ps.Length == 0)
@@ -175,21 +176,33 @@ namespace ExtremeRagdoll
                         if (ps.Length == 4 && IsVec3Like(ps[1].ParameterType) && IsVec3Like(ps[2].ParameterType) &&
                             ps[3].ParameterType == typeof(bool))
                         {
-                            _extEntImp3 ??= m;
+                            if (_extEntImp3 == null)
+                                _extEntImp3 = m;
                             if (!ps[1].ParameterType.IsByRef && !ps[2].ParameterType.IsByRef)
-                                _extEntImp3Delegate ??= TryCreateExtDelegate<Action<GameEntity, Vec3, Vec3, bool>>(m);
+                            {
+                                if (_extEntImp3Delegate == null)
+                                    _extEntImp3Delegate = TryCreateExtDelegate<Action<GameEntity, Vec3, Vec3, bool>>(m);
+                            }
                         }
                         else if (ps.Length == 3 && IsVec3Like(ps[1].ParameterType) && IsVec3Like(ps[2].ParameterType))
                         {
-                            _extEntImp2 ??= m;
+                            if (_extEntImp2 == null)
+                                _extEntImp2 = m;
                             if (!ps[1].ParameterType.IsByRef && !ps[2].ParameterType.IsByRef)
-                                _extEntImp2Delegate ??= TryCreateExtDelegate<Action<GameEntity, Vec3, Vec3>>(m);
+                            {
+                                if (_extEntImp2Delegate == null)
+                                    _extEntImp2Delegate = TryCreateExtDelegate<Action<GameEntity, Vec3, Vec3>>(m);
+                            }
                         }
                         else if (ps.Length == 2 && IsVec3Like(ps[1].ParameterType))
                         {
-                            _extEntImp1 ??= m;
+                            if (_extEntImp1 == null)
+                                _extEntImp1 = m;
                             if (!ps[1].ParameterType.IsByRef)
-                                _extEntImp1Delegate ??= TryCreateExtDelegate<Action<GameEntity, Vec3>>(m);
+                            {
+                                if (_extEntImp1Delegate == null)
+                                    _extEntImp1Delegate = TryCreateExtDelegate<Action<GameEntity, Vec3>>(m);
+                            }
                         }
 
                         if (_extEntImp3 != null && _extEntImp2 != null && _extEntImp1 != null)
@@ -894,14 +907,20 @@ namespace ExtremeRagdoll
                         if (ps.Length == 2 && IsVec3Like(ps[0].ParameterType) && IsVec3Like(ps[1].ParameterType))
                         {
                             if (velocityOnly)
-                                m2Velocity ??= m;
+                            {
+                                if (m2Velocity == null)
+                                    m2Velocity = m;
+                            }
                             else if (m2 == null)
                                 m2 = m;
                         }
                         else if (ps.Length == 1 && IsVec3Like(ps[0].ParameterType))
                         {
                             if (velocityOnly)
-                                m1Velocity ??= m;
+                            {
+                                if (m1Velocity == null)
+                                    m1Velocity = m;
+                            }
                             else if (m1 == null)
                                 m1 = m;
                         }
@@ -911,7 +930,7 @@ namespace ExtremeRagdoll
                     return (m2, m1);
                 }
 
-                bool TryInvokeForceLike(object target, Vec3 impulse, Vec3 pos, string tag)
+                bool TryInvokeForceLike(object target, Vec3 imp, Vec3 atPos, string tag)
                 {
                     if (target == null)
                         return false;
@@ -938,26 +957,26 @@ namespace ExtremeRagdoll
                     {
                         if (pair.m2 != null)
                         {
-                            pair.m2.Invoke(target, new object[] { impulse, pos });
+                            pair.m2.Invoke(target, new object[] { imp, atPos });
                             int token = 0;
                             try { token = pair.m2.MetadataToken; }
                             catch { token = 0; }
                             var warnKey = $"{fallbackContextId}:{tag}:{typeName}:{token}";
                             if (ShouldLogFallback(warnKey))
-                                ER_Log.Warning($"IMPULSE_FALLBACK_USED {fallbackContextId} {tag} {typeName}::{pair.m2.Name}");
+                                ER_Log.Info($"IMPULSE_FALLBACK_USED {fallbackContextId} {tag} {typeName}::{pair.m2.Name}");
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"IMPULSE_USE {tag}.m2 {typeName}::{pair.m2.Name}");
                             return true;
                         }
                         if (pair.m1 != null)
                         {
-                            pair.m1.Invoke(target, new object[] { impulse });
+                            pair.m1.Invoke(target, new object[] { imp });
                             int token = 0;
                             try { token = pair.m1.MetadataToken; }
                             catch { token = 0; }
                             var warnKey = $"{fallbackContextId}:{tag}:{typeName}:{token}";
                             if (ShouldLogFallback(warnKey))
-                                ER_Log.Warning($"IMPULSE_FALLBACK_USED {fallbackContextId} {tag} {typeName}::{pair.m1.Name}");
+                                ER_Log.Info($"IMPULSE_FALLBACK_USED {fallbackContextId} {tag} {typeName}::{pair.m1.Name}");
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"IMPULSE_USE {tag}.m1 {typeName}::{pair.m1.Name}");
                             return true;
@@ -976,12 +995,6 @@ namespace ExtremeRagdoll
                         return Array.Empty<MemberInfo>();
                     if (_physChildCache.TryGetValue(type, out var cached))
                         return cached;
-
-                    bool Looks(string s)
-                    {
-                        s = s?.ToLowerInvariant() ?? string.Empty;
-                        return s.Contains("body") || s.Contains("phys") || s.Contains("rigid") || s.Contains("actor") || s.Contains("ragdoll") || s.Contains("collid") || s.Contains("capsule") || s.Contains("shape");
-                    }
 
                     var list = new List<MemberInfo>();
                     var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -1007,7 +1020,7 @@ namespace ExtremeRagdoll
                     {
                         if (f == null)
                             continue;
-                        if (!Looks(f.Name) && !Looks(f.FieldType?.Name))
+                        if (!LooksPhysicsName(f.Name) && !LooksPhysicsName(f.FieldType?.Name))
                             continue;
                         list.Add(f);
                         if (list.Count >= 64)
@@ -1022,7 +1035,7 @@ namespace ExtremeRagdoll
                         {
                             if (p == null || !p.CanRead)
                                 continue;
-                            if (!Looks(p.Name) && !Looks(p.PropertyType?.Name))
+                            if (!LooksPhysicsName(p.Name) && !LooksPhysicsName(p.PropertyType?.Name))
                                 continue;
                             list.Add(p);
                             if (list.Count >= 64)
@@ -1043,7 +1056,7 @@ namespace ExtremeRagdoll
                             var name = m.Name ?? string.Empty;
                             if (!name.StartsWith("get", StringComparison.OrdinalIgnoreCase))
                                 continue;
-                            if (!Looks(name) && !Looks(m.ReturnType?.Name))
+                            if (!LooksPhysicsName(name) && !LooksPhysicsName(m.ReturnType?.Name))
                                 continue;
                             list.Add(m);
                             if (list.Count >= 64)
@@ -1166,12 +1179,6 @@ namespace ExtremeRagdoll
                         if (type == null)
                             return;
                         var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                        static bool LooksPhysicsName(string s)
-                        {
-                            s = s?.ToLowerInvariant() ?? string.Empty;
-                            return s.Contains("body") || s.Contains("phys") || s.Contains("rigid") || s.Contains("actor") || s.Contains("ragdoll") || s.Contains("collid") || s.Contains("capsule") || s.Contains("shape");
-                        }
-
                         FieldInfo[] fields;
                         try { fields = type.GetFields(flags); }
                         catch { fields = Array.Empty<FieldInfo>(); }
