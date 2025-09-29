@@ -60,7 +60,7 @@ namespace ExtremeRagdoll
         private const float TTL = 0.75f;
 
         // --- API shims for TaleWorlds versions lacking these helpers ---
-        private static bool AgentRemoved(Agent a) => a == null || a.Mission == null || !a.IsActive();
+        private static bool AgentRemoved(Agent a) => a == null || a.Mission == null;
         private static PropertyInfo _ragdollProp;
         private static bool RagdollActive(Agent a)
         {
