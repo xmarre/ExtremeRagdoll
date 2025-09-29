@@ -64,7 +64,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Vertical Delta", 0f, 1f, "0.000",
             Order = 105, RequireRestart = false)]
-        public float CorpseLaunchVerticalDelta { get; set; } = 0.10f;
+        public float CorpseLaunchVerticalDelta { get; set; } = 0.07f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Displacement Threshold", 0f, 0.5f, "0.000",
@@ -109,7 +109,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
             Order = 114, RequireRestart = false)]
-        public float CorpseLaunchRetryDelay { get; set; } = 0.045f;
+        public float CorpseLaunchRetryDelay { get; set; } = 0.11f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Jitter (s)", 0f, 0.5f, "0.000",
