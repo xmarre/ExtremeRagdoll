@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using HarmonyLib;
 using TaleWorlds.Core;
-using TaleWorlds.Engine;           // for GameEntity
+using TaleWorlds.Engine;           // for GameEntity, Skeleton
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using System.Reflection;           // reflection fallback for impulse API
@@ -11,41 +11,76 @@ namespace ExtremeRagdoll
 {
     public sealed class ER_DeathBlastBehavior : MissionBehavior
     {
-        // Cache possible GameEntity impulse methods across TW versions
-        private static MethodInfo _impulse2, _impulse3;
-        private static bool TryApplyImpulse(GameEntity ent, Vec3 impulse, Vec3 pos)
+        // Cache possible impulse methods across TW versions
+        private static MethodInfo _entImp2, _entImp3, _entImp1;
+        private static MethodInfo _skelImp2, _skelImp1;
+        private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos)
         {
-            if (ent == null) return false;
-            var t = typeof(GameEntity);
-            if (_impulse2 == null && _impulse3 == null)
+            bool ok = false;
+            // --- GameEntity route ---
+            if (ent != null)
             {
-                foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                if (_entImp2 == null && _entImp3 == null && _entImp1 == null)
                 {
-                    var ps = m.GetParameters();
-                    bool looksImpulse = m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")
-                                        || m.Name.Contains("AddForce") || m.Name.Contains("AddImpulse") || m.Name.Contains("AtPosition");
-                    if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool)
-                        && looksImpulse)
-                        _impulse3 = m;
-                    else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3)
-                             && looksImpulse)
-                        _impulse2 = m;
+                    var t = typeof(GameEntity);
+                    foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        var ps = m.GetParameters();
+                        bool looksImpulse =
+                            (m.Name.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("Force",   StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("Apply",   StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("AddForce",StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("AddImpulse",StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("AtPosition",StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!looksImpulse) continue;
+                        if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool))
+                            _entImp3 = m;
+                        else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
+                            _entImp2 = m;
+                        else if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
+                            _entImp1 = m;
+                    }
+                    if (_entImp3 == null)
+                        _entImp3 = typeof(GameEntity).GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
                 }
-                if (_impulse3 == null)
-                    _impulse3 = t.GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                                             null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
+                try
+                {
+                    if (_entImp3 != null) { try { _entImp3.Invoke(ent, new object[] { impulse, pos, false }); ok = true; } catch { _entImp3.Invoke(ent, new object[] { impulse, pos, true }); ok = true; } }
+                    else if (_entImp2 != null) { _entImp2.Invoke(ent, new object[] { impulse, pos }); ok = true; }
+                    else if (_entImp1 != null) { _entImp1.Invoke(ent, new object[] { impulse }); ok = true; }
+                }
+                catch { /* keep ok as-is */ }
             }
-            try
+            // --- Skeleton route (ragdoll bones) ---
+            if (!ok && skel != null)
             {
-                if (_impulse3 != null)
+                if (_skelImp2 == null && _skelImp1 == null)
                 {
-                    try { _impulse3.Invoke(ent, new object[] { impulse, pos, false }); return true; }
-                    catch { _impulse3.Invoke(ent, new object[] { impulse, pos, true }); return true; }
+                    var ts = skel.GetType();
+                    foreach (var m in ts.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        var ps = m.GetParameters();
+                        bool looksImpulse =
+                            (m.Name.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("Force",   StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("Velocity",StringComparison.OrdinalIgnoreCase) >= 0) ||
+                            (m.Name.IndexOf("Ragdoll", StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!looksImpulse) continue;
+                        if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
+                            _skelImp2 = m; // (force, atPos)
+                        else if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
+                            _skelImp1 = m; // (force)
+                    }
                 }
-                if (_impulse2 != null) { _impulse2.Invoke(ent, new object[] { impulse, pos }); return true; }
+                try
+                {
+                    if (_skelImp2 != null) { _skelImp2.Invoke(skel, new object[] { impulse, pos }); ok = true; }
+                    else if (_skelImp1 != null) { _skelImp1.Invoke(skel, new object[] { impulse }); ok = true; }
+                }
+                catch { }
             }
-            catch { }
-            return false;
+            return ok;
         }
 
         private static float ToPhysicsImpulse(float mag)
@@ -288,20 +323,22 @@ namespace ExtremeRagdoll
                 }
                 _launches.RemoveAt(i);
                 GameEntity ent = L.Ent;
+                Skeleton skel = null;
                 if (ent == null)
                 {
                     try { ent = agent?.AgentVisuals?.GetEntity(); } catch { }
                 }
+                try { skel = agent?.AgentVisuals?.GetSkeleton(); } catch { }
                 bool agentMissing = agent == null || agent.Mission == null || agent.Mission != mission;
                 if (agentMissing)
                 {
-                    if (ent != null)
+                    if (ent != null || skel != null)
                     {
                         float impMag = ToPhysicsImpulse(L.Mag);
                         if (impMag > 0f)
                         {
-                            var contactPos = XYJitter(L.Pos); contactPos.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, L.Dir * impMag, contactPos);
+                            var contactMiss = XYJitter(L.Pos); contactMiss.z += contactHeight;
+                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactMiss);
                             nudged |= ok;
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -400,12 +437,13 @@ namespace ExtremeRagdoll
                     try
                     {
                         var ent2 = agent.AgentVisuals.GetEntity();
-                        if (ent2 != null)
+                        skel = agent.AgentVisuals.GetSkeleton();
+                        if (ent2 != null || skel != null)
                         {
                             float impMag2 = ToPhysicsImpulse(mag);
                             if (impMag2 > 0f)
                             {
-                                bool ok2 = TryApplyImpulse(ent2, L.Dir * impMag2, contactPoint);
+                                bool ok2 = TryApplyImpulse(ent2, skel, L.Dir * impMag2, contactPoint);
                                 nudged |= ok2;
                                 if (ER_Config.DebugLogging)
                                     ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
@@ -417,13 +455,13 @@ namespace ExtremeRagdoll
                 }
                 if (AgentRemoved(agent))
                 {
-                    if (ent != null)
+                    if (ent != null || skel != null)
                     {
                         float impMag = ToPhysicsImpulse(L.Mag);
                         if (impMag > 0f)
                         {
-                            var contactEnt = XYJitter(L.Pos); contactEnt.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, L.Dir * impMag, contactEnt);
+                            var contactEntity = XYJitter(L.Pos); contactEntity.z += contactHeight;
+                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactEntity);
                             nudged |= ok;
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -448,11 +486,12 @@ namespace ExtremeRagdoll
                     try
                     {
                         var entLocal = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetEntity() : null;
+                        var skelLocal = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetSkeleton() : null;
                         float impMag = ToPhysicsImpulse(mag);
-                        if (entLocal != null && impMag > 0f)
+                        if ((entLocal != null || skelLocal != null) && impMag > 0f)
                         {
                             var impulse = dir * impMag;
-                            bool ok = TryApplyImpulse(entLocal, impulse, contactPoint);
+                            bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint);
                             nudged |= ok;
                             if (ok && ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
@@ -632,14 +671,15 @@ namespace ExtremeRagdoll
 
             try
             {
-                var ent = affected.AgentVisuals?.GetEntity();
-                if (ent != null)
+                var ent  = affected.AgentVisuals?.GetEntity();
+                var skel = affected.AgentVisuals?.GetSkeleton();
+                if (ent != null || skel != null)
                 {
-                    var contact = hitPos;
-                    contact.z += ER_Config.CorpseLaunchContactHeight;
+                    var contactImmediate = hitPos;
+                    contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     float imp = ToPhysicsImpulse(mag);
                     if (imp > 0f)
-                        TryApplyImpulse(ent, dir * imp, contact);
+                        TryApplyImpulse(ent, skel, dir * imp, contactImmediate);
                 }
             }
             catch { }
