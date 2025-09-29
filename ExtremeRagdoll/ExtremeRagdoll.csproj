@@ -71,6 +71,9 @@
     <Reference Include="TaleWorlds.DotNet">
       <HintPath>D:\Spiele\Mount and Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.DotNet.dll</HintPath>
     </Reference>
+    <Reference Include="TaleWorlds.Engine">
+      <HintPath>D:\Spiele\Mount and Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Engine.dll</HintPath>
+    </Reference>
     <Reference Include="TaleWorlds.Library">
       <HintPath>D:\Spiele\Mount and Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Library.dll</HintPath>
     </Reference>
@@ -91,6 +94,7 @@
   <ItemGroup>
     <Compile Include="ER_KnockbackAmplifier.cs" />
     <Compile Include="ER_DeathBlast.cs" />
+    <Compile Include="ER_Log.cs" />
     <Compile Include="ER_TOR_Adapter.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SubModule.cs" />
@@ -98,6 +102,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="SubModule.xml" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
