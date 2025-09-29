@@ -22,11 +22,13 @@ namespace ExtremeRagdoll
                 foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
                 {
                     var ps = m.GetParameters();
+                    bool looksImpulse = m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")
+                                        || m.Name.Contains("AddForce") || m.Name.Contains("AddImpulse") || m.Name.Contains("AtPosition");
                     if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool)
-                        && (m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")))
+                        && looksImpulse)
                         _impulse3 = m;
                     else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3)
-                             && (m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")))
+                             && looksImpulse)
                         _impulse2 = m;
                 }
                 if (_impulse3 == null)
@@ -35,7 +37,11 @@ namespace ExtremeRagdoll
             }
             try
             {
-                if (_impulse3 != null) { _impulse3.Invoke(ent, new object[] { impulse, pos, true }); return true; }
+                if (_impulse3 != null)
+                {
+                    try { _impulse3.Invoke(ent, new object[] { impulse, pos, false }); return true; }
+                    catch { _impulse3.Invoke(ent, new object[] { impulse, pos, true }); return true; }
+                }
                 if (_impulse2 != null) { _impulse2.Invoke(ent, new object[] { impulse, pos }); return true; }
             }
             catch { }
@@ -46,16 +52,16 @@ namespace ExtremeRagdoll
         {
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
             // Conservative default. Tune if needed.
-            float imp = mag * 1e-5f;
-            if (imp < 50f) imp = 50f;
-            if (imp > 100_000f) imp = 100_000f;
+            float imp = mag * 5e-5f;
+            if (imp < 200f) imp = 200f;
+            if (imp > 200_000f) imp = 200_000f;
             if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp)) return 0f;
             return imp;
         }
 
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
-        private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public Vec3 P0; public Vec3 V0; }
+        private struct Launch { public Agent A; public GameEntity Ent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public Vec3 P0; public Vec3 V0; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
         private readonly List<Launch> _launches = new List<Launch>();
@@ -177,7 +183,7 @@ namespace ExtremeRagdoll
             if (a == null) return;
             var mission = Mission;
             if (mission == null) return;
-            if (a.Mission != mission) return;
+            if (a.Mission != null && a.Mission != mission) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
             if (mag <= 0f) return;
             if (a.Health > 0f) return;
@@ -208,9 +214,13 @@ namespace ExtremeRagdoll
             Vec3 nudgedPos = pos;
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
-            nudgedPos.z = MathF.Min(nudgedPos.z + zNudge, a.Position.z + zClamp);
+            float agentZ = nudgedPos.z;
+            try { agentZ = a.Position.z; } catch { }
+            nudgedPos.z = MathF.Min(nudgedPos.z + zNudge, agentZ + zClamp);
 
-            _launches.Add(new Launch { A = a, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex, Warmed = false });
+            GameEntity ent = null;
+            try { ent = a.AgentVisuals?.GetEntity(); } catch { }
+            _launches.Add(new Launch { A = a, Ent = ent, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex, Warmed = false });
             IncQueue(agentIndex);
         }
 
@@ -223,8 +233,8 @@ namespace ExtremeRagdoll
             int launchesWorked = 0;
             float tookScale = ER_Config.CorpseLaunchVelocityScaleThreshold;
             float tookOffset = ER_Config.CorpseLaunchVelocityOffset;
-            float tookVertical = ER_Config.CorpseLaunchVerticalDelta;
-            float tookDisplacement = ER_Config.CorpseLaunchDisplacement;
+            float tookVertical = 0.05f;       // temporary tuning for verification
+            float tookDisplacement = 0.03f;   // temporary tuning for verification
             float contactHeight = ER_Config.CorpseLaunchContactHeight;
             float retryDelay = ER_Config.CorpseLaunchRetryDelay;
             int queueCap = ER_Config.CorpseLaunchQueueCap;
@@ -266,6 +276,7 @@ namespace ExtremeRagdoll
                 if (launchesWorked++ >= MAX_LAUNCHES_PER_TICK) break;
                 var agent = L.A;
                 int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
+                bool nudged = false;
                 bool queueDecremented = false;
                 void DecOnce()
                 {
@@ -276,12 +287,31 @@ namespace ExtremeRagdoll
                     }
                 }
                 _launches.RemoveAt(i);
-                if (agent == null)
+                GameEntity ent = L.Ent;
+                if (ent == null)
                 {
+                    try { ent = agent?.AgentVisuals?.GetEntity(); } catch { }
+                }
+                bool agentMissing = agent == null || agent.Mission == null || agent.Mission != mission;
+                if (agentMissing)
+                {
+                    if (ent != null)
+                    {
+                        float impMag = ToPhysicsImpulse(L.Mag);
+                        if (impMag > 0f)
+                        {
+                            var contact = XYJitter(L.Pos); contact.z += contactHeight;
+                            bool ok = TryApplyImpulse(ent, L.Dir * impMag, contact);
+                            nudged |= ok;
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
+                        }
+                    }
+                    _launchFailLogged.Remove(agentIndex);
                     DecOnce();
                     continue;
                 }
-                if (agent.Health > 0f || agent.Mission == null || agent.Mission != mission)
+                if (agent.Health > 0f)
                 {
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
@@ -331,6 +361,7 @@ namespace ExtremeRagdoll
                     L.Warmed = true;
                     L.T = now + MathF.Max(0.05f, retryDelay); // small settle time
                     L.Pos = agent.Position;
+                    L.Ent = ent;
                     _launches.Add(L);
                     continue; // measure on next tick
                 }
@@ -340,6 +371,7 @@ namespace ExtremeRagdoll
                     L.Warmed = false;
                     L.T   = now + ApplyDelayJitter(MathF.Max(0.04f, retryDelay)); // mehr Luft bis Ragdoll aktiv
                     L.Pos = agent.Position;
+                    L.Ent = ent;
                     _launches.Add(L);
                     continue;
                 }
@@ -352,6 +384,7 @@ namespace ExtremeRagdoll
                         L.Warmed = false;                 // neu messen, wenn Visuals dran sind
                         L.T      = now + MathF.Max(0.05f, retryDelay);
                         L.Pos    = agent.Position;
+                        L.Ent    = ent;
                         _launches.Add(L);
                         IncQueue(agentIndex);
                         if (ER_Config.DebugLogging && agentIndex >= 0)
@@ -362,8 +395,41 @@ namespace ExtremeRagdoll
                     DecOnce();
                     continue;
                 }
+                if (agent.AgentVisuals != null)
+                {
+                    try
+                    {
+                        var ent2 = agent.AgentVisuals.GetEntity();
+                        if (ent2 != null)
+                        {
+                            float impMag2 = ToPhysicsImpulse(mag);
+                            if (impMag2 > 0f)
+                            {
+                                bool ok2 = TryApplyImpulse(ent2, L.Dir * impMag2, contact);
+                                nudged |= ok2;
+                                if (ER_Config.DebugLogging)
+                                    ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
+                            }
+                            ent = ent2;
+                        }
+                    }
+                    catch { }
+                }
                 if (AgentRemoved(agent))
                 {
+                    if (ent != null)
+                    {
+                        float impMag = ToPhysicsImpulse(L.Mag);
+                        if (impMag > 0f)
+                        {
+                            var contactEnt = XYJitter(L.Pos); contactEnt.z += contactHeight;
+                            bool ok = TryApplyImpulse(ent, L.Dir * impMag, contactEnt);
+                            nudged |= ok;
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
+                        }
+                    }
+                    _launchFailLogged.Remove(agentIndex);
                     DecOnce();
                     continue;
                 }
@@ -371,7 +437,8 @@ namespace ExtremeRagdoll
                 float vAfter2 = velAfter.LengthSquared;
                 float vBefore2 = L.V0.LengthSquared;
                 float moved = L.P0.Distance(agent.Position);
-                bool took = (vAfter2 > vBefore2 * tookScale + tookOffset)
+                bool took = nudged
+                    || (vAfter2 > vBefore2 * tookScale + tookOffset)
                     || (velAfter.z > L.V0.z + tookVertical)
                     || (moved > tookDisplacement);
 
@@ -380,16 +447,25 @@ namespace ExtremeRagdoll
                     // Fallback: directly impulse ragdoll physics if RegisterBlow had no effect
                     try
                     {
-                        var ent = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetEntity() : null;
+                        var entLocal = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetEntity() : null;
                         float impMag = ToPhysicsImpulse(mag);
-                        if (ent != null && impMag > 0f)
+                        if (entLocal != null && impMag > 0f)
                         {
                             var impulse = dir * impMag;
-                            if (TryApplyImpulse(ent, impulse, contact) && ER_Config.DebugLogging)
+                            bool ok = TryApplyImpulse(entLocal, impulse, contact);
+                            nudged |= ok;
+                            if (ok && ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
                         }
                     }
                     catch { /* never throw here */ }
+
+                    if (nudged)
+                    {
+                        _launchFailLogged.Remove(agentIndex);
+                        DecOnce();
+                        continue;
+                    }
 
                     if (ER_Config.DebugLogging && _launchFailLogged.Add(agentIndex))
                     {
@@ -414,7 +490,7 @@ namespace ExtremeRagdoll
                         {
                             _queuedPerAgent.TryGetValue(agentIndex, out existingQueued);
                         }
-                        if (AgentRemoved(agent))
+                        if (AgentRemoved(agent) || agentMissing)
                         {
                             canQueue = false;
                         }
@@ -430,6 +506,7 @@ namespace ExtremeRagdoll
                             L.Pos = retryPos;
                             L.AgentId = agentIndex;
                             L.Warmed = false;
+                            L.Ent = ent;
                             _launches.Add(L);
                             IncQueue(agentIndex);
                             if (ER_Config.DebugLogging && agentIndex >= 0 && (L.Tries % 3 == 0))
@@ -525,7 +602,7 @@ namespace ExtremeRagdoll
             _launchFailLogged.Remove(affected.Index);
             ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
             if (state != AgentState.Killed) return;
-            if (affected.Mission != Mission) return;
+            if (affected.Mission != null && affected.Mission != Mission) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
 
             for (int i = _launches.Count - 1; i >= 0; i--)
@@ -552,6 +629,20 @@ namespace ExtremeRagdoll
             float mag = p.mag;
             Vec3 dir = p.dir.LengthSquared > 1e-6f ? p.dir : fallbackDir;
             if (p.pos.LengthSquared > 1e-6f) hitPos = p.pos;
+
+            try
+            {
+                var ent = affected.AgentVisuals?.GetEntity();
+                if (ent != null)
+                {
+                    var contact = hitPos;
+                    contact.z += ER_Config.CorpseLaunchContactHeight;
+                    float imp = ToPhysicsImpulse(mag);
+                    if (imp > 0f)
+                        TryApplyImpulse(ent, dir * imp, contact);
+                }
+            }
+            catch { }
 
             // Schedule with retries (safety net in case MakeDead timing was late)
             EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: 10);
