@@ -300,8 +300,8 @@ namespace ExtremeRagdoll
                         float impMag = ToPhysicsImpulse(L.Mag);
                         if (impMag > 0f)
                         {
-                            var contact = XYJitter(L.Pos); contact.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, L.Dir * impMag, contact);
+                            var contactPos = XYJitter(L.Pos); contactPos.z += contactHeight;
+                            bool ok = TryApplyImpulse(ent, L.Dir * impMag, contactPos);
                             nudged |= ok;
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -339,9 +339,9 @@ namespace ExtremeRagdoll
                     continue;
                 }
                 Vec3 hit = XYJitter(L.Pos);
-                Vec3 contact = hit;
-                contact.z += contactHeight;
-                contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
+                Vec3 contactPoint = hit;
+                contactPoint.z += contactHeight;
+                contactPoint.z = MathF.Min(contactPoint.z, agent.Position.z + zClamp);
 
                 if (!L.Warmed)
                 {
@@ -353,7 +353,7 @@ namespace ExtremeRagdoll
                         BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
                         BaseMagnitude   = mag,
                         SwingDirection  = dir,
-                        GlobalPosition  = contact,
+                        GlobalPosition  = contactPoint,
                         InflictedDamage = 0
                     };
                     AttackCollisionData acd = default;
@@ -405,7 +405,7 @@ namespace ExtremeRagdoll
                             float impMag2 = ToPhysicsImpulse(mag);
                             if (impMag2 > 0f)
                             {
-                                bool ok2 = TryApplyImpulse(ent2, L.Dir * impMag2, contact);
+                                bool ok2 = TryApplyImpulse(ent2, L.Dir * impMag2, contactPoint);
                                 nudged |= ok2;
                                 if (ER_Config.DebugLogging)
                                     ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
@@ -452,7 +452,7 @@ namespace ExtremeRagdoll
                         if (entLocal != null && impMag > 0f)
                         {
                             var impulse = dir * impMag;
-                            bool ok = TryApplyImpulse(entLocal, impulse, contact);
+                            bool ok = TryApplyImpulse(entLocal, impulse, contactPoint);
                             nudged |= ok;
                             if (ok && ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
