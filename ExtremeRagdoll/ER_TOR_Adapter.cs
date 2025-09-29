@@ -71,8 +71,9 @@ namespace ExtremeRagdoll
                 }
 
                 // Return true if we touched anything.
+                ER_Log.Info($"TOR: enabled shockwaves on {changed} effects");
                 Debug.Print($"[ExtremeRagdoll] Enabled shockwaves on {changed} TOR effects");
-                return changed > 0;
+                return true;
             }
             catch
             {
