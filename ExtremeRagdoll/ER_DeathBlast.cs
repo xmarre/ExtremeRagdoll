@@ -29,8 +29,9 @@ namespace ExtremeRagdoll
                              && (m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")))
                         _impulse2 = m;
                 }
-                _impulse3 ??= t.GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                                         null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
+                if (_impulse3 == null)
+                    _impulse3 = t.GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                                             null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
             }
             try
             {
@@ -69,7 +70,8 @@ namespace ExtremeRagdoll
             if (a == null || a.Mission == null) return true;
             try
             {
-                _isRemovedProp ??= a.GetType().GetProperty("IsRemoved");
+                if (_isRemovedProp == null)
+                    _isRemovedProp = a.GetType().GetProperty("IsRemoved");
                 if (_isRemovedProp != null && (bool?)_isRemovedProp.GetValue(a) == true)
                     return true;
             }
