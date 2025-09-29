@@ -36,7 +36,7 @@ namespace ExtremeRagdoll
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
         public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
-        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.045f);
+        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.08f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
         public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.12f);
@@ -57,7 +57,7 @@ namespace ExtremeRagdoll
         internal static readonly Dictionary<int, PendingLaunch> _pending =
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
-        private const float SCHEDULE_WINDOW = 0.01f;
+        private const float SCHEDULE_WINDOW = 0.08f; // tolerate engine timing jitter
 
         internal static void ClearPending()
         {
@@ -225,38 +225,4 @@ namespace ExtremeRagdoll
         }
     }
 
-    // Schedule corpse launch right after death (ragdoll just activated)
-    [HarmonyPatch(typeof(Agent))]
-    internal static class ER_Probe_MakeDead
-    {
-        static IEnumerable<MethodBase> TargetMethods()
-        {
-            foreach (var m in AccessTools.GetDeclaredMethods(typeof(Agent)))
-            {
-                if (m.Name == nameof(Agent.MakeDead))
-                    yield return m;
-            }
-        }
-
-        [HarmonyPostfix, HarmonyPriority(HarmonyLib.Priority.Last)]
-        static void Post(Agent __instance)
-        {
-            if (__instance == null) return;
-            if (ER_DeathBlastBehavior.Instance == null || __instance.Mission == null) return;
-            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p)) return;
-            float now = __instance.Mission.CurrentTime;
-            if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
-            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
-
-            var dir = p.dir.LengthSquared > 1e-6f ? p.dir : new Vec3(0f, 1f, 0f);
-
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag,                         p.pos, ER_Config.LaunchDelay1, retries: 10);
-            ER_DeathBlastBehavior.Instance?.EnqueueLaunch(__instance, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 6);
-            ER_DeathBlastBehavior.Instance?.EnqueueKick  (__instance, dir, p.mag, 1.2f);
-            ER_DeathBlastBehavior.Instance?.RecordBlast(__instance.Position, ER_Config.DeathBlastRadius, p.mag);
-            if (ER_Config.DebugLogging) ER_Log.Info($"MakeDead: scheduled corpse launch Agent#{__instance.Index} mag={p.mag}");
-        }
-    }
-
-    // (MakeDead schedules primary launch; OnAgentRemoved only falls back if pending is still present)
 }

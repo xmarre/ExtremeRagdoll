@@ -1,13 +1,54 @@
 ﻿using System;
 using System.Collections.Generic;
+using HarmonyLib;
 using TaleWorlds.Core;
+using TaleWorlds.Engine;           // for GameEntity
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
+using System.Reflection;           // reflection fallback for impulse API
 
 namespace ExtremeRagdoll
 {
     public sealed class ER_DeathBlastBehavior : MissionBehavior
     {
+        // Cache possible GameEntity impulse methods across TW versions
+        private static MethodInfo _impulse2, _impulse3;
+        private static bool TryApplyImpulse(GameEntity ent, Vec3 impulse, Vec3 pos)
+        {
+            if (ent == null) return false;
+            var t = typeof(GameEntity);
+            if (_impulse2 == null && _impulse3 == null)
+            {
+                foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (!(m.Name.Contains("Impulse") || m.Name.Contains("Force"))) continue;
+                    var ps = m.GetParameters();
+                    if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool))
+                        _impulse3 = m;
+                    else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
+                        _impulse2 = m;
+                }
+            }
+            try
+            {
+                if (_impulse3 != null) { _impulse3.Invoke(ent, new object[] { impulse, pos, true }); return true; }
+                if (_impulse2 != null) { _impulse2.Invoke(ent, new object[] { impulse, pos }); return true; }
+            }
+            catch { }
+            return false;
+        }
+
+        private static float ToPhysicsImpulse(float mag)
+        {
+            // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
+            // Conservative default. Tune if needed.
+            float imp = mag * 1e-5f;
+            if (imp < 50f) imp = 50f;
+            if (imp > 100_000f) imp = 100_000f;
+            if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp)) return 0f;
+            return imp;
+        }
+
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
         private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; }
@@ -185,15 +226,25 @@ namespace ExtremeRagdoll
                 if (now < L.T) continue;
                 var agent = L.A;
                 int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
-                _launches.RemoveAt(i);
-                DecQueue(agentIndex);
-                if (agent == null)
+                bool queueDecremented = false;
+                void DecOnce()
                 {
+                    if (!queueDecremented)
+                    {
+                        DecQueue(agentIndex);
+                        queueDecremented = true;
+                    }
+                }
+                _launches.RemoveAt(i);
+                if (agent == null || agent.IsRemoved)
+                {
+                    DecOnce();
                     continue;
                 }
                 if (agent.Health > 0f || agent.Mission != mission)
                 {
                     _launchFailLogged.Remove(agentIndex);
+                    DecOnce();
                     continue; // only launch ragdolls still in mission
                 }
 
@@ -206,6 +257,7 @@ namespace ExtremeRagdoll
                 if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
                 {
                     _launchFailLogged.Remove(agentIndex);
+                    DecOnce();
                     continue;
                 }
                 float mag = L.Mag;
@@ -217,6 +269,7 @@ namespace ExtremeRagdoll
                 if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 {
                     _launchFailLogged.Remove(agentIndex);
+                    DecOnce();
                     continue;
                 }
                 Vec3 hit = XYJitter(L.Pos);
@@ -235,6 +288,19 @@ namespace ExtremeRagdoll
                 };
                 AttackCollisionData acd = default;
                 agent.RegisterBlow(blow, in acd);
+                if (!agent.IsRagdollActive)
+                {
+                    // too early: requeue same launch shortly, keep queue counts unchanged
+                    L.T   = now + ApplyDelayJitter(MathF.Max(0.02f, retryDelay));
+                    L.Pos = XYJitter(agent.Position);
+                    _launches.Add(L);
+                    continue;
+                }
+                if (agent.AgentVisuals == null || agent.IsRemoved)
+                {
+                    DecOnce();
+                    continue;
+                }
                 Vec3 velAfter = agent.Velocity;
                 float vAfter2 = velAfter.LengthSquared;
                 float moved = posBefore.Distance(agent.Position);
@@ -244,6 +310,20 @@ namespace ExtremeRagdoll
 
                 if (!took)
                 {
+                    // Fallback: directly impulse ragdoll physics if RegisterBlow had no effect
+                    try
+                    {
+                        var ent = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetEntity() : null;
+                        float impMag = ToPhysicsImpulse(mag);
+                        if (ent != null && impMag > 0f)
+                        {
+                            var impulse = dir * impMag;
+                            if (TryApplyImpulse(ent, impulse, contact) && ER_Config.DebugLogging)
+                                ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
+                        }
+                    }
+                    catch { /* never throw here */ }
+
                     if (ER_Config.DebugLogging && _launchFailLogged.Add(agentIndex))
                     {
                         float deltaZ = velAfter.z - velBefore.z;
@@ -267,6 +347,10 @@ namespace ExtremeRagdoll
                         if (agentIndex >= 0)
                         {
                             _queuedPerAgent.TryGetValue(agentIndex, out existingQueued);
+                        }
+                        if (!agent.IsActive() || agent.IsRemoved)
+                        {
+                            canQueue = false;
                         }
                         if (queueCap > 0 && existingQueued >= queueCap)
                         {
@@ -296,10 +380,12 @@ namespace ExtremeRagdoll
                     {
                         _launchFailLogged.Remove(agentIndex);
                     }
+                    DecOnce();
                 }
                 else
                 {
                     _launchFailLogged.Remove(agentIndex);
+                    DecOnce();
                     if (ER_Config.DebugLogging)
                     {
                         _queuedPerAgent.TryGetValue(agentIndex, out var queued);
@@ -409,5 +495,63 @@ namespace ExtremeRagdoll
         }
 
         public override MissionBehaviorType BehaviorType => MissionBehaviorType.Other;
+    }
+
+    // Schedule corpse launch right after death (ragdoll just activated)
+    [HarmonyPatch(typeof(Agent))]
+    internal static class ER_Probe_MakeDead
+    {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var m in AccessTools.GetDeclaredMethods(typeof(Agent)))
+                if (m.Name == nameof(Agent.MakeDead)) yield return m;
+        }
+
+        [HarmonyPostfix, HarmonyAfter(new[] { "TOR", "TOR_Core" }), HarmonyPriority(HarmonyLib.Priority.Last)]
+        static void Post(Agent __instance)
+        {
+            if (__instance == null) return;
+            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p)) return;
+            float now = __instance.Mission?.CurrentTime ?? 0f;
+            if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
+            ER_DeathScheduler.Schedule(__instance, p, tag: "MakeDead");
+        }
+    }
+
+    // Also patch Agent.Die for game versions that use it instead of MakeDead
+    [HarmonyPatch(typeof(Agent))]
+    internal static class ER_Probe_Die
+    {
+        static IEnumerable<MethodBase> TargetMethods()
+        {
+            foreach (var m in AccessTools.GetDeclaredMethods(typeof(Agent)))
+                if (m.Name == "Die") yield return m;
+        }
+
+        [HarmonyPostfix, HarmonyAfter(new[] { "TOR", "TOR_Core" }), HarmonyPriority(HarmonyLib.Priority.Last)]
+        static void Post(Agent __instance)
+        {
+            if (__instance == null) return;
+            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p)) return;
+            float now = __instance.Mission?.CurrentTime ?? 0f;
+            if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
+            ER_DeathScheduler.Schedule(__instance, p, tag: "Die");
+        }
+    }
+
+    internal static class ER_DeathScheduler
+    {
+        internal static void Schedule(Agent a, ER_Amplify_RegisterBlowPatch.PendingLaunch p, string tag)
+        {
+            if (a == null) return;
+            if (ER_DeathBlastBehavior.Instance == null || a.Mission == null) return;
+            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
+            var dir = p.dir.LengthSquared > 1e-6f ? p.dir : new Vec3(0f, 1f, 0f);
+            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag,                           p.pos, ER_Config.LaunchDelay1, retries: 10);
+            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 6);
+            ER_DeathBlastBehavior.Instance.EnqueueKick  (a, dir, p.mag, 1.2f);
+            ER_DeathBlastBehavior.Instance.RecordBlast(a.Position, ER_Config.DeathBlastRadius, p.mag);
+            if (ER_Config.DebugLogging) ER_Log.Info($"{tag}: scheduled corpse launch Agent#{a.Index} mag={p.mag}");
+        }
     }
 }
