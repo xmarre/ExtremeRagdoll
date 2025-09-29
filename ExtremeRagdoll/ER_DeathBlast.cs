@@ -21,13 +21,16 @@ namespace ExtremeRagdoll
             {
                 foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
                 {
-                    if (!(m.Name.Contains("Impulse") || m.Name.Contains("Force"))) continue;
                     var ps = m.GetParameters();
-                    if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool))
+                    if (ps.Length == 3 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3) && ps[2].ParameterType == typeof(bool)
+                        && (m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")))
                         _impulse3 = m;
-                    else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
+                    else if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3)
+                             && (m.Name.Contains("Impulse") || m.Name.Contains("Force") || m.Name.Contains("Apply")))
                         _impulse2 = m;
                 }
+                _impulse3 ??= t.GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                                         null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
             }
             try
             {
@@ -51,7 +54,7 @@ namespace ExtremeRagdoll
 
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
-        private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; }
+        private struct Launch { public Agent A; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public Vec3 P0; public Vec3 V0; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
         private readonly List<Launch> _launches = new List<Launch>();
@@ -60,9 +63,27 @@ namespace ExtremeRagdoll
         private const float TTL = 0.75f;
 
         // --- API shims for TaleWorlds versions lacking these helpers ---
-        private static bool AgentRemoved(Agent a) => a == null || a.Mission == null;
+        private static PropertyInfo _isRemovedProp;
+        private static bool AgentRemoved(Agent a)
+        {
+            if (a == null || a.Mission == null) return true;
+            try
+            {
+                _isRemovedProp ??= a.GetType().GetProperty("IsRemoved");
+                if (_isRemovedProp != null && (bool?)_isRemovedProp.GetValue(a) == true)
+                    return true;
+            }
+            catch { }
+            try
+            {
+                if (!a.IsActive())
+                    return true;
+            }
+            catch { }
+            return false;
+        }
         private static PropertyInfo _ragdollProp;
-        private static bool RagdollActive(Agent a)
+        private static bool RagdollActive(Agent a, bool warmed)
         {
             if (a == null || a.Health > 0f) return false;
             try
@@ -88,8 +109,8 @@ namespace ExtremeRagdoll
             {
                 // ignored - fall back below
             }
-            // Fallback: Flag evtl. nicht vorhanden → trotzdem weiter machen.
-            return true;
+            // Unknown flag: only proceed once we've given physics a warm-up tick.
+            return warmed;
         }
 
         private void IncQueue(int agentId)
@@ -199,7 +220,7 @@ namespace ExtremeRagdoll
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
             nudgedPos.z = MathF.Min(nudgedPos.z + zNudge, a.Position.z + zClamp);
 
-            _launches.Add(new Launch { A = a, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex });
+            _launches.Add(new Launch { A = a, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex, Warmed = false });
             IncQueue(agentIndex);
         }
 
@@ -208,6 +229,8 @@ namespace ExtremeRagdoll
             var mission = Mission;
             if (mission == null || mission.Agents == null) return;
             float now = mission.CurrentTime;
+            const int MAX_LAUNCHES_PER_TICK = 128;
+            int launchesWorked = 0;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f)
             {
                 for (int i = _launches.Count - 1; i >= 0; i--)
@@ -257,6 +280,7 @@ namespace ExtremeRagdoll
             {
                 var L = _launches[i];
                 if (now < L.T) continue;
+                if (launchesWorked++ >= MAX_LAUNCHES_PER_TICK) break;
                 var agent = L.A;
                 int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
                 bool queueDecremented = false;
@@ -281,9 +305,6 @@ namespace ExtremeRagdoll
                     continue; // only launch ragdolls still in mission
                 }
 
-                Vec3 posBefore = agent.Position;
-                Vec3 velBefore = agent.Velocity;
-                float vBefore2 = velBefore.LengthSquared;
                 Vec3 dir = L.Dir.LengthSquared > 1e-8f ? L.Dir : new Vec3(0f, 1f, 0f);
                 dir = (dir + new Vec3(0f, 0f, 0.1f)).NormalizedCopy();
                 float dirSq = dir.LengthSquared;
@@ -310,22 +331,33 @@ namespace ExtremeRagdoll
                 contact.z += contactHeight;
                 contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
 
-                var blow = new Blow(-1)
+                if (!L.Warmed)
                 {
-                    DamageType      = DamageTypes.Blunt,
-                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                    BaseMagnitude   = mag,
-                    SwingDirection  = dir,
-                    GlobalPosition  = contact,
-                    InflictedDamage = 0
-                };
-                AttackCollisionData acd = default;
-                agent.RegisterBlow(blow, in acd);
-                if (!RagdollActive(agent))
+                    L.P0 = agent.Position;
+                    L.V0 = agent.Velocity;
+                    var blow = new Blow(-1)
+                    {
+                        DamageType      = DamageTypes.Blunt,
+                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                        BaseMagnitude   = mag,
+                        SwingDirection  = dir,
+                        GlobalPosition  = contact,
+                        InflictedDamage = 0
+                    };
+                    AttackCollisionData acd = default;
+                    agent.RegisterBlow(blow, in acd);
+                    L.Warmed = true;
+                    L.T = now + MathF.Max(0.05f, retryDelay); // small settle time
+                    L.Pos = agent.Position;
+                    _launches.Add(L);
+                    continue; // measure on next tick
+                }
+                if (!RagdollActive(agent, L.Warmed))
                 {
                     // too early: requeue same launch shortly, keep queue counts unchanged
+                    L.Warmed = false;
                     L.T   = now + ApplyDelayJitter(MathF.Max(0.04f, retryDelay)); // mehr Luft bis Ragdoll aktiv
-                    L.Pos = XYJitter(agent.Position);
+                    L.Pos = agent.Position;
                     _launches.Add(L);
                     continue;
                 }
@@ -336,9 +368,10 @@ namespace ExtremeRagdoll
                 }
                 Vec3 velAfter = agent.Velocity;
                 float vAfter2 = velAfter.LengthSquared;
-                float moved = posBefore.Distance(agent.Position);
+                float vBefore2 = L.V0.LengthSquared;
+                float moved = L.P0.Distance(agent.Position);
                 bool took = (vAfter2 > vBefore2 * tookScale + tookOffset)
-                    || (velAfter.z > velBefore.z + tookVertical)
+                    || (velAfter.z > L.V0.z + tookVertical)
                     || (moved > tookDisplacement);
 
                 if (!took)
@@ -359,7 +392,7 @@ namespace ExtremeRagdoll
 
                     if (ER_Config.DebugLogging && _launchFailLogged.Add(agentIndex))
                     {
-                        float deltaZ = velAfter.z - velBefore.z;
+                        float deltaZ = velAfter.z - L.V0.z;
                         ER_Log.Info($"corpse launch miss Agent#{agentIndex} vBefore2={vBefore2:F4} vAfter2={vAfter2:F4} deltaZ={deltaZ:F4}");
                     }
 
@@ -396,9 +429,10 @@ namespace ExtremeRagdoll
                             L.T = nextTime;
                             L.Pos = retryPos;
                             L.AgentId = agentIndex;
+                            L.Warmed = false;
                             _launches.Add(L);
                             IncQueue(agentIndex);
-                            if (ER_Config.DebugLogging && agentIndex >= 0)
+                            if (ER_Config.DebugLogging && agentIndex >= 0 && (L.Tries % 3 == 0))
                             {
                                 _queuedPerAgent.TryGetValue(agentIndex, out var newQueuedCount);
                                 ER_Log.Info($"corpse launch re-queued for Agent#{agentIndex} tries={L.Tries} queued={newQueuedCount}");
@@ -421,6 +455,7 @@ namespace ExtremeRagdoll
                     DecOnce();
                     if (ER_Config.DebugLogging)
                     {
+                        ER_Log.Info($"corpse launch took Agent#{agentIndex} moved={moved:F4} v↑Δ={velAfter.z - L.V0.z:F4}");
                         _queuedPerAgent.TryGetValue(agentIndex, out var queued);
                         ER_Log.Info($"death shove applied to Agent#{agentIndex} took={took} mag={mag} tries={L.Tries} queued={queued}");
                     }
