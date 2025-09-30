@@ -733,6 +733,14 @@ namespace ExtremeRagdoll
                 try { ent?.ActivateRagdoll(); } catch { }
                 try { skel?.ActivateRagdoll(); } catch { }
                 try { skel?.ForceUpdateBoneFrames(); } catch { }
+                try
+                {
+                    MatrixFrame f;
+                    try { f = ent?.GetGlobalFrame() ?? default; }
+                    catch { f = default; }
+                    skel?.TickAnimationsAndForceUpdate(0.001f, f, true);
+                }
+                catch { }
                 MarkRagdollPrepared(ent);
             }
 
@@ -1370,7 +1378,7 @@ namespace ExtremeRagdoll
         {
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
             // Conservative default. Tune if needed.
-            float imp = mag * 1e-4f;
+            float imp = mag * 1e-5f; // smaller conversion = less "rocket launches"
             float minImpulse = ER_Config.CorpseImpulseMinimum;
             if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
                 minImpulse = 0f;
@@ -1522,7 +1530,17 @@ namespace ExtremeRagdoll
                 return;
 
             Vec3 safeDir = dir.LengthSquared > 1e-6f ? dir.NormalizedCopy() : new Vec3(0f, 1f, 0f);
-            safeDir = (safeDir + new Vec3(0f, 0f, 0.15f)).NormalizedCopy();
+            // more forward, less up
+            safeDir = (safeDir * 0.90f + new Vec3(0f, 0f, 0.10f)).NormalizedCopy();
+            if (safeDir.z > 0.25f)
+            {
+                safeDir.z = 0.25f; // clamp vertical
+                float lenSq = safeDir.LengthSquared;
+                if (lenSq > 1e-6f)
+                {
+                    safeDir = safeDir.NormalizedCopy();
+                }
+            }
             float dirSq = safeDir.LengthSquared;
             if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
                 return;
@@ -1533,7 +1551,7 @@ namespace ExtremeRagdoll
                 try { contact = agent.Position; }
                 catch { contact = Vec3.Zero; }
             }
-            float lift = MathF.Max(ER_Config.CorpseLaunchZNudge, 0.06f);
+            float lift = MathF.Max(ER_Config.CorpseLaunchZNudge, 0.04f);
             contact.z += lift;
 
             float now = mission.CurrentTime;
@@ -1546,7 +1564,7 @@ namespace ExtremeRagdoll
                 Mag     = mag,
                 Pos     = contact,
                 NextTry = now + 0.01f,
-                Tries   = 9,
+                Tries   = 12,
             };
 
             for (int i = 0; i < _preLaunches.Count; i++)
@@ -1601,7 +1619,16 @@ namespace ExtremeRagdoll
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 return;
             Vec3 safeDir = dir.LengthSquared > 1e-6f ? dir.NormalizedCopy() : new Vec3(0f, 1f, 0f);
-            safeDir = (safeDir + new Vec3(0f, 0f, 0.15f)).NormalizedCopy();
+            safeDir = (safeDir * 0.90f + new Vec3(0f, 0f, 0.10f)).NormalizedCopy();
+            if (safeDir.z > 0.25f)
+            {
+                safeDir.z = 0.25f;
+                float lenSq = safeDir.LengthSquared;
+                if (lenSq > 1e-6f)
+                {
+                    safeDir = safeDir.NormalizedCopy();
+                }
+            }
             float safeDirSq = safeDir.LengthSquared;
             if (safeDirSq < 1e-8f || float.IsNaN(safeDirSq) || float.IsInfinity(safeDirSq))
                 return;
@@ -1631,7 +1658,7 @@ namespace ExtremeRagdoll
             float tookDisplacement = 0.03f;   // temporary tuning for verification
             float contactHeight = ER_Config.CorpseLaunchContactHeight;
             float retryDelay = ER_Config.CorpseLaunchRetryDelay;
-            float preRetryDelay = MathF.Max(0.10f, ER_Config.CorpseLaunchRetryDelay);
+            float preRetryDelay = MathF.Max(0.12f, ER_Config.CorpseLaunchRetryDelay);
             int queueCap = ER_Config.CorpseLaunchQueueCap;
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
@@ -1704,6 +1731,14 @@ namespace ExtremeRagdoll
                             {
                                 try { skel?.ActivateRagdoll(); } catch { }
                                 try { skel?.ForceUpdateBoneFrames(); } catch { }
+                                try
+                                {
+                                    MatrixFrame f;
+                                    try { f = ent?.GetGlobalFrame() ?? default; }
+                                    catch { f = default; }
+                                    skel?.TickAnimationsAndForceUpdate(0.001f, f, true);
+                                }
+                                catch { }
                                 ok = TryApplyImpulse(ent, skel, entry.Dir * impulseMag, contact, entry.AgentId);
                             }
                             catch
@@ -1809,7 +1844,16 @@ namespace ExtremeRagdoll
                 }
 
                 Vec3 dir = L.Dir.LengthSquared > 1e-8f ? L.Dir : new Vec3(0f, 1f, 0f);
-                dir = (dir + new Vec3(0f, 0f, 0.1f)).NormalizedCopy();
+                dir = (dir * 0.90f + new Vec3(0f, 0f, 0.10f)).NormalizedCopy();
+                if (dir.z > 0.25f)
+                {
+                    dir.z = 0.25f;
+                    float lenSq = dir.LengthSquared;
+                    if (lenSq > 1e-6f)
+                    {
+                        dir = dir.NormalizedCopy();
+                    }
+                }
                 float dirSq = dir.LengthSquared;
                 if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
                 {
@@ -1896,6 +1940,16 @@ namespace ExtremeRagdoll
                             float impMag2 = ToPhysicsImpulse(mag);
                             if (impMag2 > 0f)
                             {
+                                try { skel?.ActivateRagdoll(); } catch { }
+                                try { skel?.ForceUpdateBoneFrames(); } catch { }
+                                try
+                                {
+                                    MatrixFrame f2;
+                                    try { f2 = ent2?.GetGlobalFrame() ?? ent?.GetGlobalFrame() ?? default; }
+                                    catch { f2 = default; }
+                                    skel?.TickAnimationsAndForceUpdate(0.001f, f2, true);
+                                }
+                                catch { }
                                 bool ok2 = TryApplyImpulse(ent2, skel, L.Dir * impMag2, contactPoint, agentIndex);
                                 nudged |= ok2;
                                 if (ER_Config.DebugLogging)
@@ -1944,6 +1998,16 @@ namespace ExtremeRagdoll
                         if ((entLocal != null || skelLocal != null) && impMag > 0f)
                         {
                             var impulse = dir * impMag;
+                            try { skelLocal?.ActivateRagdoll(); } catch { }
+                            try { skelLocal?.ForceUpdateBoneFrames(); } catch { }
+                            try
+                            {
+                                MatrixFrame fLocal;
+                                try { fLocal = entLocal?.GetGlobalFrame() ?? ent?.GetGlobalFrame() ?? default; }
+                                catch { fLocal = default; }
+                                skelLocal?.TickAnimationsAndForceUpdate(0.001f, fLocal, true);
+                            }
+                            catch { }
                             bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint, agentIndex);
                             nudged |= ok;
                             if (ok && ER_Config.DebugLogging)
