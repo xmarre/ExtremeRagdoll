@@ -328,15 +328,16 @@ namespace ExtremeRagdoll
             catch { missileSpeed = 0f; }
             if (float.IsNaN(missileSpeed) || float.IsInfinity(missileSpeed)) missileSpeed = 0f;
 
-            if (blow.InflictedDamage <= 0f && missileSpeed <= 0f)
+            bool lethal = hp - blow.InflictedDamage <= 0f;
+
+            // Only bail on truly trivial non-lethal taps (keep horse/engine shoves alive).
+            if (!lethal && blow.InflictedDamage <= 0f && missileSpeed <= 0f && blow.BaseMagnitude <= 1f)
             {
                 _pending.Remove(__instance.Index);
                 return;
             }
             // optional: comment out for a quick A/B to confirm engine accepts huge impulses
             // if (hp > 0f && blow.InflictedDamage < hp * 0.7f) return;
-
-            bool lethal = hp - blow.InflictedDamage <= 0f;
 
             Vec3 dir = __instance.Position - blow.GlobalPosition;
             if (dir.LengthSquared < 1e-6f)
@@ -347,15 +348,36 @@ namespace ExtremeRagdoll
             dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 1.05f);
 
             bool respectBlow = ER_Config.RespectEngineBlowFlags;
+
+            // Always ensure correct flags so lethal hits ragdoll and missiles shove even when respecting engine data.
+            if (lethal)
+            {
+                blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown;
+            }
+            else if (missileSpeed > 0f)
+            {
+                blow.BlowFlag |= BlowFlags.KnockBack;
+            }
+
             if (!respectBlow)
             {
                 if (lethal)
                 {
                     blow.SwingDirection = dir;
-                    blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown;
                 }
                 else
                 {
+                    if (missileSpeed > 0f)
+                    {
+                        // make light arrows visibly push; still respect user cap
+                        float floor = 9000f + missileSpeed * 80f;
+                        if (ER_Config.MaxNonLethalKnockback > 0f)
+                            floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
+                        if (ER_Config.DebugLogging)
+                            ER_Log.Info($"[ER] ArrowKnockback v={missileSpeed:0.0} base={blow.BaseMagnitude:0} floor={floor:0}");
+                        if (blow.BaseMagnitude < floor)
+                            blow.BaseMagnitude = floor;
+                    }
                     Vec3 existing = blow.SwingDirection;
                     if (existing.LengthSquared < 1e-6f)
                     {
