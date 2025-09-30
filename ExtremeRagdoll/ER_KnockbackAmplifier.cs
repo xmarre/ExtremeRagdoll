@@ -141,7 +141,6 @@ namespace ExtremeRagdoll
         private static readonly FieldInfo VelocityField = typeof(AttackCollisionData).GetField("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileVelocityProperty = typeof(AttackCollisionData).GetProperty("MissileVelocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo VelocityProperty = typeof(AttackCollisionData).GetProperty("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-        private static bool _patched;
 
         private static float ResolveMissileSpeed(AttackCollisionData data)
         {
@@ -271,9 +270,6 @@ namespace ExtremeRagdoll
         [HarmonyPrepare]
         static bool Prepare()
         {
-            if (_patched)
-                return false;
-
             var method = TargetMethod();
             if (method == null)
             {
@@ -288,7 +284,6 @@ namespace ExtremeRagdoll
             }
 
             ER_Log.Info("Patching: " + method);
-            _patched = true;
             return true;
         }
 
