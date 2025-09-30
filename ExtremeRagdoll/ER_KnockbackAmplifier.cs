@@ -10,7 +10,7 @@ namespace ExtremeRagdoll
 {
     internal static class ER_Config
     {
-        public static float KnockbackMultiplier       => Settings.Instance?.KnockbackMultiplier ?? 6f;
+        public static float KnockbackMultiplier       => Settings.Instance?.KnockbackMultiplier ?? 1.8f;
         public static float ExtraForceMultiplier      => MathF.Max(0f, Settings.Instance?.ExtraForceMultiplier ?? 1f);
         public static float DeathBlastRadius          => Settings.Instance?.DeathBlastRadius ?? 3.0f;
         public static float DeathBlastForceMultiplier => MathF.Max(0f, Settings.Instance?.DeathBlastForceMultiplier ?? 1f);
@@ -34,14 +34,14 @@ namespace ExtremeRagdoll
         public static float MaxCorpseLaunchMagnitude            => Settings.Instance?.MaxCorpseLaunchMagnitude ?? 200_000_000f;
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
-        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 100_000f);
-        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 400_000f);
+        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 600f);
+        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 50_000f);
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
         public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
-        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.11f);
+        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.12f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
-        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.12f);
+        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.18f);
         public static int   CorpseLaunchQueueCap                => Math.Max(0, Settings.Instance?.CorpseLaunchQueueCap ?? 3);
     }
 
@@ -173,37 +173,15 @@ namespace ExtremeRagdoll
 
             Vec3 dir = (flat.NormalizedCopy() * 0.35f + new Vec3(0f, 0f, 1.05f)).NormalizedCopy();
 
-            float scale = MathF.Max(1f, ER_Config.KnockbackMultiplier);
-            float target = (10000f + blow.InflictedDamage * 120f) * scale;
-            if (blow.BaseMagnitude < target)
-            {
-                blow.BaseMagnitude = target;
-            }
-            float clampMax = lethal ? ER_Config.MaxCorpseLaunchMagnitude : ER_Config.MaxNonLethalKnockback;
-            if (clampMax > 0f && blow.BaseMagnitude > clampMax)
-            {
-                blow.BaseMagnitude = clampMax;
-            }
-            if (lethal)
-            {
-                const float lethalPreDeathScale = 0.08f;
-                blow.BaseMagnitude *= lethalPreDeathScale;
-            }
-            blow.SwingDirection = dir;
-            var updatedFlags = blow.BlowFlag | BlowFlags.KnockDown;
-            if (lethal)
-                updatedFlags &= ~BlowFlags.KnockBack;   // ragdoll will move it
-            else
-                updatedFlags |= BlowFlags.KnockBack;
-            updatedFlags &= ~BlowFlags.NoSound;         // do NOT suppress hit audio
-            blow.BlowFlag = updatedFlags;
+            // Do NOT modify the engine blow. Let TOR's damage/perk pipeline run untouched.
 
             if (lethal)
             {
                 if (ER_Config.MaxCorpseLaunchMagnitude > 0f)
                 {
+                    // Pre-death launch magnitude derived from the current blow, but applied later by our behavior.
                     float extraMult = ER_Config.ExtraForceMultiplier <= 0f ? 1f : ER_Config.ExtraForceMultiplier;
-                    float mag = blow.BaseMagnitude * extraMult;
+                    float mag = blow.BaseMagnitude * extraMult * 0.08f; // keep small; physics scaling happens later
                     float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
                     if (mag > maxMag)
                     {
@@ -226,10 +204,6 @@ namespace ExtremeRagdoll
                     mission?
                         .GetMissionBehavior<ER_DeathBlastBehavior>()
                         ?.QueuePreDeath(__instance, dir, mag, contact);
-                    if (ER_Config.DebugLogging)
-                    {
-                        ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude} mag={mag}");
-                    }
                 }
                 else
                 {
@@ -238,11 +212,11 @@ namespace ExtremeRagdoll
             }
             else
             {
+                // Non-lethal: nudge via our behavior after the engine finishes (no damage side-effects).
+                var beh = (__instance.Mission ?? Mission.Current)?.GetMissionBehavior<ER_DeathBlastBehavior>();
+                float kickMag = (10000f + blow.InflictedDamage * 120f) * MathF.Max(1f, ER_Config.KnockbackMultiplier);
+                beh?.EnqueueKick(__instance, dir, kickMag, 0.10f);
                 _pending.Remove(__instance.Index);
-                if (ER_Config.DebugLogging)
-                {
-                    ER_Log.Info($"non-lethal boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude}");
-                }
             }
         }
     }

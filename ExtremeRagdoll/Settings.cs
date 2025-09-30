@@ -14,7 +14,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("General")]
         [SettingPropertyFloatingInteger("Knockback Multiplier", 1f, 1000f, "0.0",
             Order = 0, RequireRestart = false)]
-        public float KnockbackMultiplier { get; set; } = 20.0f;
+        public float KnockbackMultiplier { get; set; } = 1.8f;
 
         [SettingPropertyGroup("General")]
         [SettingPropertyBool("Debug Logging",
@@ -99,7 +99,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Z Clamp Above", 0f, 1.0f, "0.000",
             Order = 112, RequireRestart = false)]
-        public float CorpseLaunchZClampAbove { get; set; } = 0.12f;
+        public float CorpseLaunchZClampAbove { get; set; } = 0.18f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
@@ -109,7 +109,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
             Order = 114, RequireRestart = false)]
-        public float CorpseLaunchRetryDelay { get; set; } = 0.11f;
+        public float CorpseLaunchRetryDelay { get; set; } = 0.12f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Jitter (s)", 0f, 0.5f, "0.000",
@@ -124,11 +124,11 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
             Order = 117, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 2_000f;
+        public float CorpseImpulseMinimum { get; set; } = 600f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
             Order = 118, RequireRestart = false)]
-        public float CorpseImpulseMaximum { get; set; } = 400_000f;
+        public float CorpseImpulseMaximum { get; set; } = 50_000f;
     }
 }
