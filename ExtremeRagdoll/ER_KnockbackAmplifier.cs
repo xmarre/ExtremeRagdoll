@@ -1,6 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Reflection;
+using System.Collections.Generic;
 using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.Library;
@@ -34,6 +34,7 @@ namespace ExtremeRagdoll
         public static float CorpseLaunchDisplacement            => Settings.Instance?.CorpseLaunchDisplacement ?? 0.03f;
         public static float MaxCorpseLaunchMagnitude            => Settings.Instance?.MaxCorpseLaunchMagnitude ?? 200_000_000f;
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
+        public static float MaxBlowBaseMagnitude                => MathF.Max(0f, Settings.Instance?.MaxBlowBaseMagnitude ?? 0f);
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
         public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 0.5f);
         public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 1_500f);
@@ -122,6 +123,106 @@ namespace ExtremeRagdoll
         internal static readonly Dictionary<int, PendingLaunch> _pending =
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
+        private static readonly FieldInfo MissileSpeedField = typeof(AttackCollisionData).GetField("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly PropertyInfo MissileSpeedProperty = typeof(AttackCollisionData).GetProperty("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly FieldInfo SpeedFieldFallback = typeof(AttackCollisionData).GetField("Speed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly FieldInfo MissileVelocityField = typeof(AttackCollisionData).GetField("MissileVelocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly FieldInfo VelocityField = typeof(AttackCollisionData).GetField("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly PropertyInfo MissileVelocityProperty = typeof(AttackCollisionData).GetProperty("MissileVelocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly PropertyInfo VelocityProperty = typeof(AttackCollisionData).GetProperty("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        private static float ResolveMissileSpeed(AttackCollisionData data)
+        {
+            try
+            {
+                object boxed = data;
+                if (MissileSpeedField != null)
+                {
+                    var value = MissileSpeedField.GetValue(boxed);
+                    if (value is float f && !float.IsNaN(f) && !float.IsInfinity(f)) return f;
+                    if (value != null)
+                    {
+                        float converted = Convert.ToSingle(value);
+                        if (!float.IsNaN(converted) && !float.IsInfinity(converted))
+                            return converted;
+                    }
+                }
+
+                if (MissileSpeedProperty != null)
+                {
+                    var value = MissileSpeedProperty.GetValue(boxed, null);
+                    if (value is float f && !float.IsNaN(f) && !float.IsInfinity(f)) return f;
+                    if (value != null)
+                    {
+                        float converted = Convert.ToSingle(value);
+                        if (!float.IsNaN(converted) && !float.IsInfinity(converted))
+                            return converted;
+                    }
+                }
+
+                if (SpeedFieldFallback != null)
+                {
+                    var value = SpeedFieldFallback.GetValue(boxed);
+                    if (value is float f && !float.IsNaN(f) && !float.IsInfinity(f)) return f;
+                    if (value != null)
+                    {
+                        float converted = Convert.ToSingle(value);
+                        if (!float.IsNaN(converted) && !float.IsInfinity(converted))
+                            return converted;
+                    }
+                }
+
+                if (MissileVelocityField != null)
+                {
+                    var value = MissileVelocityField.GetValue(boxed);
+                    if (value is Vec3 vec)
+                    {
+                        float length = vec.Length;
+                        if (!float.IsNaN(length) && !float.IsInfinity(length))
+                            return MathF.Max(0f, length);
+                    }
+                }
+
+                if (VelocityField != null)
+                {
+                    var value = VelocityField.GetValue(boxed);
+                    if (value is Vec3 vec)
+                    {
+                        float length = vec.Length;
+                        if (!float.IsNaN(length) && !float.IsInfinity(length))
+                            return MathF.Max(0f, length);
+                    }
+                }
+
+                if (MissileVelocityProperty != null)
+                {
+                    var value = MissileVelocityProperty.GetValue(boxed, null);
+                    if (value is Vec3 vec)
+                    {
+                        float length = vec.Length;
+                        if (!float.IsNaN(length) && !float.IsInfinity(length))
+                            return MathF.Max(0f, length);
+                    }
+                }
+
+                if (VelocityProperty != null)
+                {
+                    var value = VelocityProperty.GetValue(boxed, null);
+                    if (value is Vec3 vec)
+                    {
+                        float length = vec.Length;
+                        if (!float.IsNaN(length) && !float.IsInfinity(length))
+                            return MathF.Max(0f, length);
+                    }
+                }
+            }
+            catch
+            {
+                // ignore reflection failures; treat as non-missile hit
+            }
+
+            return 0f;
+        }
         internal static void ClearPending()
         {
             _pending.Clear();
@@ -175,7 +276,8 @@ namespace ExtremeRagdoll
             return true;
         }
 
-        static MethodBase TargetMethod()
+        [HarmonyTargetMethod]
+        private static MethodBase TargetMethod()
         {
             var agent = typeof(Agent);
             var want = typeof(AttackCollisionData);
@@ -218,7 +320,15 @@ namespace ExtremeRagdoll
                 _pending.Remove(__instance.Index);
                 return;
             }
-            if (blow.InflictedDamage <= 0f)
+
+            // Zero-Damage-Spells können tödlich sein → nur aussteigen, wenn auch keine Projektil-Geschwindigkeit.
+            // (ResolveMissileSpeed ist dank gecachtem Reflection-Zugriff günstig.)
+            float missileSpeed = 0f;
+            try { missileSpeed = ResolveMissileSpeed(attackCollisionData); }
+            catch { missileSpeed = 0f; }
+            if (float.IsNaN(missileSpeed) || float.IsInfinity(missileSpeed)) missileSpeed = 0f;
+
+            if (blow.InflictedDamage <= 0f && missileSpeed <= 0f)
             {
                 _pending.Remove(__instance.Index);
                 return;
@@ -263,16 +373,16 @@ namespace ExtremeRagdoll
             {
                 if (!respectBlow)
                 {
-                    // Let engine do the shove on lethal hits so missiles/spells always launch.
-                    float missileSpeed = 0f;
-                    try { missileSpeed = attackCollisionData.MissileSpeed; }
-                    catch { /* not a missile */ }
-
+                    // Engine-Schub für tödliche Treffer; nutzt oben ermittelte missileSpeed.
+                    // (Bereits auf NaN/∞ geprüft und ggf. genullt.)
                     float mult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
-                    float target = 30000f + blow.InflictedDamage * 400f + missileSpeed * 200f;
-                    float desired = target * mult;
+                    float desired = (30000f + blow.InflictedDamage * 400f + missileSpeed * 200f) * mult;
+                    if (ER_Config.MaxBlowBaseMagnitude > 0f)
+                        desired = MathF.Min(desired, ER_Config.MaxBlowBaseMagnitude);
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {
+                        if (ER_Config.DebugLogging)
+                            ER_Log.Info($"[ER] LethalBoost baseMag {blow.BaseMagnitude:0} -> {desired:0}  dmg={blow.InflictedDamage:0}  v={missileSpeed:0.0}");
                         blow.BaseMagnitude = desired;
                     }
                 }
