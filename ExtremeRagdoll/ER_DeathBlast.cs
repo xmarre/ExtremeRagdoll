@@ -1736,7 +1736,6 @@ namespace ExtremeRagdoll
                 }
                 else
                 {
-                    entry.Tries--;
                     GameEntity ent = null;
                     Skeleton skel = null;
                     try { ent = agent.AgentVisuals?.GetEntity(); } catch { }
@@ -1749,6 +1748,7 @@ namespace ExtremeRagdoll
                         }
                         else
                         {
+                            entry.Tries--;
                             entry.NextTry = now + preRetryDelay;
                             _preLaunches[i] = entry;
                             continue;
@@ -1779,39 +1779,52 @@ namespace ExtremeRagdoll
                                 {
                                 }
                             }
-                            bool ok = false;
+                            Vec3 dir = entry.Dir;
                             try
                             {
-                                try { skel?.ActivateRagdoll(); } catch { }
-                                try { skel?.ForceUpdateBoneFrames(); } catch { }
-                                try
+                                // Pre-death warm: push while agent is still alive so ragdoll becomes dynamic.
+                                if (dir.LengthSquared < 1e-6f)
                                 {
-                                    MatrixFrame f;
-                                    try { f = ent?.GetGlobalFrame() ?? default; }
-                                    catch { f = default; }
-                                    skel?.TickAnimationsAndForceUpdate(0.001f, f, true);
+                                    try { dir = agent.LookDirection; } catch { dir = new Vec3(0f, 1f, 0.25f); }
                                 }
-                                catch { }
-                                ok = TryApplyImpulse(ent, skel, entry.Dir * impulseMag, contact, entry.AgentId);
+                                // Bias upward a bit; avoid vertical-only
+                                dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 1.05f);
+
+                                float warmMag = ER_Config.MaxNonLethalKnockback > 0f
+                                    ? MathF.Min(impulseMag, ER_Config.MaxNonLethalKnockback)
+                                    : impulseMag;
+                                var kb = new Blow(-1)
+                                {
+                                    DamageType      = DamageTypes.Blunt,
+                                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                                    BaseMagnitude   = warmMag,
+                                    SwingDirection  = dir,
+                                    GlobalPosition  = contact,
+                                    InflictedDamage = 0
+                                };
+                                AttackCollisionData acd = default;
+                                agent.RegisterBlow(kb, in acd);
+
+                                // Re-try shortly so the post-death launch lands on a dynamic body.
+                                if (AgentRemoved(agent))
+                                {
+                                    remove = true;
+                                }
+                                else if (entry.Tries > 0)
+                                {
+                                    entry.Tries--;
+                                    entry.NextTry = now + preRetryDelay;
+                                    _preLaunches[i] = entry;
+                                    continue;
+                                }
+                                else
+                                {
+                                    remove = true;
+                                }
                             }
                             catch
                             {
-                                ok = false;
-                            }
-                            if (ok)
-                                MarkLaunched(entry.AgentId);
-                            if (ok || AgentRemoved(agent))
-                            {
-                                remove = true;
-                            }
-                            else if (entry.Tries > 0)
-                            {
-                                entry.NextTry = now + preRetryDelay;
-                                _preLaunches[i] = entry;
-                                continue;
-                            }
-                            else
-                            {
+                                // If anything fails here, drop back to post-death path only.
                                 remove = true;
                             }
                         }

@@ -202,8 +202,13 @@ namespace ExtremeRagdoll
             return null;
         }
 
-        [HarmonyPrefix, HarmonyPriority(HarmonyLib.Priority.First)]
-        private static void Prefix(Agent __instance, [HarmonyArgument(0)] ref Blow blow)
+        [HarmonyPrefix]
+        [HarmonyAfter(new[] { "TOR", "TOR_Core" })]
+        [HarmonyPriority(HarmonyLib.Priority.First)]
+        private static void Prefix(
+            Agent __instance,
+            [HarmonyArgument(0)] ref Blow blow,
+            [HarmonyArgument(1)] ref AttackCollisionData attackCollisionData)
         {
             if (__instance == null) return;
 
@@ -223,19 +228,13 @@ namespace ExtremeRagdoll
 
             bool lethal = hp - blow.InflictedDamage <= 0f;
 
-            Vec3 flat = __instance.Position - blow.GlobalPosition;
-            flat = new Vec3(flat.x, flat.y, 0f);
-            if (flat.LengthSquared < 1e-4f)
+            Vec3 dir = __instance.Position - blow.GlobalPosition;
+            if (dir.LengthSquared < 1e-6f)
             {
-                var look = __instance.LookDirection;
-                flat = new Vec3(look.x, look.y, 0f);
+                try { dir = __instance.LookDirection; }
+                catch { dir = new Vec3(0f, 1f, 0.25f); }
             }
-            if (flat.LengthSquared < 1e-6f)
-            {
-                flat = new Vec3(0f, 1f, 0f);
-            }
-
-            Vec3 dir = ER_DeathBlastBehavior.PrepDir(flat, 0.35f, 1.05f);
+            dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 1.05f);
 
             bool respectBlow = ER_Config.RespectEngineBlowFlags;
             if (!respectBlow)
@@ -262,6 +261,22 @@ namespace ExtremeRagdoll
 
             if (lethal)
             {
+                if (!respectBlow)
+                {
+                    // Let engine do the shove on lethal hits so missiles/spells always launch.
+                    float missileSpeed = 0f;
+                    try { missileSpeed = attackCollisionData.MissileSpeed; }
+                    catch { /* not a missile */ }
+
+                    float mult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
+                    float target = 30000f + blow.InflictedDamage * 400f + missileSpeed * 200f;
+                    float desired = target * mult;
+                    if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
+                    {
+                        blow.BaseMagnitude = desired;
+                    }
+                }
+
                 if (ER_Config.MaxCorpseLaunchMagnitude > 0f)
                 {
                     float extraMult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
