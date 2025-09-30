@@ -64,12 +64,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Vertical Delta", 0f, 1f, "0.000",
             Order = 105, RequireRestart = false)]
-        public float CorpseLaunchVerticalDelta { get; set; } = 0.07f;
+        public float CorpseLaunchVerticalDelta { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Displacement Threshold", 0f, 0.5f, "0.000",
             Order = 106, RequireRestart = false)]
-        public float CorpseLaunchDisplacement { get; set; } = 0.020f;
+        public float CorpseLaunchDisplacement { get; set; } = 0.030f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Max Corpse Launch Magnitude", 0f, 500_000_000f, "0.0",
@@ -109,7 +109,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
             Order = 114, RequireRestart = false)]
-        public float CorpseLaunchRetryDelay { get; set; } = 0.12f;
+        public float CorpseLaunchRetryDelay { get; set; } = 0.02f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Jitter (s)", 0f, 0.5f, "0.000",
@@ -124,11 +124,56 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
             Order = 117, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 600f;
+        public float CorpseImpulseMinimum { get; set; } = 0.5f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
             Order = 118, RequireRestart = false)]
-        public float CorpseImpulseMaximum { get; set; } = 50_000f;
+        public float CorpseImpulseMaximum { get; set; } = 1_500f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
+            Order = 119, RequireRestart = false)]
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.22f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
+            Order = 120, RequireRestart = false)]
+        public int CorpsePrelaunchTries { get; set; } = 12;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Corpse Post-Death Launch Tries", 0, 100,
+            Order = 121, RequireRestart = false)]
+        public int CorpsePostDeathTries { get; set; } = 12;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Max Corpse Launches Per Tick", 0, 2048,
+            Order = 122, RequireRestart = false)]
+        public int CorpseLaunchesPerTick { get; set; } = 128;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Max AoE Agents Per Tick", 0, 4096,
+            Order = 123, RequireRestart = false)]
+        public int AoEAgentsPerTick { get; set; } = 256;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Max Kick Impulses Per Tick", 0, 2048,
+            Order = 124, RequireRestart = false)]
+        public int KicksPerTick { get; set; } = 128;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Corpse Launch Schedule Window (s)", 0f, 0.5f, "0.00",
+            Order = 125, RequireRestart = false)]
+        public float CorpseLaunchScheduleWindow { get; set; } = 0.08f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Death Blast Memory (s)", 0f, 5f, "0.00",
+            Order = 126, RequireRestart = false)]
+        public float DeathBlastTtl { get; set; } = 0.75f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyBool("Respect Engine Blow Flags",
+            Order = 127, RequireRestart = false)]
+        public bool RespectEngineBlowFlags { get; set; } = false;
     }
 }

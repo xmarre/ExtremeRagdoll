@@ -69,6 +69,7 @@ namespace ExtremeRagdoll
         private static readonly object _preparedMarker = new object();
         private static Func<GameEntity, bool> _isDynamicBodyAccessor;
         private static bool _dynamicBodyChecked;
+        private static float CorpseLaunchMaxUpFrac => ER_Config.CorpseLaunchMaxUpFraction;
 
         private static bool LooksImpulseName(string n, bool allowVelocityFallback, out bool velocityOnly)
         {
@@ -143,6 +144,48 @@ namespace ExtremeRagdoll
         {
             try { EnsureExtensionImpulseMethods(); }
             catch { }
+        }
+
+        internal static Vec3 ClampVertical(Vec3 dir)
+        {
+            if (dir.LengthSquared < 1e-6f)
+                return dir;
+            bool clamped = false;
+            if (dir.z > CorpseLaunchMaxUpFrac)
+            {
+                dir.z = CorpseLaunchMaxUpFrac;
+                clamped = true;
+            }
+            if (dir.z < 0f)
+            {
+                dir.z = 0f;
+                clamped = true;
+            }
+            if (!clamped)
+                return dir;
+
+            float lenSq = dir.LengthSquared;
+            if (lenSq < 1e-6f)
+                return new Vec3(0f, 1f, 0f);
+
+            return dir.NormalizedCopy();
+        }
+
+        internal static Vec3 PrepDir(Vec3 dir, float planarScale = 0.90f, float upBias = 0.10f)
+        {
+            if (!Vec3IsFinite(dir) || dir.LengthSquared < 1e-6f)
+                dir = new Vec3(0f, 1f, 0f);
+            else
+                dir = dir.NormalizedCopy();
+
+            var biased = dir * planarScale + new Vec3(0f, 0f, upBias);
+            biased = ClampVertical(biased);
+
+            float lenSq = biased.LengthSquared;
+            if (lenSq < 1e-6f || float.IsNaN(lenSq) || float.IsInfinity(lenSq))
+                return new Vec3(0f, 1f, 0f);
+
+            return biased.NormalizedCopy();
         }
 
         private static void EnsureExtensionImpulseMethods()
@@ -1377,25 +1420,33 @@ namespace ExtremeRagdoll
         private static float ToPhysicsImpulse(float mag)
         {
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
-            // Conservative default. Tune if needed.
-            float imp = mag * 1e-5f; // smaller conversion = less "rocket launches"
+            // Calibrated so typical lethal hits (≈20k magnitude) yield ~5 units of impulse.
+            float imp = mag * 2.5e-4f;
+
             float minImpulse = ER_Config.CorpseImpulseMinimum;
             if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
                 minImpulse = 0f;
             minImpulse = MathF.Max(0f, minImpulse);
-            const float MinImpulseCeiling = 15000f; // keep impulses in a plausible range
-            if (minImpulse > MinImpulseCeiling)
-                minImpulse = MinImpulseCeiling;
-            if (imp < minImpulse) imp = minImpulse;
+
             float maxImpulse = ER_Config.CorpseImpulseMaximum;
             if (float.IsNaN(maxImpulse) || float.IsInfinity(maxImpulse))
                 maxImpulse = 0f;
             if (maxImpulse < 0f)
                 maxImpulse = 0f;
-            if (maxImpulse > 0f && maxImpulse < minImpulse)
-                maxImpulse = minImpulse;
-            if (maxImpulse > 0f && imp > maxImpulse) imp = maxImpulse;
-            if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp)) return 0f;
+
+            if (maxImpulse > 0f)
+            {
+                if (minImpulse > maxImpulse)
+                    minImpulse = maxImpulse;
+            }
+
+            if (imp < minImpulse)
+                imp = minImpulse;
+            if (maxImpulse > 0f && imp > maxImpulse)
+                imp = maxImpulse;
+
+            if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp))
+                return 0f;
             return imp;
         }
 
@@ -1408,8 +1459,18 @@ namespace ExtremeRagdoll
         private readonly List<PreLaunch> _preLaunches = new List<PreLaunch>();
         private readonly List<Launch> _launches = new List<Launch>();
         private readonly HashSet<int> _launchFailLogged = new HashSet<int>();
+        private readonly HashSet<int> _launchedOnce = new HashSet<int>();
+
+        private void MarkLaunched(int agentId)
+        {
+            if (agentId < 0)
+                return;
+
+            _launchedOnce.Add(agentId);
+            ER_Amplify_RegisterBlowPatch.ForgetScheduled(agentId);
+        }
         private readonly Dictionary<int, int> _queuedPerAgent = new Dictionary<int, int>();
-        private const float TTL = 0.75f;
+        private static float RecentBlastTtl => MathF.Max(0f, ER_Config.DeathBlastTtl);
 
         // --- API shims for TaleWorlds versions lacking these helpers ---
         // Nur wirklich 'weg', wenn Mission fehlt oder Agent nicht mehr aktiv ist.
@@ -1504,6 +1565,7 @@ namespace ExtremeRagdoll
             _preLaunches.Clear();
             _launches.Clear();
             _launchFailLogged.Clear();
+            _launchedOnce.Clear();
             _queuedPerAgent.Clear();
             // also clear any cross-behavior pending impulses
             ER_Amplify_RegisterBlowPatch.ClearPending();
@@ -1523,26 +1585,18 @@ namespace ExtremeRagdoll
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 return;
 
+            int agentId = agent.Index;
+            if (_launchedOnce.Contains(agentId))
+                return;
+
             float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
             if (maxMag > 0f && mag > maxMag)
                 mag = maxMag;
             if (mag <= 0f)
                 return;
 
-            Vec3 safeDir = dir.LengthSquared > 1e-6f ? dir.NormalizedCopy() : new Vec3(0f, 1f, 0f);
-            // more forward, less up
-            safeDir = (safeDir * 0.90f + new Vec3(0f, 0f, 0.10f)).NormalizedCopy();
-            if (safeDir.z > 0.25f)
-            {
-                safeDir.z = 0.25f; // clamp vertical
-                float lenSq = safeDir.LengthSquared;
-                if (lenSq > 1e-6f)
-                {
-                    safeDir = safeDir.NormalizedCopy();
-                }
-            }
-            float dirSq = safeDir.LengthSquared;
-            if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
+            Vec3 safeDir = PrepDir(dir);
+            if (!Vec3IsFinite(safeDir) || safeDir.LengthSquared < 1e-6f)
                 return;
 
             Vec3 contact = pos;
@@ -1555,7 +1609,6 @@ namespace ExtremeRagdoll
             contact.z += lift;
 
             float now = mission.CurrentTime;
-            int agentId = agent.Index;
             var entry = new PreLaunch
             {
                 Agent   = agent,
@@ -1563,8 +1616,8 @@ namespace ExtremeRagdoll
                 Dir     = safeDir,
                 Mag     = mag,
                 Pos     = contact,
-                NextTry = now + 0.01f,
-                Tries   = 12,
+                NextTry = now + ApplyDelayJitter(0.01f),
+                Tries   = Math.Max(0, ER_Config.CorpsePrelaunchTries),
             };
 
             for (int i = 0; i < _preLaunches.Count; i++)
@@ -1587,7 +1640,8 @@ namespace ExtremeRagdoll
         public void EnqueueKick(Agent a, Vec3 dir, float force, float duration)
         {
             if (a == null) return;
-            _kicks.Add(new Kick { A = a, Dir = dir, Force = force, T0 = Mission.CurrentTime, Dur = duration });
+            Vec3 safeDir = PrepDir(dir, 1f, 0f);
+            _kicks.Add(new Kick { A = a, Dir = safeDir, Force = force, T0 = Mission.CurrentTime, Dur = duration });
         }
 
         public void EnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f, int retries = 8)
@@ -1602,9 +1656,12 @@ namespace ExtremeRagdoll
             if (delaySec < 0f) delaySec = 0f;
             delaySec = ApplyDelayJitter(delaySec);
             if (retries < 0) retries = 0;
-            if (retries > 12) retries = 12;
-            int queueCap = ER_Config.CorpseLaunchQueueCap;
+            int maxRetries = Math.Max(0, ER_Config.CorpsePostDeathTries);
+            if (retries > maxRetries) retries = maxRetries;
             int agentIndex = a.Index;
+            if (_launchedOnce.Contains(agentIndex))
+                return;
+            int queueCap = ER_Config.CorpseLaunchQueueCap;
             if (queueCap > 0)
             {
                 _queuedPerAgent.TryGetValue(agentIndex, out var queued);
@@ -1618,19 +1675,8 @@ namespace ExtremeRagdoll
             }
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 return;
-            Vec3 safeDir = dir.LengthSquared > 1e-6f ? dir.NormalizedCopy() : new Vec3(0f, 1f, 0f);
-            safeDir = (safeDir * 0.90f + new Vec3(0f, 0f, 0.10f)).NormalizedCopy();
-            if (safeDir.z > 0.25f)
-            {
-                safeDir.z = 0.25f;
-                float lenSq = safeDir.LengthSquared;
-                if (lenSq > 1e-6f)
-                {
-                    safeDir = safeDir.NormalizedCopy();
-                }
-            }
-            float safeDirSq = safeDir.LengthSquared;
-            if (safeDirSq < 1e-8f || float.IsNaN(safeDirSq) || float.IsInfinity(safeDirSq))
+            Vec3 safeDir = PrepDir(dir);
+            if (!Vec3IsFinite(safeDir) || safeDir.LengthSquared < 1e-6f)
                 return;
             Vec3 nudgedPos = pos;
             float zNudge = ER_Config.CorpseLaunchZNudge;
@@ -1650,25 +1696,32 @@ namespace ExtremeRagdoll
             var mission = Mission;
             if (mission == null || mission.Agents == null) return;
             float now = mission.CurrentTime;
-            const int MAX_LAUNCHES_PER_TICK = 128;
+            int maxLaunchesPerTick = ER_Config.CorpseLaunchesPerTickCap;
+            bool limitLaunches = maxLaunchesPerTick > 0;
             int launchesWorked = 0;
             float tookScale = ER_Config.CorpseLaunchVelocityScaleThreshold;
             float tookOffset = ER_Config.CorpseLaunchVelocityOffset;
-            float tookVertical = 0.05f;       // temporary tuning for verification
-            float tookDisplacement = 0.03f;   // temporary tuning for verification
+            float tookVertical = ER_Config.CorpseLaunchVerticalDelta;
+            float tookDisplacement = ER_Config.CorpseLaunchDisplacement;
             float contactHeight = ER_Config.CorpseLaunchContactHeight;
             float retryDelay = ER_Config.CorpseLaunchRetryDelay;
-            float preRetryDelay = MathF.Max(0.12f, ER_Config.CorpseLaunchRetryDelay);
+            float preRetryDelay = MathF.Max(0.02f, ER_Config.CorpseLaunchRetryDelay);
             int queueCap = ER_Config.CorpseLaunchQueueCap;
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
             float tickMaxSetting = ER_Config.MaxCorpseLaunchMagnitude;
             bool clampMag = tickMaxSetting > 0f; // <=0 bedeutet: nicht kappen
+            float blastTtl = RecentBlastTtl;
             for (int i = _recent.Count - 1; i >= 0; i--)
-                if (now - _recent[i].T > TTL) _recent.RemoveAt(i);
+                if (now - _recent[i].T > blastTtl) _recent.RemoveAt(i);
             for (int i = _preLaunches.Count - 1; i >= 0; i--)
             {
                 var entry = _preLaunches[i];
+                if (entry.AgentId >= 0 && _launchedOnce.Contains(entry.AgentId))
+                {
+                    _preLaunches.RemoveAt(i);
+                    continue;
+                }
                 if (now < entry.NextTry)
                     continue;
                 var agent = entry.Agent;
@@ -1745,6 +1798,8 @@ namespace ExtremeRagdoll
                             {
                                 ok = false;
                             }
+                            if (ok)
+                                MarkLaunched(entry.AgentId);
                             if (ok || AgentRemoved(agent))
                             {
                                 remove = true;
@@ -1767,28 +1822,62 @@ namespace ExtremeRagdoll
                     _preLaunches.RemoveAt(i);
                 }
             }
-            for (int i = _kicks.Count - 1; i >= 0; i--)
+            int maxKicksPerTick = ER_Config.KicksPerTickCap;
+            bool limitKicks = maxKicksPerTick > 0;
+            int kicksWorked = 0;
+            for (int i = 0; i < _kicks.Count;)
             {
                 var k = _kicks[i];
-                if (k.A == null || k.A.Health > 0f) { _kicks.RemoveAt(i); continue; }
+                if (k.A == null || AgentRemoved(k.A))
+                {
+                    _kicks.RemoveAt(i);
+                    continue;
+                }
+
                 float age = now - k.T0;
-                if (age > k.Dur) { _kicks.RemoveAt(i); continue; }
+                if (age > k.Dur)
+                {
+                    _kicks.RemoveAt(i);
+                    continue;
+                }
+
+                if (limitKicks && kicksWorked >= maxKicksPerTick)
+                {
+                    i++;
+                    continue;
+                }
+
                 float gain = 1f - (age / k.Dur);
                 float mag = k.Force * gain * 0.30f;
-                if (mag > 0f)
+                float maxNonLethal = ER_Config.MaxNonLethalKnockback;
+                if (k.A.Health > 0f && maxNonLethal > 0f && mag > maxNonLethal)
                 {
-                    var kb = new Blow(-1)
-                    {
-                        DamageType      = DamageTypes.Blunt,
-                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                        BaseMagnitude   = mag,
-                        SwingDirection  = k.Dir,
-                        GlobalPosition  = k.A.Position,
-                        InflictedDamage = 0
-                    };
-                    AttackCollisionData acd = default;
-                    k.A.RegisterBlow(kb, in acd);
+                    mag = maxNonLethal;
                 }
+
+                if (mag <= 0f)
+                {
+                    _kicks.RemoveAt(i);
+                    continue;
+                }
+
+                Vec3 dir = PrepDir(k.Dir, 1f, 0f);
+
+                var kb = new Blow(-1)
+                {
+                    DamageType      = DamageTypes.Blunt,
+                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                    BaseMagnitude   = mag,
+                    SwingDirection  = dir,
+                    GlobalPosition  = k.A.Position,
+                    InflictedDamage = 0
+                };
+                AttackCollisionData acd = default;
+                k.A.RegisterBlow(kb, in acd);
+                if (limitKicks)
+                    kicksWorked++;
+
+                i++;
             }
 
             // delayed corpse launches (run AFTER ragdoll is active)
@@ -1796,9 +1885,21 @@ namespace ExtremeRagdoll
             {
                 var L = _launches[i];
                 if (now < L.T) continue;
-                if (launchesWorked++ >= MAX_LAUNCHES_PER_TICK) break;
+                if (limitLaunches)
+                {
+                    if (launchesWorked >= maxLaunchesPerTick)
+                        break;
+                    launchesWorked++;
+                }
                 var agent = L.A;
                 int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
+                if (agentIndex >= 0 && _launchedOnce.Contains(agentIndex))
+                {
+                    _launches.RemoveAt(i);
+                    _launchFailLogged.Remove(agentIndex);
+                    DecQueue(agentIndex);
+                    continue;
+                }
                 bool nudged = false;
                 bool queueDecremented = false;
                 void DecOnce()
@@ -1810,6 +1911,21 @@ namespace ExtremeRagdoll
                     }
                 }
                 _launches.RemoveAt(i);
+                Vec3 dir = L.Dir;
+                if (!Vec3IsFinite(dir) || dir.LengthSquared < 1e-6f)
+                {
+                    dir = new Vec3(0f, 1f, 0f);
+                }
+                else
+                {
+                    dir = ClampVertical(dir);
+                    float lenSq = dir.LengthSquared;
+                    if (lenSq < 1e-6f || float.IsNaN(lenSq) || float.IsInfinity(lenSq))
+                        dir = new Vec3(0f, 1f, 0f);
+                    else
+                        dir = dir.NormalizedCopy();
+                }
+                L.Dir = dir;
                 GameEntity ent = L.Ent;
                 Skeleton skel = null;
                 if (ent == null)
@@ -1826,8 +1942,10 @@ namespace ExtremeRagdoll
                         if (impMag > 0f)
                         {
                             var contactMiss = XYJitter(L.Pos); contactMiss.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactMiss, agentIndex);
+                            bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactMiss, agentIndex);
                             nudged |= ok;
+                            if (ok)
+                                MarkLaunched(agentIndex);
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
                         }
@@ -1843,17 +1961,6 @@ namespace ExtremeRagdoll
                     continue; // only launch ragdolls still in mission
                 }
 
-                Vec3 dir = L.Dir.LengthSquared > 1e-8f ? L.Dir : new Vec3(0f, 1f, 0f);
-                dir = (dir * 0.90f + new Vec3(0f, 0f, 0.10f)).NormalizedCopy();
-                if (dir.z > 0.25f)
-                {
-                    dir.z = 0.25f;
-                    float lenSq = dir.LengthSquared;
-                    if (lenSq > 1e-6f)
-                    {
-                        dir = dir.NormalizedCopy();
-                    }
-                }
                 float dirSq = dir.LengthSquared;
                 if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
                 {
@@ -1950,8 +2057,10 @@ namespace ExtremeRagdoll
                                     skel?.TickAnimationsAndForceUpdate(0.001f, f2, true);
                                 }
                                 catch { }
-                                bool ok2 = TryApplyImpulse(ent2, skel, L.Dir * impMag2, contactPoint, agentIndex);
+                                bool ok2 = TryApplyImpulse(ent2, skel, dir * impMag2, contactPoint, agentIndex);
                                 nudged |= ok2;
+                                if (ok2)
+                                    MarkLaunched(agentIndex);
                                 if (ER_Config.DebugLogging)
                                     ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
                             }
@@ -1968,8 +2077,10 @@ namespace ExtremeRagdoll
                         if (impMag > 0f)
                         {
                             var contactEntity = XYJitter(L.Pos); contactEntity.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, skel, L.Dir * impMag, contactEntity, agentIndex);
+                            bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactEntity, agentIndex);
                             nudged |= ok;
+                            if (ok)
+                                MarkLaunched(agentIndex);
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
                         }
@@ -2010,6 +2121,8 @@ namespace ExtremeRagdoll
                             catch { }
                             bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint, agentIndex);
                             nudged |= ok;
+                            if (ok)
+                                MarkLaunched(agentIndex);
                             if (ok && ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
                         }
@@ -2081,11 +2194,14 @@ namespace ExtremeRagdoll
                         _launchFailLogged.Remove(agentIndex);
                     }
                     DecOnce();
+                    if (nudged)
+                        MarkLaunched(agentIndex);
                 }
                 else
                 {
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
+                    MarkLaunched(agentIndex);
                     if (ER_Config.DebugLogging)
                     {
                         ER_Log.Info($"corpse launch took Agent#{agentIndex} moved={moved:F4} v↑Δ={velAfter.z - L.V0.z:F4}");
@@ -2096,7 +2212,8 @@ namespace ExtremeRagdoll
             }
             if (_recent.Count == 0) return;
 
-            const int MAX_WORK = 256;
+            int maxAoEAgentsPerTick = ER_Config.AoEAgentsPerTickCap;
+            bool limitAoE = maxAoEAgentsPerTick > 0;
             int worked = 0;
             foreach (var a in mission.Agents)
             {
@@ -2111,12 +2228,16 @@ namespace ExtremeRagdoll
                     float force = (b.Force * ER_Config.DeathBlastForceMultiplier) * (1f / (1f + d));
                     if (force <= 0f) continue;
                     Vec3 flat = pos - b.Pos; flat = new Vec3(flat.x, flat.y, 0f);
-                    if (flat.LengthSquared < 1e-4f) flat = new Vec3(0f, 0f, 1f);
-                    Vec3 dir = (flat.NormalizedCopy() * 0.70f + new Vec3(0f, 0f, 0.72f)).NormalizedCopy();
+                    Vec3 dir = PrepDir(flat, 0.70f, 0.72f);
                     float maxForce = ER_Config.MaxAoEForce;
                     if (maxForce > 0f && force > maxForce)
                     {
                         force = maxForce;
+                    }
+                    float maxNonLethal = ER_Config.MaxNonLethalKnockback;
+                    if (a.Health > 0f && maxNonLethal > 0f && force > maxNonLethal)
+                    {
+                        force = maxNonLethal;
                     }
 
                     var aoe = new Blow(-1)
@@ -2137,7 +2258,7 @@ namespace ExtremeRagdoll
                         {
                             DamageType      = DamageTypes.Blunt,
                             BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
-                            BaseMagnitude   = 1f,
+                            BaseMagnitude   = MathF.Min(1f, force * 0.00005f),
                             SwingDirection  = dir,
                             GlobalPosition  = b.Pos,
                             InflictedDamage = 0
@@ -2147,7 +2268,12 @@ namespace ExtremeRagdoll
                     }
                     break; // pro Agent nur ein Blast pro Tick
                 }
-                if (affected && ++worked >= MAX_WORK) break;
+                if (affected)
+                {
+                    worked++;
+                    if (limitAoE && worked >= maxAoEAgentsPerTick)
+                        break;
+                }
             }
         }
 
@@ -2156,7 +2282,6 @@ namespace ExtremeRagdoll
         {
             if (affected == null) return;
             _launchFailLogged.Remove(affected.Index);
-            ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
             if (state != AgentState.Killed) return;
             if (affected.Mission != null && affected.Mission != Mission) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
@@ -2172,18 +2297,36 @@ namespace ExtremeRagdoll
                 }
             }
 
+            if (_launchedOnce.Remove(affected.Index))
+                return;
+
             // Kontaktpunkt: konservativ das Agent-Center verwenden (kein KillingBlow.GlobalPosition vorhanden)
             Vec3 hitPos = affected.Position;
             Vec3 flat   = new Vec3(affected.LookDirection.x, affected.LookDirection.y, 0f);
-            if (flat.LengthSquared < 1e-6f) flat = new Vec3(0f, 1f, 0f);
-            Vec3 fallbackDir = (flat.NormalizedCopy() * 0.35f + new Vec3(0f, 0f, 1.05f)).NormalizedCopy();
+            Vec3 fallbackDir = PrepDir(flat, 0.35f, 1.05f);
 
             // Fallback only if MakeDead didn’t consume the pending entry
             if (!ER_Amplify_RegisterBlowPatch.TryTakePending(affected.Index, out var p))
+            {
+                ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
                 return;
+            }
+            ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
 
             float mag = p.mag;
-            Vec3 dir = p.dir.LengthSquared > 1e-6f ? p.dir : fallbackDir;
+            Vec3 dir = p.dir;
+            if (!Vec3IsFinite(dir) || dir.LengthSquared < 1e-6f)
+            {
+                dir = fallbackDir;
+            }
+            else
+            {
+                dir = ClampVertical(dir);
+                float lenSq = dir.LengthSquared;
+                dir = (lenSq < 1e-6f || float.IsNaN(lenSq) || float.IsInfinity(lenSq))
+                    ? fallbackDir
+                    : dir.NormalizedCopy();
+            }
             if (p.pos.LengthSquared > 1e-6f) hitPos = p.pos;
 
             try
@@ -2196,14 +2339,20 @@ namespace ExtremeRagdoll
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     float imp = ToPhysicsImpulse(mag);
                     if (imp > 0f)
-                        TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
+                    {
+                        bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
+                        if (ok)
+                            MarkLaunched(affected.Index);
+                    }
                 }
             }
             catch { }
 
             // Schedule with retries (safety net in case MakeDead timing was late)
-            EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: 10);
-            EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: 6);
+            int postTries = ER_Config.CorpsePostDeathTries;
+            int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
+            EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
+            EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
             EnqueueKick  (affected, dir, mag, 1.2f);
             RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
             if (ER_Config.DebugLogging)
@@ -2262,9 +2411,11 @@ namespace ExtremeRagdoll
             if (a == null) return;
             if (ER_DeathBlastBehavior.Instance == null || a.Mission == null) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
-            var dir = p.dir.LengthSquared > 1e-6f ? p.dir : new Vec3(0f, 1f, 0f);
-            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag,                           p.pos, ER_Config.LaunchDelay1, retries: 10);
-            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: 6);
+            var dir = ER_DeathBlastBehavior.PrepDir(p.dir, 1f, 0f);
+            int postTries = ER_Config.CorpsePostDeathTries;
+            int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
+            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag,                           p.pos, ER_Config.LaunchDelay1, retries: postTries);
+            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: pulse2Tries);
             ER_DeathBlastBehavior.Instance.EnqueueKick  (a, dir, p.mag, 1.2f);
             ER_DeathBlastBehavior.Instance.RecordBlast(a.Position, ER_Config.DeathBlastRadius, p.mag);
             if (ER_Config.DebugLogging) ER_Log.Info($"{tag}: scheduled corpse launch Agent#{a.Index} mag={p.mag}");

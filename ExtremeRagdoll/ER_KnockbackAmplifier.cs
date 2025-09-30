@@ -15,6 +15,7 @@ namespace ExtremeRagdoll
         public static float DeathBlastRadius          => Settings.Instance?.DeathBlastRadius ?? 3.0f;
         public static float DeathBlastForceMultiplier => MathF.Max(0f, Settings.Instance?.DeathBlastForceMultiplier ?? 1f);
         public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? true;
+        public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;
         public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.07f;
         public static float LaunchPulse2Scale
@@ -29,20 +30,82 @@ namespace ExtremeRagdoll
         }
         public static float CorpseLaunchVelocityScaleThreshold => MathF.Max(1f, Settings.Instance?.CorpseLaunchVelocityScaleThreshold ?? 1.02f);
         public static float CorpseLaunchVelocityOffset         => Settings.Instance?.CorpseLaunchVelocityOffset ?? 0.01f;
-        public static float CorpseLaunchVerticalDelta           => Settings.Instance?.CorpseLaunchVerticalDelta ?? 0.07f;
-        public static float CorpseLaunchDisplacement            => Settings.Instance?.CorpseLaunchDisplacement ?? 0.005f;
+        public static float CorpseLaunchVerticalDelta           => Settings.Instance?.CorpseLaunchVerticalDelta ?? 0.05f;
+        public static float CorpseLaunchDisplacement            => Settings.Instance?.CorpseLaunchDisplacement ?? 0.03f;
         public static float MaxCorpseLaunchMagnitude            => Settings.Instance?.MaxCorpseLaunchMagnitude ?? 200_000_000f;
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
-        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 600f);
-        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 50_000f);
+        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 0.5f);
+        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 1_500f);
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
         public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
-        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.12f);
+        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.02f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
+        public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
         public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.18f);
+        public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
+        public static float CorpseLaunchMaxUpFraction
+        {
+            get
+            {
+                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.22f;
+                if (frac < 0f) return 0f;
+                if (frac > 1f) return 1f;
+                return frac;
+            }
+        }
         public static int   CorpseLaunchQueueCap                => Math.Max(0, Settings.Instance?.CorpseLaunchQueueCap ?? 3);
+        public static int   CorpsePrelaunchTries
+        {
+            get
+            {
+                int value = Settings.Instance?.CorpsePrelaunchTries ?? 12;
+                if (value < 0) return 0;
+                if (value > 100) return 100;
+                return value;
+            }
+        }
+        public static int   CorpsePostDeathTries
+        {
+            get
+            {
+                int value = Settings.Instance?.CorpsePostDeathTries ?? 12;
+                if (value < 0) return 0;
+                if (value > 100) return 100;
+                return value;
+            }
+        }
+        public static int   CorpseLaunchesPerTickCap
+        {
+            get
+            {
+                int value = Settings.Instance?.CorpseLaunchesPerTick ?? 128;
+                if (value < 0) return 0;
+                if (value > 2048) return 2048;
+                return value;
+            }
+        }
+        public static int   KicksPerTickCap
+        {
+            get
+            {
+                int value = Settings.Instance?.KicksPerTick ?? 128;
+                if (value < 0) return 0;
+                if (value > 2048) return 2048;
+                return value;
+            }
+        }
+        public static int   AoEAgentsPerTickCap
+        {
+            get
+            {
+                int value = Settings.Instance?.AoEAgentsPerTick ?? 256;
+                if (value < 0) return 0;
+                if (value > 4096) return 4096;
+                return value;
+            }
+        }
     }
 
     [HarmonyPatch]
@@ -59,8 +122,6 @@ namespace ExtremeRagdoll
         internal static readonly Dictionary<int, PendingLaunch> _pending =
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
-        private const float SCHEDULE_WINDOW = 0.08f; // tolerate engine timing jitter
-
         internal static void ClearPending()
         {
             _pending.Clear();
@@ -80,11 +141,14 @@ namespace ExtremeRagdoll
 
         internal static void ForgetScheduled(int agentId)
         {
+            _pending.Remove(agentId);
             _lastScheduled.Remove(agentId);
         }
 
-        internal static bool TryMarkScheduled(int agentId, float now, float windowSec = SCHEDULE_WINDOW)
+        internal static bool TryMarkScheduled(int agentId, float now, float windowSec = -1f)
         {
+            if (windowSec < 0f)
+                windowSec = ER_Config.CorpseLaunchScheduleWindow;
             if (_lastScheduled.TryGetValue(agentId, out var last) && now - last < windowSec)
                 return false;
             _lastScheduled[agentId] = now;
@@ -171,17 +235,37 @@ namespace ExtremeRagdoll
                 flat = new Vec3(0f, 1f, 0f);
             }
 
-            Vec3 dir = (flat.NormalizedCopy() * 0.35f + new Vec3(0f, 0f, 1.05f)).NormalizedCopy();
+            Vec3 dir = ER_DeathBlastBehavior.PrepDir(flat, 0.35f, 1.05f);
 
-            // Do NOT modify the engine blow. Let TOR's damage/perk pipeline run untouched.
+            bool respectBlow = ER_Config.RespectEngineBlowFlags;
+            if (!respectBlow)
+            {
+                if (lethal)
+                {
+                    blow.SwingDirection = dir;
+                    blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown;
+                }
+                else
+                {
+                    Vec3 existing = blow.SwingDirection;
+                    if (existing.LengthSquared < 1e-6f)
+                    {
+                        blow.SwingDirection = dir;
+                    }
+                    else
+                    {
+                        var clamped = ER_DeathBlastBehavior.PrepDir(existing, 1f, 0f);
+                        blow.SwingDirection = clamped;
+                    }
+                }
+            }
 
             if (lethal)
             {
                 if (ER_Config.MaxCorpseLaunchMagnitude > 0f)
                 {
-                    // Pre-death launch magnitude derived from the current blow, but applied later by our behavior.
-                    float extraMult = ER_Config.ExtraForceMultiplier <= 0f ? 1f : ER_Config.ExtraForceMultiplier;
-                    float mag = blow.BaseMagnitude * extraMult * 0.08f; // keep small; physics scaling happens later
+                    float extraMult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
+                    float mag = (10000f + blow.InflictedDamage * 120f) * extraMult * 0.25f; // keep small; physics scaling happens later
                     float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
                     if (mag > maxMag)
                     {
@@ -199,7 +283,13 @@ namespace ExtremeRagdoll
                         contact = __instance.Position;
                     }
                     float recorded = __instance.Mission?.CurrentTime ?? 0f;
-                    _pending[__instance.Index] = new PendingLaunch { dir = dir, mag = mag, pos = contact, time = recorded };
+                    _pending[__instance.Index] = new PendingLaunch
+                    {
+                        dir  = dir,
+                        mag  = mag,
+                        pos  = contact,
+                        time = recorded,
+                    };
                     var mission = __instance.Mission ?? Mission.Current;
                     mission?
                         .GetMissionBehavior<ER_DeathBlastBehavior>()
