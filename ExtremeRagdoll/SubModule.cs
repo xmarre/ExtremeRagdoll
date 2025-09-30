@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.Core;
@@ -57,8 +58,9 @@ namespace ExtremeRagdoll
                     if (module == null)
                         continue;
                     var nameProp = module.GetType().GetProperty("Name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    var moduleName = nameProp?.GetValue(module)?.ToString();
-                    if (string.Equals(moduleName, "TheOldRealms", StringComparison.OrdinalIgnoreCase))
+                    var rawName = nameProp?.GetValue(module)?.ToString() ?? string.Empty;
+                    var normalized = new string(rawName.Where(c => !char.IsWhiteSpace(c)).ToArray()).ToLowerInvariant();
+                    if (normalized.Contains("theoldrealms") || normalized.Contains("oldrealms"))
                         return true;
                 }
             }

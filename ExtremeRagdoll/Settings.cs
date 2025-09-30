@@ -124,7 +124,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
             Order = 117, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 100_000f;
+        public float CorpseImpulseMinimum { get; set; } = 2_000f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",

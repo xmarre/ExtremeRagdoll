@@ -1375,7 +1375,7 @@ namespace ExtremeRagdoll
             if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
                 minImpulse = 0f;
             minImpulse = MathF.Max(0f, minImpulse);
-            const float MinImpulseCeiling = 150000f;
+            const float MinImpulseCeiling = 15000f; // keep impulses in a plausible range
             if (minImpulse > MinImpulseCeiling)
                 minImpulse = MinImpulseCeiling;
             if (imp < minImpulse) imp = minImpulse;
@@ -1394,8 +1394,10 @@ namespace ExtremeRagdoll
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
         private struct Launch { public Agent A; public GameEntity Ent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public Vec3 P0; public Vec3 V0; }
+        private struct PreLaunch { public Agent Agent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
+        private readonly List<PreLaunch> _preLaunches = new List<PreLaunch>();
         private readonly List<Launch> _launches = new List<Launch>();
         private readonly HashSet<int> _launchFailLogged = new HashSet<int>();
         private readonly Dictionary<int, int> _queuedPerAgent = new Dictionary<int, int>();
@@ -1491,11 +1493,71 @@ namespace ExtremeRagdoll
             Instance = null;
             _recent.Clear();
             _kicks.Clear();
+            _preLaunches.Clear();
             _launches.Clear();
             _launchFailLogged.Clear();
             _queuedPerAgent.Clear();
             // also clear any cross-behavior pending impulses
             ER_Amplify_RegisterBlowPatch.ClearPending();
+        }
+
+        public void QueuePreDeath(Agent agent, Vec3 dir, float mag, Vec3 pos)
+        {
+            if (agent == null)
+                return;
+            var mission = Mission;
+            if (mission == null)
+                return;
+            if (agent.Mission != null && agent.Mission != mission)
+                return;
+            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f)
+                return;
+            if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
+                return;
+
+            float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
+            if (maxMag > 0f && mag > maxMag)
+                mag = maxMag;
+            if (mag <= 0f)
+                return;
+
+            Vec3 safeDir = dir.LengthSquared > 1e-6f ? dir.NormalizedCopy() : new Vec3(0f, 1f, 0f);
+            safeDir = (safeDir + new Vec3(0f, 0f, 0.15f)).NormalizedCopy();
+            float dirSq = safeDir.LengthSquared;
+            if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
+                return;
+
+            Vec3 contact = pos;
+            if (!Vec3IsFinite(contact) || contact.LengthSquared < 1e-10f)
+            {
+                try { contact = agent.Position; }
+                catch { contact = Vec3.Zero; }
+            }
+            float lift = MathF.Max(ER_Config.CorpseLaunchZNudge, 0.06f);
+            contact.z += lift;
+
+            float now = mission.CurrentTime;
+            int agentId = agent.Index;
+            var entry = new PreLaunch
+            {
+                Agent   = agent,
+                AgentId = agentId,
+                Dir     = safeDir,
+                Mag     = mag,
+                Pos     = contact,
+                NextTry = now + 0.01f,
+                Tries   = 9,
+            };
+
+            for (int i = 0; i < _preLaunches.Count; i++)
+            {
+                if (_preLaunches[i].AgentId == agentId)
+                {
+                    _preLaunches[i] = entry;
+                    return;
+                }
+            }
+            _preLaunches.Add(entry);
         }
 
         public void RecordBlast(Vec3 center, float radius, float force)
@@ -1569,6 +1631,7 @@ namespace ExtremeRagdoll
             float tookDisplacement = 0.03f;   // temporary tuning for verification
             float contactHeight = ER_Config.CorpseLaunchContactHeight;
             float retryDelay = ER_Config.CorpseLaunchRetryDelay;
+            float preRetryDelay = MathF.Max(0.10f, ER_Config.CorpseLaunchRetryDelay);
             int queueCap = ER_Config.CorpseLaunchQueueCap;
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
@@ -1576,6 +1639,99 @@ namespace ExtremeRagdoll
             bool clampMag = tickMaxSetting > 0f; // <=0 bedeutet: nicht kappen
             for (int i = _recent.Count - 1; i >= 0; i--)
                 if (now - _recent[i].T > TTL) _recent.RemoveAt(i);
+            for (int i = _preLaunches.Count - 1; i >= 0; i--)
+            {
+                var entry = _preLaunches[i];
+                if (now < entry.NextTry)
+                    continue;
+                var agent = entry.Agent;
+                bool remove = false;
+                if (agent == null || agent.Mission == null || agent.Mission != mission)
+                {
+                    remove = true;
+                }
+                else if (entry.Tries <= 0)
+                {
+                    remove = true;
+                }
+                else
+                {
+                    entry.Tries--;
+                    GameEntity ent = null;
+                    Skeleton skel = null;
+                    try { ent = agent.AgentVisuals?.GetEntity(); } catch { }
+                    try { skel = agent.AgentVisuals?.GetSkeleton(); } catch { }
+                    if (ent == null && skel == null)
+                    {
+                        if (entry.Tries <= 0)
+                        {
+                            remove = true;
+                        }
+                        else
+                        {
+                            entry.NextTry = now + preRetryDelay;
+                            _preLaunches[i] = entry;
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        float impulseMag = ToPhysicsImpulse(entry.Mag);
+                        if (impulseMag <= 0f)
+                        {
+                            remove = true;
+                        }
+                        else
+                        {
+                            Vec3 contact = entry.Pos;
+                            if (!Vec3IsFinite(contact))
+                            {
+                                try { contact = agent.Position; }
+                                catch { contact = entry.Pos; }
+                            }
+                            else
+                            {
+                                try
+                                {
+                                    contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
+                                }
+                                catch
+                                {
+                                }
+                            }
+                            bool ok = false;
+                            try
+                            {
+                                try { skel?.ActivateRagdoll(); } catch { }
+                                try { skel?.ForceUpdateBoneFrames(); } catch { }
+                                ok = TryApplyImpulse(ent, skel, entry.Dir * impulseMag, contact, entry.AgentId);
+                            }
+                            catch
+                            {
+                                ok = false;
+                            }
+                            if (ok || AgentRemoved(agent))
+                            {
+                                remove = true;
+                            }
+                            else if (entry.Tries > 0)
+                            {
+                                entry.NextTry = now + preRetryDelay;
+                                _preLaunches[i] = entry;
+                                continue;
+                            }
+                            else
+                            {
+                                remove = true;
+                            }
+                        }
+                    }
+                }
+                if (remove)
+                {
+                    _preLaunches.RemoveAt(i);
+                }
+            }
             for (int i = _kicks.Count - 1; i >= 0; i--)
             {
                 var k = _kicks[i];
