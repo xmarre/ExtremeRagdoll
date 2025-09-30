@@ -186,11 +186,17 @@ namespace ExtremeRagdoll
             }
             if (lethal)
             {
-                const float lethalPreDeathScale = 0.15f;
+                const float lethalPreDeathScale = 0.08f;
                 blow.BaseMagnitude *= lethalPreDeathScale;
             }
             blow.SwingDirection = dir;
-            blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound;
+            var updatedFlags = blow.BlowFlag | BlowFlags.KnockDown;
+            if (lethal)
+                updatedFlags &= ~BlowFlags.KnockBack;   // ragdoll will move it
+            else
+                updatedFlags |= BlowFlags.KnockBack;
+            updatedFlags &= ~BlowFlags.NoSound;         // do NOT suppress hit audio
+            blow.BlowFlag = updatedFlags;
 
             if (lethal)
             {
@@ -209,8 +215,17 @@ namespace ExtremeRagdoll
                         return;
                     }
                     Vec3 contact = blow.GlobalPosition;
+                    if (float.IsNaN(contact.x) || float.IsNaN(contact.y) || float.IsNaN(contact.z) ||
+                        float.IsInfinity(contact.x) || float.IsInfinity(contact.y) || float.IsInfinity(contact.z))
+                    {
+                        contact = __instance.Position;
+                    }
                     float recorded = __instance.Mission?.CurrentTime ?? 0f;
                     _pending[__instance.Index] = new PendingLaunch { dir = dir, mag = mag, pos = contact, time = recorded };
+                    var mission = __instance.Mission ?? Mission.Current;
+                    mission?
+                        .GetMissionBehavior<ER_DeathBlastBehavior>()
+                        ?.QueuePreDeath(__instance, dir, mag, contact);
                     if (ER_Config.DebugLogging)
                     {
                         ER_Log.Info($"lethal pre-boost: hp={hp} dmg={blow.InflictedDamage} baseMag->{blow.BaseMagnitude} mag={mag}");
