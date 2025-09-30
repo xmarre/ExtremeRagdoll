@@ -14,8 +14,10 @@ namespace ExtremeRagdoll
         public static float ExtraForceMultiplier      => MathF.Max(0f, Settings.Instance?.ExtraForceMultiplier ?? 1f);
         public static float DeathBlastRadius          => Settings.Instance?.DeathBlastRadius ?? 3.0f;
         public static float DeathBlastForceMultiplier => MathF.Max(0f, Settings.Instance?.DeathBlastForceMultiplier ?? 1f);
-        public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? true;
+        public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? false;
         public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
+        public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
+        public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;
         public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.07f;
         public static float LaunchPulse2Scale
@@ -36,6 +38,15 @@ namespace ExtremeRagdoll
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
         public static float MaxBlowBaseMagnitude                => MathF.Max(0f, Settings.Instance?.MaxBlowBaseMagnitude ?? 0f);
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
+        public static float HorseRamKnockDownThreshold
+        {
+            get
+            {
+                float threshold = Settings.Instance?.HorseRamKnockDownThreshold ?? 12_000f;
+                if (threshold < 0f) return 0f;
+                return threshold;
+            }
+        }
         public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 0.5f);
         public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 1_500f);
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
@@ -130,6 +141,7 @@ namespace ExtremeRagdoll
         private static readonly FieldInfo VelocityField = typeof(AttackCollisionData).GetField("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileVelocityProperty = typeof(AttackCollisionData).GetProperty("MissileVelocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo VelocityProperty = typeof(AttackCollisionData).GetProperty("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static bool _patched;
 
         private static float ResolveMissileSpeed(AttackCollisionData data)
         {
@@ -259,6 +271,9 @@ namespace ExtremeRagdoll
         [HarmonyPrepare]
         static bool Prepare()
         {
+            if (_patched)
+                return false;
+
             var method = TargetMethod();
             if (method == null)
             {
@@ -273,6 +288,7 @@ namespace ExtremeRagdoll
             }
 
             ER_Log.Info("Patching: " + method);
+            _patched = true;
             return true;
         }
 
@@ -327,18 +343,22 @@ namespace ExtremeRagdoll
             try { missileSpeed = ResolveMissileSpeed(attackCollisionData); }
             catch { missileSpeed = 0f; }
             if (float.IsNaN(missileSpeed) || float.IsInfinity(missileSpeed)) missileSpeed = 0f;
+            float minPushSpeed = ER_Config.MinMissileSpeedForPush;
+            if (missileSpeed < minPushSpeed)
+                missileSpeed = 0f;
 
             bool lethal = hp - blow.InflictedDamage <= 0f;
+            bool missileBlocked = !lethal && missileSpeed > 0f && blow.InflictedDamage <= 0f;
+            bool allowBlockedPush = ER_Config.BlockedMissilesCanPush;
 
-            // Only bail on truly trivial non-lethal taps (keep horse/engine shoves alive).
+            // bail gate: only truly trivial taps
             if (!lethal && blow.InflictedDamage <= 0f && missileSpeed <= 0f && blow.BaseMagnitude <= 1f)
             {
                 _pending.Remove(__instance.Index);
                 return;
             }
-            // optional: comment out for a quick A/B to confirm engine accepts huge impulses
-            // if (hp > 0f && blow.InflictedDamage < hp * 0.7f) return;
 
+            // compute a sane push dir (used only when we decide to replace)
             Vec3 dir = __instance.Position - blow.GlobalPosition;
             if (dir.LengthSquared < 1e-6f)
             {
@@ -347,67 +367,119 @@ namespace ExtremeRagdoll
             }
             dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 1.05f);
 
-            bool respectBlow = ER_Config.RespectEngineBlowFlags;
-
-            // Always ensure correct flags so lethal hits ragdoll and missiles shove even when respecting engine data.
+            // ensure flags so lethal always ragdolls; missiles shove
             if (lethal)
             {
                 blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown;
+                if (blow.SwingDirection.LengthSquared < 1e-6f)
+                    blow.SwingDirection = dir;
             }
             else if (missileSpeed > 0f)
             {
-                blow.BlowFlag |= BlowFlags.KnockBack;
+                if (!missileBlocked || allowBlockedPush)
+                    blow.BlowFlag |= BlowFlags.KnockBack;
             }
+
+            // Horse/body shove fallback: strong non-missile hits should still knock back
+            bool bigShove = !lethal && missileSpeed <= 0f && blow.BaseMagnitude >= 3000f;
+            if (bigShove)
+            {
+                blow.BlowFlag |= BlowFlags.KnockBack;
+                if (blow.SwingDirection.LengthSquared < 1e-6f)
+                    blow.SwingDirection = dir;
+                float kdThreshold = ER_Config.HorseRamKnockDownThreshold;
+                if (kdThreshold > 0f && blow.BaseMagnitude >= kdThreshold && !__instance.HasMount)
+                    blow.BlowFlag |= BlowFlags.KnockDown;
+            }
+
+            bool respectBlow = ER_Config.RespectEngineBlowFlags;
+
+            if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f && blow.SwingDirection.LengthSquared < 1e-6f)
+                blow.SwingDirection = dir;
 
             if (!respectBlow)
             {
                 if (lethal)
                 {
-                    blow.SwingDirection = dir;
-                }
-                else
-                {
-                    if (missileSpeed > 0f)
-                    {
-                        // make light arrows visibly push; still respect user cap
-                        float floor = 9000f + missileSpeed * 80f;
-                        if (ER_Config.MaxNonLethalKnockback > 0f)
-                            floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
-                        if (ER_Config.DebugLogging)
-                            ER_Log.Info($"[ER] ArrowKnockback v={missileSpeed:0.0} base={blow.BaseMagnitude:0} floor={floor:0}");
-                        if (blow.BaseMagnitude < floor)
-                            blow.BaseMagnitude = floor;
-                    }
-                    Vec3 existing = blow.SwingDirection;
-                    if (existing.LengthSquared < 1e-6f)
-                    {
+                    // lethal: let engine ragdoll in our direction
+                    if (blow.SwingDirection.LengthSquared < 1e-6f)
                         blow.SwingDirection = dir;
-                    }
-                    else
-                    {
-                        var clamped = ER_DeathBlastBehavior.PrepDir(existing, 1f, 0f);
-                        blow.SwingDirection = clamped;
-                    }
-                }
-            }
 
-            if (lethal)
-            {
-                if (!respectBlow)
-                {
-                    // Engine-Schub für tödliche Treffer; nutzt oben ermittelte missileSpeed.
-                    // (Bereits auf NaN/∞ geprüft und ggf. genullt.)
-                    float mult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
+                    // lethal magnitude (SAFE CAP even if setting is 0)
+                    float mult    = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
                     float desired = (30000f + blow.InflictedDamage * 400f + missileSpeed * 200f) * mult;
-                    if (ER_Config.MaxBlowBaseMagnitude > 0f)
-                        desired = MathF.Min(desired, ER_Config.MaxBlowBaseMagnitude);
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {
+                        float origBase = blow.BaseMagnitude;
                         if (ER_Config.DebugLogging)
-                            ER_Log.Info($"[ER] LethalBoost baseMag {blow.BaseMagnitude:0} -> {desired:0}  dmg={blow.InflictedDamage:0}  v={missileSpeed:0.0}");
+                            ER_Log.Info($"[ER] LethalBoost baseMag {origBase:0} -> {desired:0}  dmg={blow.InflictedDamage:0}  v={missileSpeed:0.0}");
                         blow.BaseMagnitude = desired;
                     }
                 }
+                else if (missileSpeed > 0f)
+                {
+                    // skip missile shove if damage is fully blocked
+                    if (!missileBlocked || allowBlockedPush)
+                    {
+                        float floor = 9000f + missileSpeed * 80f;
+                        if (ER_Config.MaxNonLethalKnockback > 0f)
+                            floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
+                        if (ER_Config.MaxBlowBaseMagnitude > 0f)
+                            floor = MathF.Min(floor, ER_Config.MaxBlowBaseMagnitude);
+
+                        float origBase = blow.BaseMagnitude;
+                        if (origBase < floor)
+                        {
+                            blow.BaseMagnitude = floor;
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info($"[ER] ArrowKnockback v={missileSpeed:0.0} base={origBase:0} floor={floor:0}");
+                        }
+                    }
+                }
+                else if (bigShove)
+                {
+                    float origBase = blow.BaseMagnitude;
+                    float shoveFloor = 9000f + origBase * 0.15f;
+                    if (ER_Config.MaxNonLethalKnockback > 0f)
+                        shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
+                    if (ER_Config.MaxBlowBaseMagnitude > 0f)
+                        shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxBlowBaseMagnitude);
+
+                    if (origBase < shoveFloor)
+                    {
+                        blow.BaseMagnitude = shoveFloor;
+                        if (ER_Config.DebugLogging)
+                            ER_Log.Info($"[ER] BigShove base {origBase:0} -> {blow.BaseMagnitude:0}");
+                    }
+                }
+
+                float maxBase = ER_Config.MaxBlowBaseMagnitude;
+                if (maxBase <= 0f)
+                    maxBase = 400_000f;
+                if (maxBase > 0f && blow.BaseMagnitude > maxBase)
+                    blow.BaseMagnitude = maxBase;
+            }
+            else if (ER_Config.DebugLogging)
+            {
+                ER_Log.Info("[ER] Respecting engine blow: magnitude floors skipped");
+            }
+
+            // IMPORTANT: do NOT touch SwingDirection for non-missile, non-lethal blows (keeps horse charge intact)
+
+            float swingLenSq = blow.SwingDirection.LengthSquared;
+            if (swingLenSq > 0f)
+            {
+                if (swingLenSq < 1e-6f)
+                    blow.SwingDirection = Vec3.Zero;
+                else
+                    blow.SwingDirection = blow.SwingDirection.NormalizedCopy();
+            }
+
+            if (!(blow.BaseMagnitude > 0f) || float.IsNaN(blow.BaseMagnitude) || float.IsInfinity(blow.BaseMagnitude))
+                blow.BaseMagnitude = 1f;
+
+            if (lethal)
+            {
 
                 if (ER_Config.MaxCorpseLaunchMagnitude > 0f)
                 {
