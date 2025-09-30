@@ -1,7 +1,6 @@
 # AGENTS.md — Repository Agent Guide (ExtremeRagdoll)
 
 > **Scope:** Guidance for a code-editing agent working on this Bannerlord mod repository.  
-> **Hard rule:** **Do not try to launch or “play” the game, and do not require a local Bannerlord install.** Operate on code only: static analysis, edits, docs, and PR suggestions.
 
 ---
 
@@ -83,7 +82,7 @@ When in doubt, prefer readability + guardrails over micro-optimizations.
 
 ---
 
-## 5) Testing strategy (without running the game)
+## 5) Testing strategy
 
 - Treat this repository as a library:
   - Ensure **compiles-in-theory** changes (no new external deps, no API breaks).
@@ -138,4 +137,3 @@ DebugLogging                 bool
 - External public API used by other mods (if any).
 - Harmony patch targets/signatures.
 - Runtime behaviors that players rely on (e.g., launch cadence) beyond bug fixes or guardrails.
-- Any instruction that would require launching Bannerlord or manual gameplay testing.
