@@ -134,6 +134,8 @@ namespace ExtremeRagdoll
         internal static readonly Dictionary<int, PendingLaunch> _pending =
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
+        // throttle BigShove logging per agent
+        private static readonly Dictionary<int, float> _lastBigShoveLog = new Dictionary<int, float>();
         private static readonly FieldInfo MissileSpeedField = typeof(AttackCollisionData).GetField("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileSpeedProperty = typeof(AttackCollisionData).GetProperty("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly FieldInfo SpeedFieldFallback = typeof(AttackCollisionData).GetField("Speed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -238,6 +240,7 @@ namespace ExtremeRagdoll
         {
             _pending.Clear();
             _lastScheduled.Clear();
+            _lastBigShoveLog.Clear();
         }
 
         internal static bool TryTakePending(int agentId, out PendingLaunch pending)
@@ -255,6 +258,7 @@ namespace ExtremeRagdoll
         {
             _pending.Remove(agentId);
             _lastScheduled.Remove(agentId);
+            _lastBigShoveLog.Remove(agentId);
         }
 
         internal static bool TryMarkScheduled(int agentId, float now, float windowSec = -1f)
@@ -375,13 +379,12 @@ namespace ExtremeRagdoll
                     blow.BlowFlag |= BlowFlags.KnockBack;
             }
 
-            // Horse/body shove fallback: strong non-missile hits should still knock back
+            // Horse/body shove fallback: strong non-missile hits should still knock back.
             bool bigShove = !lethal && missileSpeed <= 0f && blow.BaseMagnitude >= 3000f;
             if (bigShove)
             {
                 blow.BlowFlag |= BlowFlags.KnockBack;
-                if (blow.SwingDirection.LengthSquared < 1e-6f)
-                    blow.SwingDirection = dir;
+                if (blow.SwingDirection.LengthSquared < 1e-6f) blow.SwingDirection = dir;
                 float kdThreshold = ER_Config.HorseRamKnockDownThreshold;
                 if (kdThreshold > 0f && blow.BaseMagnitude >= kdThreshold && !__instance.HasMount)
                     blow.BlowFlag |= BlowFlags.KnockDown;
@@ -403,6 +406,9 @@ namespace ExtremeRagdoll
                     // lethal magnitude (SAFE CAP even if setting is 0)
                     float mult    = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
                     float desired = (30000f + blow.InflictedDamage * 400f + missileSpeed * 200f) * mult;
+                    float maxBaseCap = ER_Config.MaxBlowBaseMagnitude <= 0f ? 400_000f : ER_Config.MaxBlowBaseMagnitude;
+                    if (desired > maxBaseCap)
+                        desired = maxBaseCap;
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {
                         float origBase = blow.BaseMagnitude;
@@ -413,61 +419,70 @@ namespace ExtremeRagdoll
                 }
                 else if (missileSpeed > 0f)
                 {
-                    // skip missile shove if damage is fully blocked
-                    if (!missileBlocked || allowBlockedPush)
+                    // (floor now applied below for both respect/non-respect branches)
+                }
+                else if (bigShove)
+                {
+                    // (floor now applied below for both respect/non-respect branches)
+                }
+            }
+            // Apply magnitude floors even when respecting engine flags
+            if (!lethal)
+            {
+                if (missileSpeed > 0f && (!missileBlocked || allowBlockedPush))
+                {
+                    float floor = 9000f + missileSpeed * 80f;
+                    if (ER_Config.MaxNonLethalKnockback > 0f) floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
+                    if (ER_Config.MaxBlowBaseMagnitude  > 0f) floor = MathF.Min(floor, ER_Config.MaxBlowBaseMagnitude);
+                    float origBase = blow.BaseMagnitude;
+                    if (origBase + 500f < floor)
                     {
-                        float floor = 9000f + missileSpeed * 80f;
-                        if (ER_Config.MaxNonLethalKnockback > 0f)
-                            floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
-                        if (ER_Config.MaxBlowBaseMagnitude > 0f)
-                            floor = MathF.Min(floor, ER_Config.MaxBlowBaseMagnitude);
-
-                        float origBase = blow.BaseMagnitude;
-                        if (origBase < floor)
-                        {
-                            blow.BaseMagnitude = floor;
-                            if (ER_Config.DebugLogging)
-                                ER_Log.Info($"[ER] ArrowKnockback v={missileSpeed:0.0} base={origBase:0} floor={floor:0}");
-                        }
+                        blow.BaseMagnitude = floor;
+                        if (ER_Config.DebugLogging)
+                            ER_Log.Info($"[ER] ArrowKnockback v={missileSpeed:0.0} base={origBase:0} floor={floor:0}");
                     }
                 }
                 else if (bigShove)
                 {
-                    float origBase = blow.BaseMagnitude;
-                    float shoveFloor = 9000f + origBase * 0.15f;
-                    if (ER_Config.MaxNonLethalKnockback > 0f)
-                        shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
-                    if (ER_Config.MaxBlowBaseMagnitude > 0f)
-                        shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxBlowBaseMagnitude);
-
-                    if (origBase < shoveFloor)
+                    float origBase   = blow.BaseMagnitude;
+                    float shoveFloor = MathF.Max(12000f, 9000f + origBase * 0.25f);
+                    if (ER_Config.MaxNonLethalKnockback > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
+                    if (ER_Config.MaxBlowBaseMagnitude  > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxBlowBaseMagnitude);
+                    if (origBase + 800f < shoveFloor) // ignore tiny nudges
                     {
                         blow.BaseMagnitude = shoveFloor;
                         if (ER_Config.DebugLogging)
-                            ER_Log.Info($"[ER] BigShove base {origBase:0} -> {blow.BaseMagnitude:0}");
+                        {
+                            float now = __instance.Mission?.CurrentTime ?? 0f;
+                            if (!_lastBigShoveLog.TryGetValue(__instance.Index, out var last) || now - last >= 0.25f)
+                            {
+                                _lastBigShoveLog[__instance.Index] = now;
+                                ER_Log.Info($"[ER] BigShove base {origBase:0} -> {blow.BaseMagnitude:0}");
+                            }
+                        }
                     }
                 }
-
-                float maxBase = ER_Config.MaxBlowBaseMagnitude;
-                if (maxBase <= 0f)
-                    maxBase = 400_000f;
-                if (maxBase > 0f && blow.BaseMagnitude > maxBase)
-                    blow.BaseMagnitude = maxBase;
             }
-            else if (ER_Config.DebugLogging)
+
+            // Global max cap (applies regardless of lethal state)
             {
-                ER_Log.Info("[ER] Respecting engine blow: magnitude floors skipped");
+                float maxBase = ER_Config.MaxBlowBaseMagnitude <= 0f ? 400_000f : ER_Config.MaxBlowBaseMagnitude;
+                if (blow.BaseMagnitude > maxBase)
+                    blow.BaseMagnitude = maxBase;
             }
 
             // IMPORTANT: do NOT touch SwingDirection for non-missile, non-lethal blows (keeps horse charge intact)
 
             float swingLenSq = blow.SwingDirection.LengthSquared;
-            if (swingLenSq > 0f)
+            if (swingLenSq <= 1e-6f)
             {
-                if (swingLenSq < 1e-6f)
-                    blow.SwingDirection = Vec3.Zero;
-                else
-                    blow.SwingDirection = blow.SwingDirection.NormalizedCopy();
+                // keep a valid push dir instead of zeroing it
+                if (lethal || missileSpeed > 0f || bigShove)
+                    blow.SwingDirection = dir;
+            }
+            else
+            {
+                blow.SwingDirection = blow.SwingDirection.NormalizedCopy();
             }
 
             if (!(blow.BaseMagnitude > 0f) || float.IsNaN(blow.BaseMagnitude) || float.IsInfinity(blow.BaseMagnitude))
