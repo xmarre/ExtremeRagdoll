@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.MountAndBlade;
@@ -37,13 +39,45 @@ namespace ExtremeRagdoll
             TryAdapt("game_start");
         }
 
+        private static bool IsTorModuleLoaded()
+        {
+            try
+            {
+                var helperType = AccessTools.TypeByName("TaleWorlds.ModuleManager.ModuleHelper")
+                                 ?? AccessTools.TypeByName("TaleWorlds.MountAndBlade.ModuleHelper");
+                if (helperType == null)
+                    return false;
+                var getModules = helperType.GetMethod("GetModules", BindingFlags.Static | BindingFlags.Public);
+                if (getModules == null)
+                    return false;
+                if (!(getModules.Invoke(null, null) is IEnumerable modules))
+                    return false;
+                foreach (var module in modules)
+                {
+                    if (module == null)
+                        continue;
+                    var nameProp = module.GetType().GetProperty("Name", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    var moduleName = nameProp?.GetValue(module)?.ToString();
+                    if (string.Equals(moduleName, "TheOldRealms", StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+            catch
+            {
+                // ignored: treat as not loaded
+            }
+            return false;
+        }
+
         private static void TryAdapt(string where)
         {
             if (_adapted) return;
             try
             {
-                _adapted = ER_TOR_Adapter.TryEnableShockwaves();
-                ER_Log.Info($"TOR adapter at {where}: adapted={_adapted}");
+                bool changed = ER_TOR_Adapter.TryEnableShockwaves();
+                bool torLoaded = changed || IsTorModuleLoaded();
+                _adapted = torLoaded;
+                ER_Log.Info($"TOR adapter at {where}: adapted={_adapted} (torLoaded={torLoaded}, changed={changed})");
             }
             catch (Exception ex)
             {
@@ -60,7 +94,10 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    _adapted = ER_TOR_Adapter.TryEnableShockwaves();
+                    bool changed = ER_TOR_Adapter.TryEnableShockwaves();
+                    bool torLoaded = changed || IsTorModuleLoaded();
+                    _adapted = torLoaded;
+                    ER_Log.Info($"TOR adapter at mission start: adapted={_adapted} (torLoaded={torLoaded}, changed={changed})");
                 }
                 catch
                 {

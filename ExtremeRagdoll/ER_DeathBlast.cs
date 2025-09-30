@@ -101,6 +101,44 @@ namespace ExtremeRagdoll
         private static bool IsVec3Like(Type t) =>
             t == typeof(Vec3) || t == typeof(Vec3).MakeByRefType();
 
+        private static bool MethodRequiresLocalSpace(MethodInfo method)
+        {
+            if (method == null)
+                return false;
+            var name = method.Name ?? string.Empty;
+            return name.IndexOf("Local", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool TryConvertWorldToLocal(GameEntity ent, Vec3 impulse, Vec3 pos,
+            out Vec3 localImpulse, out Vec3 localPos)
+        {
+            localImpulse = impulse;
+            localPos = pos;
+            if (ent == null)
+                return false;
+            try
+            {
+                MatrixFrame frame;
+                try
+                {
+                    frame = ent.GetGlobalFrame();
+                }
+                catch
+                {
+                    frame = ent.GetFrame();
+                }
+                localPos = frame.TransformToLocal(pos);
+                var tipWorld = pos + impulse;
+                var tipLocal = frame.TransformToLocal(tipWorld);
+                localImpulse = tipLocal - localPos;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         static ER_DeathBlastBehavior()
         {
             try { EnsureExtensionImpulseMethods(); }
@@ -749,10 +787,14 @@ namespace ExtremeRagdoll
                                 var del = TryCreateInstanceDelegate<Action<GameEntity, Vec3, Vec3>>(entEntry.M2);
                                 if (del != null) entEntry.D2 = del; else entEntry.D2Failed = true;
                             }
+                            Vec3 callImpulse = impulse;
+                            Vec3 callPos = pos;
+                            if (MethodRequiresLocalSpace(entEntry.M2))
+                                TryConvertWorldToLocal(ent, impulse, pos, out callImpulse, out callPos);
                             if (entEntry.D2 != null)
-                                entEntry.D2(ent, impulse, pos);
+                                entEntry.D2(ent, callImpulse, callPos);
                             else
-                                entEntry.M2.Invoke(ent, new object[] { impulse, pos });
+                                entEntry.M2.Invoke(ent, new object[] { callImpulse, callPos });
                             if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ent2");
                             ok = true;
                         }
@@ -815,12 +857,18 @@ namespace ExtremeRagdoll
                     }
                     else if (_extEntImp2 != null)
                     {
+                        Vec3 callImpulse = impulse;
+                        Vec3 callPos = pos;
+                        bool requiresLocal = MethodRequiresLocalSpace(_extEntImp2);
+                        if (requiresLocal)
+                            TryConvertWorldToLocal(ent, impulse, pos, out callImpulse, out callPos);
                         if (_extEntImp2Delegate != null)
-                            _extEntImp2Delegate(ent, impulse, pos);
+                            _extEntImp2Delegate(ent, callImpulse, callPos);
                         else
-                            _extEntImp2.Invoke(null, new object[] { ent, impulse, pos });
+                            _extEntImp2.Invoke(null, new object[] { ent, callImpulse, callPos });
                         ok = true;
-                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2");
+                        if (ER_Config.DebugLogging)
+                            ER_Log.Info(requiresLocal ? "IMPULSE_USE ext ent2 (local)" : "IMPULSE_USE ext ent2");
                     }
                     else if (_extEntImp1 != null)
                     {
