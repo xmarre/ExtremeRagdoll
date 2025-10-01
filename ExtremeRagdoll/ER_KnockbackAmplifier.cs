@@ -124,7 +124,7 @@ namespace ExtremeRagdoll
     internal static class ER_Amplify_RegisterBlowPatch
     {
         // --- HARD SAFETY CAPS (always enforced, even if MCM says 0) ---
-        private const float HARD_BASE_CAP           = 120_000f;
+        private const float HARD_BASE_CAP           = 80_000f;
         private const float HARD_ARROW_FLOOR_CAP    = 25_000f;
         private const float HARD_BIGSHOVE_FLOOR_CAP = 22_000f;
         private const float HARD_CORPSE_MAG_CAP     = 30_000f;
@@ -404,8 +404,12 @@ namespace ExtremeRagdoll
 
             bool respectBlow = ER_Config.RespectEngineBlowFlags;
 
-            if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f && blow.SwingDirection.LengthSquared <= 1e-6f)
-                blow.SwingDirection = dir;
+            if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f)
+            {
+                // Mostly planar. Final vertical clamp happens in PrepDir/ClampVertical.
+                var flat = ER_DeathBlastBehavior.PrepDir(dir, 0.98f, 0.10f);
+                blow.SwingDirection = flat;
+            }
 
             if (!respectBlow)
             {
@@ -417,7 +421,7 @@ namespace ExtremeRagdoll
 
                     // lethal magnitude (reduced missile weight + hard cap)
                     float mult    = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
-                    float desired = (15000f + blow.InflictedDamage * 600f + missileSpeed * 20f) * mult;
+                    float desired = (12000f + blow.InflictedDamage * 350f + missileSpeed * 8f) * mult;
                     desired       = Cap(desired, ER_Config.MaxBlowBaseMagnitude, HARD_BASE_CAP);
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {

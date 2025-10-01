@@ -94,7 +94,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Horse Ram Knockdown Threshold", 0f, 500_000_000f, "0.0",
             Order = 111, RequireRestart = false)]
-        public float HorseRamKnockDownThreshold { get; set; } = 12_000f;
+        public float HorseRamKnockDownThreshold { get; set; } = 9_000f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Missile Speed For Push", 0f, 1_000f, "0.0",
@@ -144,7 +144,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 25f, 500_000f, "0.0",
             Order = 121, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 25f;
+        public float CorpseImpulseMinimum { get; set; } = 40f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
