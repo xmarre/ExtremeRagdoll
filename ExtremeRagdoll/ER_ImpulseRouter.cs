@@ -209,7 +209,7 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool ShouldLog(float now, float minDelta = 0.25f)
+        private static bool ShouldLog(float now, float minDelta = 0.05f)
         {
             if (now < _lastImpulseLog)
                 _lastImpulseLog = now - minDelta;
