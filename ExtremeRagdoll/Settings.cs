@@ -119,12 +119,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Z Clamp Above", 0f, 1.0f, "0.000",
             Order = 116, RequireRestart = false)]
-        public float CorpseLaunchZClampAbove { get; set; } = 0.18f;
+        public float CorpseLaunchZClampAbove { get; set; } = 0.08f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
             Order = 117, RequireRestart = false)]
-        public float CorpseLaunchContactHeight { get; set; } = 0.35f;
+        public float CorpseLaunchContactHeight { get; set; } = 0.12f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
@@ -144,7 +144,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 25f, 500_000f, "0.0",
             Order = 121, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 40f;
+        public float CorpseImpulseMinimum { get; set; } = 400f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
@@ -154,7 +154,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 123, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.22f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.12f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
