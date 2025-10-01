@@ -150,7 +150,7 @@ namespace ExtremeRagdoll
                 {
                     try
                     {
-                        if (ER_Space.TryWorldToLocal(skel, worldImpulse, worldPos, out var impL, out var posL))
+                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL))
                         {
                             if (_dSk2 != null)
                                 _dSk2(skel, impL, posL);
@@ -207,21 +207,5 @@ namespace ExtremeRagdoll
             } catch { return false; }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static bool TryWorldToLocal(Skeleton skel, in Vec3 wImp, in Vec3 wPos, out Vec3 lImp, out Vec3 lPos)
-        {
-            lImp = wImp;
-            lPos = wPos;
-            if (skel == null)
-                return false;
-            try {
-                MatrixFrame frame;
-                try { frame = skel.GetFrame(); }
-                catch { frame = default; }
-                lPos = frame.TransformToLocal(wPos);
-                lImp = frame.TransformToLocal(wPos + wImp) - lPos;
-                return true;
-            } catch { return false; }
-        }
     }
 }

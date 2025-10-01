@@ -858,10 +858,6 @@ namespace ExtremeRagdoll
                 {
                     try { skel = agent?.AgentVisuals?.GetSkeleton(); } catch { }
                 }
-                if (skel == null)
-                {
-                    try { skel = ent?.GetSkeleton(); } catch { }
-                }
                 L.Ent  = ent;
                 L.Skel = skel;
                 bool agentMissing = agent == null || agent.Mission == null || agent.Mission != mission;
