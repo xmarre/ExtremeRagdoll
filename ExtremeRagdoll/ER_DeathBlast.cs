@@ -1764,9 +1764,9 @@ namespace ExtremeRagdoll
 
         public override void OnMissionTick(float dt)
         {
-            // Stop freezes when returning from Options.
-            if (TaleWorlds.Engine.MBCommon.IsPaused) return;
             var mission = Mission;
+            // Stop freezes when returning from Options.
+            if (IsPausedSafe(mission, dt)) return;
             if (mission == null || mission.Agents == null) return;
             float now = mission.CurrentTime;
             // Gentle ramp after UI resume
@@ -2380,6 +2380,51 @@ namespace ExtremeRagdoll
                         break;
                 }
             }
+        }
+
+        private static bool IsPausedSafe(Mission mission, float dt)
+        {
+            if (dt <= 1e-6f)
+                return true;
+
+            try
+            {
+                var pauseType = AccessTools.TypeByName("TaleWorlds.Engine.MBCommon");
+                if (pauseType != null)
+                {
+                    var pauseProperty = pauseType.GetProperty("IsPaused", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (pauseProperty != null && pauseProperty.PropertyType == typeof(bool))
+                    {
+                        var isPaused = pauseProperty.GetValue(null);
+                        if (isPaused is bool paused)
+                            return paused;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (mission != null)
+                {
+                    var missionType = mission.GetType();
+                    var pauseProperty = missionType.GetProperty("IsPaused", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                                         ?? missionType.GetProperty("Paused", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (pauseProperty != null && pauseProperty.PropertyType == typeof(bool))
+                    {
+                        var isPaused = pauseProperty.GetValue(mission);
+                        if (isPaused is bool paused)
+                            return paused;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
         }
 
         // Fire post-death fallback if MakeDead scheduling failed to consume the pending entry
