@@ -75,6 +75,9 @@ namespace ExtremeRagdoll
         private static volatile bool _extEnt1Unsafe, _extEnt2Unsafe, _extEnt3Unsafe;
         // tiny, cheap per-frame guard
         private float _lastTickT;
+        // cached pause lookup
+        private static volatile bool _pauseInitDone;
+        private static PropertyInfo _mbIsPausedPI;
 
         private static bool LooksImpulseName(string n, bool allowVelocityFallback, out bool velocityOnly)
         {
@@ -1849,10 +1852,11 @@ namespace ExtremeRagdoll
 
         public override void OnMissionTick(float dt)
         {
+            // cheapest exits first
+            if (dt <= 1e-6f) return;
             var mission = Mission;
-            // Stop freezes when returning from Options (and avoid zero-dt spins).
-            if (IsPausedSafe(mission, dt)) return;
-            if (mission == null || mission.Agents == null || dt <= 1e-6f) return;
+            if (mission == null || mission.Agents == null) return;
+            if (IsPausedFast()) return;
             float now = mission.CurrentTime;
             // Gentle ramp after UI resume
             if (_lastTickT == 0f) _lastTickT = now;
@@ -1877,6 +1881,8 @@ namespace ExtremeRagdoll
             float blastTtl = RecentBlastTtl;
             for (int i = _recent.Count - 1; i >= 0; i--)
                 if (now - _recent[i].T > blastTtl) _recent.RemoveAt(i);
+            int warmedThisTick = 0;
+            const int warmCapPerTick = 8;
             for (int i = _preLaunches.Count - 1; i >= 0; i--)
             {
                 var entry = _preLaunches[i];
@@ -1890,6 +1896,12 @@ namespace ExtremeRagdoll
                 var agent = entry.Agent;
                 if (!entry.Warmed)
                 {
+                    if (warmedThisTick >= warmCapPerTick)
+                    {
+                        entry.NextTry = now + preRetryDelay;
+                        _preLaunches[i] = entry;
+                        continue;
+                    }
                     GameEntity warmEnt = null;
                     Skeleton warmSkel = null;
                     try { warmEnt = agent?.AgentVisuals?.GetEntity(); } catch { }
@@ -1898,6 +1910,7 @@ namespace ExtremeRagdoll
                     entry.Warmed = true;
                     entry.NextTry = now + preRetryDelay;
                     _preLaunches[i] = entry;
+                    warmedThisTick++;
                     if (ER_Config.DebugLogging)
                         ER_Log.Info($"RAGDOLL_WARM id#{entry.AgentId} ent={(warmEnt != null)} skel={(warmSkel != null)}");
                     continue;
@@ -2467,48 +2480,29 @@ namespace ExtremeRagdoll
             }
         }
 
-        private static bool IsPausedSafe(Mission mission, float dt)
+        private static bool IsPausedFast()
         {
-            if (dt <= 1e-6f)
-                return true;
-
+            if (!_pauseInitDone)
+            {
+                try
+                {
+                    var t = AccessTools.TypeByName("TaleWorlds.Engine.MBCommon");
+                    _mbIsPausedPI = t?.GetProperty("IsPaused", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                }
+                catch
+                {
+                    // one-time failure is fine; fall back to null.
+                }
+                _pauseInitDone = true;
+            }
             try
             {
-                var pauseType = AccessTools.TypeByName("TaleWorlds.Engine.MBCommon");
-                if (pauseType != null)
-                {
-                    var pauseProperty = pauseType.GetProperty("IsPaused", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                    if (pauseProperty != null && pauseProperty.PropertyType == typeof(bool))
-                    {
-                        var isPaused = pauseProperty.GetValue(null);
-                        if (isPaused is bool paused)
-                            return paused;
-                    }
-                }
+                if (_mbIsPausedPI != null)
+                    return (bool)_mbIsPausedPI.GetValue(null);
             }
             catch
             {
             }
-
-            try
-            {
-                if (mission != null)
-                {
-                    var missionType = mission.GetType();
-                    var pauseProperty = missionType.GetProperty("IsPaused", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                                         ?? missionType.GetProperty("Paused", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    if (pauseProperty != null && pauseProperty.PropertyType == typeof(bool))
-                    {
-                        var isPaused = pauseProperty.GetValue(mission);
-                        if (isPaused is bool paused)
-                            return paused;
-                    }
-                }
-            }
-            catch
-            {
-            }
-
             return false;
         }
 
