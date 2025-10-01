@@ -8,6 +8,7 @@ using TaleWorlds.MountAndBlade;
 using System.Reflection;           // reflection fallback for impulse API
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace ExtremeRagdoll
@@ -70,6 +71,9 @@ namespace ExtremeRagdoll
         private static Func<GameEntity, bool> _isDynamicBodyAccessor;
         private static bool _dynamicBodyChecked;
         private static float CorpseLaunchMaxUpFrac => ER_Config.CorpseLaunchMaxUpFraction;
+        // circuit breakers for crashy extension routes
+        private static volatile bool _extEnt1Unsafe, _extEnt2Unsafe, _extEnt3Unsafe;
+        // tiny, cheap per-frame guard
         private float _lastTickT;
 
         private static bool LooksImpulseName(string n, bool allowVelocityFallback, out bool velocityOnly)
@@ -716,6 +720,72 @@ namespace ExtremeRagdoll
             return "agent#?";
         }
 
+        private static bool EntityLooksDynamic(GameEntity ent)
+        {
+            if (ent == null)
+                return false;
+            try
+            {
+                var bf = ent.BodyFlag.ToString();
+                if (!string.IsNullOrEmpty(bf) && (bf.Contains("Dynamic") || bf.Contains("DynamicBody")))
+                    return true;
+            }
+            catch
+            {
+            }
+            try
+            {
+                var pdf = ent.PhysicsDescBodyFlag.ToString();
+                if (!string.IsNullOrEmpty(pdf) && pdf.Contains("Dynamic"))
+                    return true;
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        private static bool EntityAabbSane(GameEntity ent)
+        {
+            if (ent == null)
+                return false;
+            try
+            {
+                var mn = ent.GetPhysicsBoundingBoxMin();
+                var mx = ent.GetPhysicsBoundingBoxMax();
+                if (!Vec3IsFinite(mn) || !Vec3IsFinite(mx))
+                    return false;
+                // reject wild/zero volumes
+                if (MathF.Abs(mx.x) > 1e5f || MathF.Abs(mx.y) > 1e5f || MathF.Abs(mx.z) > 1e5f)
+                    return false;
+                if (mx.x <= mn.x || mx.y <= mn.y || mx.z <= mn.z)
+                    return false;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool CanUseEntityExt(GameEntity ent)
+            => ent != null && EntityLooksDynamic(ent) && EntityAabbSane(ent);
+
+        private static void MarkExtUnsafe(int which, Exception ex)
+        {
+            if (ex is AccessViolationException)
+            {
+                if (which == 1)
+                    _extEnt1Unsafe = true;
+                else if (which == 2)
+                    _extEnt2Unsafe = true;
+                else if (which == 3)
+                    _extEnt3Unsafe = true;
+                ER_Log.Info($"IMPULSE_DISABLE ext ent{which} after {ex.GetType().Name}");
+            }
+        }
+
         private static void DumpPhysicsMembers(GameEntity ent, string tag)
         {
             if (ent == null) return;
@@ -901,92 +971,106 @@ namespace ExtremeRagdoll
             if (!ok && ent != null)
             {
                 EnsureRagdollReady();
-                try { WarmRagdoll(ent, skel); } catch { }
                 EnsureExtensionImpulseMethods();
+                bool canUse = CanUseEntityExt(ent);
                 if (_extEntImp3 != null && !ok)
                 {
                     try
                     {
-                        bool local = MethodRequiresLocalSpace(_extEntImp3);
-                        var vImp = impulse; var vPos = pos;
-                        if (!local || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
+                        if (!_extEnt3Unsafe && canUse)
                         {
-                            if (_extEntImp3Delegate != null) _extEntImp3Delegate(ent, vImp, vPos, local);
-                            else _extEntImp3.Invoke(null, new object[] { ent, vImp, vPos, local });
-                            ok = true;
-                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3 ApplyImpulseToDynamicBody(entity,Vec3,Vec3)");
-                        }
-                        else
-                        {
-                            // ext ent3 fallback to world-space
-                            if (ER_Config.DebugLogging)
-                                ER_Log.Info("IMPULSE_SKIP ext ent3: local convert failed");
-                            try
+                            bool local = MethodRequiresLocalSpace(_extEntImp3);
+                            var vImp = impulse; var vPos = pos;
+                            if (!local || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
                             {
-                                if (_extEntImp3Delegate != null) _extEntImp3Delegate(ent, impulse, pos, false);
-                                else _extEntImp3.Invoke(null, new object[] { ent, impulse, pos, false });
+                                if (_extEntImp3Delegate != null) _extEntImp3Delegate(ent, vImp, vPos, local);
+                                else _extEntImp3.Invoke(null, new object[] { ent, vImp, vPos, local });
                                 ok = true;
-                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3 (world-space fallback)");
+                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3 ApplyImpulseToDynamicBody(entity,Vec3,Vec3)");
                             }
-                            catch (Exception ex)
+                            else
                             {
-                                if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent3 world: {ex.GetType().Name}: {ex.Message}");
+                                // ext ent3 fallback to world-space
+                                if (ER_Config.DebugLogging)
+                                    ER_Log.Info("IMPULSE_SKIP ext ent3: local convert failed");
+                                try
+                                {
+                                    if (_extEntImp3Delegate != null) _extEntImp3Delegate(ent, impulse, pos, false);
+                                    else _extEntImp3.Invoke(null, new object[] { ent, impulse, pos, false });
+                                    ok = true;
+                                    if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3 (world-space fallback)");
+                                }
+                                catch (Exception ex)
+                                {
+                                    if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent3 world: {ex.GetType().Name}: {ex.Message}");
+                                    MarkExtUnsafe(3, ex);
+                                }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
                         if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent3: {ex.GetType().Name}: {ex.Message}");
+                        MarkExtUnsafe(3, ex);
                     }
                 }
                 if (_extEntImp2 != null && !ok)
                 {
                     try
                     {
-                        bool local = MethodRequiresLocalSpace(_extEntImp2);
-                        var vImp = impulse; var vPos = pos;
-                        if (!local || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
+                        if (!_extEnt2Unsafe && canUse)
                         {
-                            if (_extEntImp2Delegate != null) _extEntImp2Delegate(ent, vImp, vPos);
-                            else _extEntImp2.Invoke(null, new object[] { ent, vImp, vPos });
-                            ok = true;
-                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2 ApplyLocalImpulseToDynamicBody(entity,Vec3,Vec3)");
-                        }
-                        else
-                        {
-                            // ext ent2 fallback to world-space
-                            if (ER_Config.DebugLogging)
-                                ER_Log.Info("IMPULSE_SKIP ext ent2: local convert failed");
-                            try
+                            bool local = MethodRequiresLocalSpace(_extEntImp2);
+                            var vImp = impulse; var vPos = pos;
+                            if (!local || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
                             {
-                                if (_extEntImp2Delegate != null) _extEntImp2Delegate(ent, impulse, pos);
-                                else _extEntImp2.Invoke(null, new object[] { ent, impulse, pos });
+                                if (_extEntImp2Delegate != null) _extEntImp2Delegate(ent, vImp, vPos);
+                                else _extEntImp2.Invoke(null, new object[] { ent, vImp, vPos });
                                 ok = true;
-                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2 (world-space fallback)");
+                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2 ApplyLocalImpulseToDynamicBody(entity,Vec3,Vec3)");
                             }
-                            catch (Exception ex)
+                            else
                             {
-                                if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent2 world: {ex.GetType().Name}: {ex.Message}");
+                                // ext ent2 fallback to world-space
+                                if (ER_Config.DebugLogging)
+                                    ER_Log.Info("IMPULSE_SKIP ext ent2: local convert failed");
+                                try
+                                {
+                                    if (_extEntImp2Delegate != null) _extEntImp2Delegate(ent, impulse, pos);
+                                    else _extEntImp2.Invoke(null, new object[] { ent, impulse, pos });
+                                    ok = true;
+                                    if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2 (world-space fallback)");
+                                }
+                                catch (Exception ex)
+                                {
+                                    if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent2 world: {ex.GetType().Name}: {ex.Message}");
+                                    MarkExtUnsafe(2, ex);
+                                }
                             }
                         }
                     }
                     catch (Exception ex)
                     {
                         if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent2: {ex.GetType().Name}: {ex.Message}");
+                        MarkExtUnsafe(2, ex);
                     }
                 }
                 if (_extEntImp1 != null && !ok)
                 {
                     try
                     {
-                        if (_extEntImp1Delegate != null) _extEntImp1Delegate(ent, impulse);
-                        else _extEntImp1.Invoke(null, new object[] { ent, impulse });
-                        ok = true;
-                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent1 ApplyForceToDynamicBody(entity,Vec3)");
+                        if (!_extEnt1Unsafe && canUse)
+                        {
+                            if (_extEntImp1Delegate != null) _extEntImp1Delegate(ent, impulse);
+                            else _extEntImp1.Invoke(null, new object[] { ent, impulse });
+                            ok = true;
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent1 ApplyForceToDynamicBody(entity,Vec3)");
+                        }
                     }
                     catch (Exception ex)
                     {
                         if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent1: {ex.GetType().Name}: {ex.Message}");
+                        MarkExtUnsafe(1, ex);
                     }
                 }
             }
@@ -1757,7 +1841,8 @@ namespace ExtremeRagdoll
         {
             try { ent?.ActivateRagdoll(); } catch { }
             try { skel?.ActivateRagdoll(); } catch { }
-            try { ent?.SetEnforcedMaximumLodLevel(0); } catch { }
+            // For perf, don't force LOD=0 globally; it’s heavy on crowds.
+            // try { ent?.SetEnforcedMaximumLodLevel(0); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
             // Do NOT heavy-tick here; just ensure bones exist and are dynamic.
         }
@@ -1765,9 +1850,9 @@ namespace ExtremeRagdoll
         public override void OnMissionTick(float dt)
         {
             var mission = Mission;
-            // Stop freezes when returning from Options.
+            // Stop freezes when returning from Options (and avoid zero-dt spins).
             if (IsPausedSafe(mission, dt)) return;
-            if (mission == null || mission.Agents == null) return;
+            if (mission == null || mission.Agents == null || dt <= 1e-6f) return;
             float now = mission.CurrentTime;
             // Gentle ramp after UI resume
             if (_lastTickT == 0f) _lastTickT = now;
