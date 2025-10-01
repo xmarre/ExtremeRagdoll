@@ -26,6 +26,8 @@ namespace ExtremeRagdoll
             try
             {
                 _ = Settings.Instance; // ensure discovery at main menu when available
+                Settings.Instance.DebugLogging = true;
+                ER_Log.Info("Debug logging forced ON at menu");
             }
             catch
             {

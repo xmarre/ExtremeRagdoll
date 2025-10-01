@@ -70,6 +70,7 @@ namespace ExtremeRagdoll
         private static Func<GameEntity, bool> _isDynamicBodyAccessor;
         private static bool _dynamicBodyChecked;
         private static float CorpseLaunchMaxUpFrac => ER_Config.CorpseLaunchMaxUpFraction;
+        private float _lastTickT;
 
         private static bool LooksImpulseName(string n, bool allowVelocityFallback, out bool velocityOnly)
         {
@@ -715,6 +716,32 @@ namespace ExtremeRagdoll
             return "agent#?";
         }
 
+        private static void DumpPhysicsMembers(GameEntity ent, string tag)
+        {
+            if (ent == null) return;
+            try { var v = ent.BodyFlag; ER_Log.Info($"IMPULSE_VAL {tag}.BodyFlag={v}"); } catch { }
+            try { var v = ent.PhysicsDescBodyFlag; ER_Log.Info($"IMPULSE_VAL {tag}.PhysicsDescBodyFlag={v}"); } catch { }
+            try
+            {
+                var mn = ent.GetPhysicsBoundingBoxMin();
+                var mx = ent.GetPhysicsBoundingBoxMax();
+                ER_Log.Info($"IMPULSE_VAL {tag}.AABB=({mn.x:F3},{mn.y:F3},{mn.z:F3})..({mx.x:F3},{mx.y:F3},{mx.z:F3})");
+            }
+            catch { }
+            try
+            {
+                var f = ent.GetGlobalFrame();
+                ER_Log.Info($"IMPULSE_VAL {tag}.Pos=({f.origin.x:F3},{f.origin.y:F3},{f.origin.z:F3})");
+            }
+            catch { }
+        }
+
+        private static void DumpPhysicsMembers(Skeleton skel, string tag)
+        {
+            if (skel == null) return;
+            try { var s = skel.GetCurrentRagdollState(); ER_Log.Info($"IMPULSE_VAL {tag}.RagdollState={s}"); } catch { }
+        }
+
         private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos, int agentId = -1)
         {
             if (!Vec3IsFinite(impulse) || !Vec3IsFinite(pos) || NearZero(impulse))
@@ -874,60 +901,93 @@ namespace ExtremeRagdoll
             if (!ok && ent != null)
             {
                 EnsureRagdollReady();
+                try { WarmRagdoll(ent, skel); } catch { }
                 EnsureExtensionImpulseMethods();
-                // Try ALL known extension paths in order. Do not short-circuit on failure.
                 if (_extEntImp3 != null && !ok)
                 {
                     try
                     {
-                        bool requiresLocal3 = MethodRequiresLocalSpace(_extEntImp3);
+                        bool local = MethodRequiresLocalSpace(_extEntImp3);
                         var vImp = impulse; var vPos = pos;
-                        if (!requiresLocal3 || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
+                        if (!local || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
                         {
-                            bool local = requiresLocal3;
-                            if (_extEntImp3Delegate != null)
-                                _extEntImp3Delegate(ent, vImp, vPos, local);
-                            else
-                                _extEntImp3.Invoke(null, new object[] { ent, vImp, vPos, local });
+                            if (_extEntImp3Delegate != null) _extEntImp3Delegate(ent, vImp, vPos, local);
+                            else _extEntImp3.Invoke(null, new object[] { ent, vImp, vPos, local });
                             ok = true;
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3 ApplyImpulseToDynamicBody(entity,Vec3,Vec3)");
+                        }
+                        else
+                        {
+                            // ext ent3 fallback to world-space
                             if (ER_Config.DebugLogging)
-                                ER_Log.Info("IMPULSE_USE ext ent3 ApplyImpulseToDynamicBody(entity,Vec3,Vec3)");
+                                ER_Log.Info("IMPULSE_SKIP ext ent3: local convert failed");
+                            try
+                            {
+                                if (_extEntImp3Delegate != null) _extEntImp3Delegate(ent, impulse, pos, false);
+                                else _extEntImp3.Invoke(null, new object[] { ent, impulse, pos, false });
+                                ok = true;
+                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3 (world-space fallback)");
+                            }
+                            catch (Exception ex)
+                            {
+                                if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent3 world: {ex.GetType().Name}: {ex.Message}");
+                            }
                         }
                     }
-                    catch { /* try next */ }
+                    catch (Exception ex)
+                    {
+                        if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent3: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
                 if (_extEntImp2 != null && !ok)
                 {
                     try
                     {
-                        bool requiresLocal2 = MethodRequiresLocalSpace(_extEntImp2);
+                        bool local = MethodRequiresLocalSpace(_extEntImp2);
                         var vImp = impulse; var vPos = pos;
-                        if (!requiresLocal2 || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
+                        if (!local || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
                         {
-                            if (_extEntImp2Delegate != null)
-                                _extEntImp2Delegate(ent, vImp, vPos);
-                            else
-                                _extEntImp2.Invoke(null, new object[] { ent, vImp, vPos });
+                            if (_extEntImp2Delegate != null) _extEntImp2Delegate(ent, vImp, vPos);
+                            else _extEntImp2.Invoke(null, new object[] { ent, vImp, vPos });
                             ok = true;
+                            if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2 ApplyLocalImpulseToDynamicBody(entity,Vec3,Vec3)");
+                        }
+                        else
+                        {
+                            // ext ent2 fallback to world-space
                             if (ER_Config.DebugLogging)
-                                ER_Log.Info("IMPULSE_USE ext ent2 ApplyLocalImpulseToDynamicBody(entity,Vec3,Vec3)");
+                                ER_Log.Info("IMPULSE_SKIP ext ent2: local convert failed");
+                            try
+                            {
+                                if (_extEntImp2Delegate != null) _extEntImp2Delegate(ent, impulse, pos);
+                                else _extEntImp2.Invoke(null, new object[] { ent, impulse, pos });
+                                ok = true;
+                                if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent2 (world-space fallback)");
+                            }
+                            catch (Exception ex)
+                            {
+                                if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent2 world: {ex.GetType().Name}: {ex.Message}");
+                            }
                         }
                     }
-                    catch { /* try next */ }
+                    catch (Exception ex)
+                    {
+                        if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent2: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
                 if (_extEntImp1 != null && !ok)
                 {
                     try
                     {
-                        if (_extEntImp1Delegate != null)
-                            _extEntImp1Delegate(ent, impulse);
-                        else
-                            _extEntImp1.Invoke(null, new object[] { ent, impulse });
+                        if (_extEntImp1Delegate != null) _extEntImp1Delegate(ent, impulse);
+                        else _extEntImp1.Invoke(null, new object[] { ent, impulse });
                         ok = true;
-                        if (ER_Config.DebugLogging)
-                            ER_Log.Info("IMPULSE_USE ext ent1 ApplyForceToDynamicBody(entity,Vec3)");
+                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent1 ApplyForceToDynamicBody(entity,Vec3)");
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        if (ER_Config.DebugLogging) ER_Log.Info($"IMPULSE_FAIL ext ent1: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
             }
             // --- Skeleton route (ragdoll bones) ---
@@ -1267,7 +1327,7 @@ namespace ExtremeRagdoll
                 if (!ok && ER_Config.DebugLogging && !_deepFieldLog)
                 {
                     _deepFieldLog = true;
-                    void DumpPhysicsMembers(object owner, string tag)
+                    void DumpPhysicsMemberListing(object owner, string tag)
                     {
                         if (owner == null)
                             return;
@@ -1320,10 +1380,14 @@ namespace ExtremeRagdoll
                         }
                     }
 
+                    DumpPhysicsMemberListing(ent, "ent");
+                    DumpPhysicsMemberListing(skel, "skel");
                     DumpPhysicsMembers(ent, "ent");
                     DumpPhysicsMembers(skel, "skel");
                 }
             }
+            if (!ok && ER_Config.DebugLogging)
+                ER_Log.Info("IMPULSE_END: no entity/skeleton path succeeded");
             return ok;
         }
 
@@ -1450,7 +1514,7 @@ namespace ExtremeRagdoll
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
         private struct Launch { public Agent A; public GameEntity Ent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public Vec3 P0; public Vec3 V0; }
-        private struct PreLaunch { public Agent Agent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; }
+        private struct PreLaunch { public Agent Agent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; public bool Warmed; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
         private readonly List<PreLaunch> _preLaunches = new List<PreLaunch>();
@@ -1615,6 +1679,7 @@ namespace ExtremeRagdoll
                 Pos     = contact,
                 NextTry = now + ApplyDelayJitter(0.01f),
                 Tries   = Math.Max(0, ER_Config.CorpsePrelaunchTries),
+                Warmed  = false,
             };
 
             for (int i = 0; i < _preLaunches.Count; i++)
@@ -1688,12 +1753,28 @@ namespace ExtremeRagdoll
             IncQueue(agentIndex);
         }
 
+        private static void WarmRagdoll(GameEntity ent, Skeleton skel)
+        {
+            try { ent?.ActivateRagdoll(); } catch { }
+            try { skel?.ActivateRagdoll(); } catch { }
+            try { ent?.SetEnforcedMaximumLodLevel(0); } catch { }
+            try { skel?.ForceUpdateBoneFrames(); } catch { }
+            // Do NOT heavy-tick here; just ensure bones exist and are dynamic.
+        }
+
         public override void OnMissionTick(float dt)
         {
+            // Stop freezes when returning from Options.
+            if (TaleWorlds.Engine.MBCommon.IsPaused) return;
             var mission = Mission;
             if (mission == null || mission.Agents == null) return;
             float now = mission.CurrentTime;
+            // Gentle ramp after UI resume
+            if (_lastTickT == 0f) _lastTickT = now;
+            bool recentlyResumed = (now - _lastTickT) < 1.0f;
+            _lastTickT = now;
             int maxLaunchesPerTick = ER_Config.CorpseLaunchesPerTickCap;
+            if (recentlyResumed && maxLaunchesPerTick > 16) maxLaunchesPerTick = 16;
             bool limitLaunches = maxLaunchesPerTick > 0;
             int launchesWorked = 0;
             float tookScale = ER_Config.CorpseLaunchVelocityScaleThreshold;
@@ -1722,6 +1803,20 @@ namespace ExtremeRagdoll
                 if (now < entry.NextTry)
                     continue;
                 var agent = entry.Agent;
+                if (!entry.Warmed)
+                {
+                    GameEntity warmEnt = null;
+                    Skeleton warmSkel = null;
+                    try { warmEnt = agent?.AgentVisuals?.GetEntity(); } catch { }
+                    try { warmSkel = agent?.AgentVisuals?.GetSkeleton(); } catch { }
+                    WarmRagdoll(warmEnt, warmSkel);
+                    entry.Warmed = true;
+                    entry.NextTry = now + preRetryDelay;
+                    _preLaunches[i] = entry;
+                    if (ER_Config.DebugLogging)
+                        ER_Log.Info($"RAGDOLL_WARM id#{entry.AgentId} ent={(warmEnt != null)} skel={(warmSkel != null)}");
+                    continue;
+                }
                 bool remove = false;
                 if (agent == null || agent.Mission == null || agent.Mission != mission)
                 {
