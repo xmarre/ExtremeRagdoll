@@ -850,13 +850,17 @@ namespace ExtremeRagdoll
                 L.Dir = dir;
                 GameEntity ent = L.Ent;
                 Skeleton skel = L.Skel;
-                if (ent == null)
+                var visualsCurrent = agent?.AgentVisuals;
+                if (visualsCurrent != null)
                 {
-                    try { ent = agent?.AgentVisuals?.GetEntity(); } catch { }
-                }
-                if (skel == null)
-                {
-                    try { skel = agent?.AgentVisuals?.GetSkeleton(); } catch { }
+                    if (ent == null)
+                    {
+                        try { ent = visualsCurrent.GetEntity(); } catch { }
+                    }
+                    if (skel == null)
+                    {
+                        try { skel = visualsCurrent.GetSkeleton(); } catch { }
+                    }
                 }
                 L.Ent  = ent;
                 L.Skel = skel;
@@ -946,7 +950,8 @@ namespace ExtremeRagdoll
                     continue;
                 }
                 // Ragdoll/Visuals kommen oft 1–2 Ticks verspätet. Requeue statt Drop.
-                if (agent.AgentVisuals == null)
+                visualsCurrent = agent.AgentVisuals;
+                if (visualsCurrent == null)
                 {
                     if (!AgentRemoved(agent) && L.Tries > 0)
                     {
@@ -966,12 +971,12 @@ namespace ExtremeRagdoll
                     DecOnce();
                     continue;
                 }
-                if (agent.AgentVisuals != null)
+                if (visualsCurrent != null)
                 {
                     try
                     {
-                        var ent2 = agent.AgentVisuals.GetEntity();
-                        skel = agent.AgentVisuals.GetSkeleton();
+                        var ent2 = visualsCurrent.GetEntity();
+                        skel = visualsCurrent.GetSkeleton();
                         if (ent2 != null || skel != null)
                         {
                             float impMag2 = ToPhysicsImpulse(mag);
@@ -1033,8 +1038,8 @@ namespace ExtremeRagdoll
                     // Fallback: directly impulse ragdoll physics if RegisterBlow had no effect
                     try
                     {
-                        var entLocal = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetEntity() : null;
-                        var skelLocal = (agent?.AgentVisuals != null) ? agent.AgentVisuals.GetSkeleton() : null;
+                        var entLocal = visualsCurrent?.GetEntity();
+                        var skelLocal = visualsCurrent?.GetSkeleton();
                         float impMag = ToPhysicsImpulse(mag);
                         if ((entLocal != null || skelLocal != null) && impMag > 0f)
                         {
@@ -1288,8 +1293,9 @@ namespace ExtremeRagdoll
 
             try
             {
-                var ent  = affected.AgentVisuals?.GetEntity();
-                var skel = affected.AgentVisuals?.GetSkeleton();
+                var visuals = affected.AgentVisuals;
+                var ent  = visuals?.GetEntity();
+                var skel = visuals?.GetSkeleton();
                 if (ent != null || skel != null)
                 {
                     var contactImmediate = hitPos;

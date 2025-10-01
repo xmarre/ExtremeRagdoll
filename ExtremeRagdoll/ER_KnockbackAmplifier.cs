@@ -47,21 +47,21 @@ namespace ExtremeRagdoll
                 return threshold;
             }
         }
-        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 0.5f);
+        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 400f);
         public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 1_500f);
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
-        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.35f);
+        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.12f);
         public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.02f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
-        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.18f);
+        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.08f);
         public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
         public static float CorpseLaunchMaxUpFraction
         {
             get
             {
-                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.22f;
+                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.12f;
                 if (frac < 0f) return 0f;
                 if (frac > 1f) return 1f;
                 return frac;
@@ -381,7 +381,9 @@ namespace ExtremeRagdoll
             // ensure flags so lethal always ragdolls; missiles shove
             if (lethal)
             {
-                blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown;
+                blow.BlowFlag |= BlowFlags.KnockBack;
+                if (!__instance.HasMount)
+                    blow.BlowFlag |= BlowFlags.KnockDown;
                 if (blow.SwingDirection.LengthSquared <= 1e-6f)
                     blow.SwingDirection = dir;
             }
@@ -407,7 +409,7 @@ namespace ExtremeRagdoll
             if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f)
             {
                 // Mostly planar. Final vertical clamp happens in PrepDir/ClampVertical.
-                var flat = ER_DeathBlastBehavior.PrepDir(dir, 0.98f, 0.10f);
+                var flat = ER_DeathBlastBehavior.PrepDir(dir, 0.96f, 0.06f);
                 blow.SwingDirection = flat;
             }
 
@@ -415,14 +417,18 @@ namespace ExtremeRagdoll
             {
                 if (lethal)
                 {
-                    // lethal: let engine ragdoll in our direction
+                    // lethal must ragdoll
                     if (blow.SwingDirection.LengthSquared <= 1e-6f)
                         blow.SwingDirection = dir;
+                    blow.BlowFlag |= BlowFlags.KnockBack;
+                    if (!__instance.HasMount)
+                        blow.BlowFlag |= BlowFlags.KnockDown;
 
                     // lethal magnitude (reduced missile weight + hard cap)
+                    // Safe lethal boost (low) to avoid vertical pop while impulses are validated
                     float mult    = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
-                    float desired = (12000f + blow.InflictedDamage * 350f + missileSpeed * 8f) * mult;
-                    desired       = Cap(desired, ER_Config.MaxBlowBaseMagnitude, HARD_BASE_CAP);
+                    float desired = (6000f + blow.InflictedDamage * 150f + missileSpeed * 4f) * mult;
+                    desired       = Cap(desired, ER_Config.MaxBlowBaseMagnitude, 20000f);
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {
                         if (ER_Config.DebugLogging)
@@ -443,8 +449,8 @@ namespace ExtremeRagdoll
             {
                 if (missileSpeed > 0f && (!missileBlocked || allowBlockedPush))
                 {
-                    float floor = 6000f + missileSpeed * 60f;
-                    floor = Cap(floor, ER_Config.MaxBlowBaseMagnitude, HARD_ARROW_FLOOR_CAP);
+                    float floor = 3000f + missileSpeed * 25f;
+                    floor = Cap(floor, ER_Config.MaxBlowBaseMagnitude, 15000f);
                     if (ER_Config.MaxNonLethalKnockback > 0f) floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
                     float origBase = blow.BaseMagnitude;
                     if (origBase + 500f < floor)
