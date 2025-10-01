@@ -156,6 +156,11 @@ namespace ExtremeRagdoll
             var sk = typeof(Skeleton);
             _sk2 = sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
                                 new[] { typeof(Vec3), typeof(Vec3) }, null);
+            if (_sk2 == null)
+            {
+                _sk2 = sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                    new[] { typeof(Vec3), typeof(Vec3) }, null);
+            }
             if (_sk2 != null)
             {
                 try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
@@ -163,10 +168,23 @@ namespace ExtremeRagdoll
             }
             _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
                                 new[] { typeof(Vec3) }, null);
+            if (_sk1 == null)
+            {
+                _sk1 = sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                    new[] { typeof(Vec3) }, null);
+            }
             if (_sk1 != null)
             {
                 try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
                 catch { _dSk1 = null; }
+            }
+
+            if (ER_Config.DebugLogging)
+            {
+                ER_Log.Info($"IMP_BIND ent3:{_ent3!=null}|{_dEnt3!=null} inst:{_ent3Inst!=null}|{_dEnt3Inst!=null} " +
+                            $"ent2:{_ent2!=null}|{_dEnt2!=null} inst:{_ent2Inst!=null}|{_dEnt2Inst!=null} " +
+                            $"ent1:{_ent1!=null}|{_dEnt1!=null} inst:{_ent1Inst!=null}|{_dEnt1Inst!=null} " +
+                            $"sk2:{_sk2!=null}|{_dSk2!=null} sk1:{_sk1!=null}|{_dSk1!=null} isDyn:{_isDyn!=null}");
             }
 
             _ensured = true;
@@ -229,6 +247,40 @@ namespace ExtremeRagdoll
                    !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryResolveContact(GameEntity ent, ref Vec3 contact)
+        {
+            if (IsValidVec(contact) && contact.LengthSquared >= 1e-10f)
+                return true;
+
+            if (ent != null)
+            {
+                try
+                {
+                    MatrixFrame frame;
+                    try { frame = ent.GetGlobalFrame(); }
+                    catch
+                    {
+                        try { frame = ent.GetFrame(); }
+                        catch { frame = default; }
+                    }
+                    var fallback = frame.origin;
+                    if (IsValidVec(fallback))
+                    {
+                        fallback.z += ER_Config.CorpseLaunchContactHeight;
+                        contact = fallback;
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // fall through to false
+                }
+            }
+
+            return false;
+        }
+
         public static bool TryImpulse(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos)
         {
             Ensure();
@@ -239,7 +291,9 @@ namespace ExtremeRagdoll
                 return false;
             }
 
-            if (!IsValidVec(worldPos))
+            var contact = worldPos;
+            bool haveContact = TryResolveContact(ent, ref contact);
+            if (!haveContact && skel == null)
             {
                 Log("IMPULSE_SKIP invalid contact");
                 return false;
@@ -252,11 +306,11 @@ namespace ExtremeRagdoll
             // Prefer skeleton paths before entity routes; corpses often retain non-dynamic entities
             if (skel != null)
             {
-                if (!_sk2Unsafe && (_dSk2 != null || _sk2 != null))
+                if (haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
                 {
                     try
                     {
-                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL))
+                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
                         {
                             if (_dSk2 != null)
                                 _dSk2(skel, impL, posL);
@@ -292,14 +346,14 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (canEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (haveContact && canEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
                     if (_dEnt3Inst != null)
-                        _dEnt3Inst(ent, worldImpulse, worldPos, false);
+                        _dEnt3Inst(ent, worldImpulse, contact, false);
                     else
-                        _ent3Inst.Invoke(ent, new object[] { worldImpulse, worldPos, false });
+                        _ent3Inst.Invoke(ent, new object[] { worldImpulse, contact, false });
                     Log("IMPULSE_USE inst ent3(false)");
                     return true;
                 }
@@ -308,11 +362,11 @@ namespace ExtremeRagdoll
                     LogFailure("inst ent3(false)", ex);
                     try
                     {
-                        var ok = ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL);
+                        var ok = ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL);
                         if (_dEnt3Inst != null)
-                            _dEnt3Inst(ent, ok ? impL : worldImpulse, ok ? posL : worldPos, true);
+                            _dEnt3Inst(ent, ok ? impL : worldImpulse, ok ? posL : contact, true);
                         else
-                            _ent3Inst.Invoke(ent, new object[] { ok ? impL : worldImpulse, ok ? posL : worldPos, true });
+                            _ent3Inst.Invoke(ent, new object[] { ok ? impL : worldImpulse, ok ? posL : contact, true });
                         Log("IMPULSE_USE inst ent3(true)");
                         return true;
                     }
@@ -324,14 +378,14 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (canEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (haveContact && canEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
                     if (_dEnt3 != null)
-                        _dEnt3(ent, worldImpulse, worldPos, false);
+                        _dEnt3(ent, worldImpulse, contact, false);
                     else
-                        _ent3.Invoke(null, new object[] { ent, worldImpulse, worldPos, false });
+                        _ent3.Invoke(null, new object[] { ent, worldImpulse, contact, false });
                     Log("IMPULSE_USE ext ent3(false)");
                     return true;
                 }
@@ -340,11 +394,11 @@ namespace ExtremeRagdoll
                     LogFailure("ext ent3(false)", ex);
                     try
                     {
-                        var ok = ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL);
+                        var ok = ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL);
                         if (_dEnt3 != null)
-                            _dEnt3(ent, ok ? impL : worldImpulse, ok ? posL : worldPos, true);
+                            _dEnt3(ent, ok ? impL : worldImpulse, ok ? posL : contact, true);
                         else
-                            _ent3.Invoke(null, new object[] { ent, ok ? impL : worldImpulse, ok ? posL : worldPos, true });
+                            _ent3.Invoke(null, new object[] { ent, ok ? impL : worldImpulse, ok ? posL : contact, true });
                         Log("IMPULSE_USE ext ent3(true)");
                         return true;
                     }
@@ -356,11 +410,11 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (canEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && canEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
-                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL))
+                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
                     {
                         if (_dEnt2Inst != null)
                             _dEnt2Inst(ent, impL, posL);
@@ -377,11 +431,11 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (canEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && canEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
-                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL))
+                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
                     {
                         if (_dEnt2 != null)
                             _dEnt2(ent, impL, posL);
@@ -436,11 +490,11 @@ namespace ExtremeRagdoll
 
             if (skel != null)
             {
-                if (!_sk2Unsafe && (_dSk2 != null || _sk2 != null))
+                if (haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
                 {
                     try
                     {
-                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL))
+                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
                         {
                             if (_dSk2 != null)
                                 _dSk2(skel, impL, posL);
