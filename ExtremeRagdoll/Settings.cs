@@ -19,7 +19,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("General")]
         [SettingPropertyBool("Debug Logging",
             Order = 1, RequireRestart = false)]
-        public bool DebugLogging { get; set; } = false;
+        public bool DebugLogging { get; set; } = true;
 
         [SettingPropertyGroup("General")]
         [SettingPropertyFloatingInteger("Death Blast Radius", 0f, 30f, "0.0",
@@ -142,9 +142,9 @@ namespace ExtremeRagdoll
         public int CorpseLaunchQueueCap { get; set; } = 3;
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
+        [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 25f, 500_000f, "0.0",
             Order = 121, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 0.5f;
+        public float CorpseImpulseMinimum { get; set; } = 25f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
