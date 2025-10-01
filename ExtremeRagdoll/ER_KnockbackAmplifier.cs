@@ -123,6 +123,13 @@ namespace ExtremeRagdoll
     [HarmonyPatch]
     internal static class ER_Amplify_RegisterBlowPatch
     {
+        // --- HARD SAFETY CAPS (always enforced, even if MCM says 0) ---
+        private const float HARD_BASE_CAP           = 120_000f;
+        private const float HARD_ARROW_FLOOR_CAP    = 25_000f;
+        private const float HARD_BIGSHOVE_FLOOR_CAP = 22_000f;
+        private const float HARD_CORPSE_MAG_CAP     = 30_000f;
+        private static float _lastAnyLog;
+
         internal struct PendingLaunch
         {
             public Vec3 dir;
@@ -134,7 +141,6 @@ namespace ExtremeRagdoll
         internal static readonly Dictionary<int, PendingLaunch> _pending =
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
-        // throttle BigShove logging per agent
         private static readonly Dictionary<int, float> _lastBigShoveLog = new Dictionary<int, float>();
         private static readonly FieldInfo MissileSpeedField = typeof(AttackCollisionData).GetField("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileSpeedProperty = typeof(AttackCollisionData).GetProperty("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -236,11 +242,17 @@ namespace ExtremeRagdoll
 
             return 0f;
         }
+        private static float Cap(float value, float settingCap, float hardCap)
+        {
+            float cap = settingCap > 0f ? MathF.Min(settingCap, hardCap) : hardCap;
+            return value > cap ? cap : value;
+        }
         internal static void ClearPending()
         {
             _pending.Clear();
             _lastScheduled.Clear();
             _lastBigShoveLog.Clear();
+            _lastAnyLog = 0f;
         }
 
         internal static bool TryTakePending(int agentId, out PendingLaunch pending)
@@ -370,7 +382,7 @@ namespace ExtremeRagdoll
             if (lethal)
             {
                 blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown;
-                if (blow.SwingDirection.LengthSquared < 1e-6f)
+                if (blow.SwingDirection.LengthSquared <= 1e-6f)
                     blow.SwingDirection = dir;
             }
             else if (missileSpeed > 0f)
@@ -392,7 +404,7 @@ namespace ExtremeRagdoll
 
             bool respectBlow = ER_Config.RespectEngineBlowFlags;
 
-            if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f && blow.SwingDirection.LengthSquared < 1e-6f)
+            if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f && blow.SwingDirection.LengthSquared <= 1e-6f)
                 blow.SwingDirection = dir;
 
             if (!respectBlow)
@@ -400,30 +412,26 @@ namespace ExtremeRagdoll
                 if (lethal)
                 {
                     // lethal: let engine ragdoll in our direction
-                    if (blow.SwingDirection.LengthSquared < 1e-6f)
+                    if (blow.SwingDirection.LengthSquared <= 1e-6f)
                         blow.SwingDirection = dir;
 
-                    // lethal magnitude (SAFE CAP even if setting is 0)
+                    // lethal magnitude (reduced missile weight + hard cap)
                     float mult    = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
-                    float desired = (30000f + blow.InflictedDamage * 400f + missileSpeed * 200f) * mult;
-                    float maxBaseCap = ER_Config.MaxBlowBaseMagnitude <= 0f ? 400_000f : ER_Config.MaxBlowBaseMagnitude;
-                    if (desired > maxBaseCap)
-                        desired = maxBaseCap;
+                    float desired = (15000f + blow.InflictedDamage * 600f + missileSpeed * 20f) * mult;
+                    desired       = Cap(desired, ER_Config.MaxBlowBaseMagnitude, HARD_BASE_CAP);
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {
-                        float origBase = blow.BaseMagnitude;
                         if (ER_Config.DebugLogging)
-                            ER_Log.Info($"[ER] LethalBoost baseMag {origBase:0} -> {desired:0}  dmg={blow.InflictedDamage:0}  v={missileSpeed:0.0}");
+                        {
+                            float now = __instance.Mission?.CurrentTime ?? 0f;
+                            if (now - _lastAnyLog > 0.5f)
+                            {
+                                _lastAnyLog = now;
+                                ER_Log.Info($"[ER] LethalBoost -> {desired:0}");
+                            }
+                        }
                         blow.BaseMagnitude = desired;
                     }
-                }
-                else if (missileSpeed > 0f)
-                {
-                    // (floor now applied below for both respect/non-respect branches)
-                }
-                else if (bigShove)
-                {
-                    // (floor now applied below for both respect/non-respect branches)
                 }
             }
             // Apply magnitude floors even when respecting engine flags
@@ -431,33 +439,40 @@ namespace ExtremeRagdoll
             {
                 if (missileSpeed > 0f && (!missileBlocked || allowBlockedPush))
                 {
-                    float floor = 9000f + missileSpeed * 80f;
+                    float floor = 6000f + missileSpeed * 60f;
+                    floor = Cap(floor, ER_Config.MaxBlowBaseMagnitude, HARD_ARROW_FLOOR_CAP);
                     if (ER_Config.MaxNonLethalKnockback > 0f) floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
-                    if (ER_Config.MaxBlowBaseMagnitude  > 0f) floor = MathF.Min(floor, ER_Config.MaxBlowBaseMagnitude);
                     float origBase = blow.BaseMagnitude;
                     if (origBase + 500f < floor)
                     {
                         blow.BaseMagnitude = floor;
                         if (ER_Config.DebugLogging)
-                            ER_Log.Info($"[ER] ArrowKnockback v={missileSpeed:0.0} base={origBase:0} floor={floor:0}");
+                        {
+                            float now = __instance.Mission?.CurrentTime ?? 0f;
+                            if (now - _lastAnyLog > 0.5f)
+                            {
+                                _lastAnyLog = now;
+                                ER_Log.Info($"[ER] ArrowFloor -> {floor:0}");
+                            }
+                        }
                     }
                 }
                 else if (bigShove)
                 {
                     float origBase   = blow.BaseMagnitude;
-                    float shoveFloor = MathF.Max(12000f, 9000f + origBase * 0.25f);
+                    float shoveFloor = MathF.Max(10000f, 7000f + origBase * 0.20f);
+                    shoveFloor       = Cap(shoveFloor, ER_Config.MaxBlowBaseMagnitude, HARD_BIGSHOVE_FLOOR_CAP);
                     if (ER_Config.MaxNonLethalKnockback > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
-                    if (ER_Config.MaxBlowBaseMagnitude  > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxBlowBaseMagnitude);
                     if (origBase + 800f < shoveFloor) // ignore tiny nudges
                     {
                         blow.BaseMagnitude = shoveFloor;
                         if (ER_Config.DebugLogging)
                         {
                             float now = __instance.Mission?.CurrentTime ?? 0f;
-                            if (!_lastBigShoveLog.TryGetValue(__instance.Index, out var last) || now - last >= 0.25f)
+                            if (!_lastBigShoveLog.TryGetValue(__instance.Index, out var last) || now - last >= 0.5f)
                             {
                                 _lastBigShoveLog[__instance.Index] = now;
-                                ER_Log.Info($"[ER] BigShove base {origBase:0} -> {blow.BaseMagnitude:0}");
+                                ER_Log.Info($"[ER] BigShove {origBase:0}->{blow.BaseMagnitude:0}");
                             }
                         }
                     }
@@ -465,11 +480,7 @@ namespace ExtremeRagdoll
             }
 
             // Global max cap (applies regardless of lethal state)
-            {
-                float maxBase = ER_Config.MaxBlowBaseMagnitude <= 0f ? 400_000f : ER_Config.MaxBlowBaseMagnitude;
-                if (blow.BaseMagnitude > maxBase)
-                    blow.BaseMagnitude = maxBase;
-            }
+            blow.BaseMagnitude = Cap(blow.BaseMagnitude, ER_Config.MaxBlowBaseMagnitude, HARD_BASE_CAP);
 
             // IMPORTANT: do NOT touch SwingDirection for non-missile, non-lethal blows (keeps horse charge intact)
 
@@ -494,7 +505,9 @@ namespace ExtremeRagdoll
                 if (ER_Config.MaxCorpseLaunchMagnitude > 0f)
                 {
                     float extraMult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
-                    float mag = (10000f + blow.InflictedDamage * 120f) * extraMult * 0.25f; // keep small; physics scaling happens later
+                    float mag = (10000f + blow.InflictedDamage * 120f) * extraMult * 0.25f;
+                    if (missileSpeed > 0f) mag += missileSpeed * 50f;
+                    if (mag > HARD_CORPSE_MAG_CAP) mag = HARD_CORPSE_MAG_CAP;
                     float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
                     if (mag > maxMag)
                     {
