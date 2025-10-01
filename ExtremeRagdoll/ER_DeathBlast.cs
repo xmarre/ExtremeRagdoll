@@ -1409,9 +1409,9 @@ namespace ExtremeRagdoll
                 float m = MathF.Min(12000f, ER_Config.MaxBlowBaseMagnitude > 0f
                     ? ER_Config.MaxBlowBaseMagnitude : 12000f);
                 var pos0 = affected.Position;
-                int postTries = ER_Config.CorpsePostDeathTries;
-                int pulse2 = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
-                EnqueueLaunch(affected, d, m,                         pos0, ER_Config.LaunchDelay1, retries: postTries);
+                int postTriesSynth = ER_Config.CorpsePostDeathTries;
+                int pulse2 = Math.Max(0, (int)MathF.Round(postTriesSynth * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
+                EnqueueLaunch(affected, d, m,                         pos0, ER_Config.LaunchDelay1, retries: postTriesSynth);
                 EnqueueLaunch(affected, d, m * ER_Config.LaunchPulse2Scale, pos0, ER_Config.LaunchDelay2, retries: pulse2);
                 EnqueueKick  (affected, d, m, 1.2f);
                 if (ER_Config.DebugLogging)
