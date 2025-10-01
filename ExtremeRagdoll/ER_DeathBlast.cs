@@ -26,6 +26,7 @@ namespace ExtremeRagdoll
         // cached pause lookup
         private static volatile bool _pauseInitDone;
         private static PropertyInfo _mbIsPausedPI;
+        private static int _impulseLogCount;
 
         internal static Vec3 ClampVertical(Vec3 dir)
         {
@@ -91,6 +92,44 @@ namespace ExtremeRagdoll
         {
             float s = v.x * v.x + v.y * v.y + v.z * v.z;
             return s < 1e-8f || float.IsNaN(s) || float.IsInfinity(s);
+        }
+
+        private static Vec3 ResolveHitPosition(Vec3 candidate, GameEntity ent, in Vec3 fallback)
+        {
+            if (!Vec3IsFinite(candidate) || candidate.LengthSquared < 1e-6f)
+            {
+                bool resolved = false;
+                if (ent != null)
+                {
+                    try
+                    {
+                        MatrixFrame frame;
+                        try { frame = ent.GetGlobalFrame(); }
+                        catch
+                        {
+                            try { frame = ent.GetFrame(); }
+                            catch { frame = default; }
+                        }
+                        var origin = frame.origin;
+                        if (Vec3IsFinite(origin) && origin.LengthSquared >= 1e-6f)
+                        {
+                            candidate = origin;
+                            resolved = true;
+                        }
+                    }
+                    catch
+                    {
+                        // fall through
+                    }
+                }
+                if (!resolved)
+                    candidate = fallback;
+            }
+
+            if (!Vec3IsFinite(candidate))
+                candidate = fallback;
+
+            return candidate;
         }
 
         private static void MarkRagdollPrepared(GameEntity ent)
@@ -313,12 +352,18 @@ namespace ExtremeRagdoll
 
             if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp))
                 return 0f;
+
+            if (ER_Config.DebugLogging && _impulseLogCount < 8)
+            {
+                _impulseLogCount++;
+                ER_Log.Info($"IMPULSE_MAP mag={mag:F1} -> imp={imp:F1} min={minImpulse:F1} max={maxImpulse:F1}");
+            }
             return imp;
         }
 
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
-        private struct Launch { public Agent A; public GameEntity Ent; public Skeleton Skel; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public Vec3 P0; public Vec3 V0; }
+        private struct Launch { public Agent A; public GameEntity Ent; public Skeleton Skel; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public bool Boosted; public Vec3 P0; public Vec3 V0; }
         private struct PreLaunch { public Agent Agent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; public bool Warmed; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
@@ -555,7 +600,7 @@ namespace ExtremeRagdoll
             GameEntity ent = null; Skeleton sk = null;
             try { ent = a.AgentVisuals?.GetEntity(); } catch { }
             try { sk = a.AgentVisuals?.GetSkeleton(); } catch { }
-            _launches.Add(new Launch { A = a, Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex, Warmed = false });
+            _launches.Add(new Launch { A = a, Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
             IncQueue(agentIndex);
         }
 
@@ -1083,6 +1128,11 @@ namespace ExtremeRagdoll
                         Vec3 retryPos = XYJitter(agent.Position);
                         retryPos.z = MathF.Min(retryPos.z + zNudge, agent.Position.z + zClamp);
 
+                        if (!L.Boosted)
+                        {
+                            L.Mag *= 2.0f;
+                            L.Boosted = true;
+                        }
                         if (clampMag && L.Mag > tickMaxSetting)
                         {
                             L.Mag = tickMaxSetting;
@@ -1291,14 +1341,18 @@ namespace ExtremeRagdoll
             }
             if (p.pos.LengthSquared > 1e-6f) hitPos = p.pos;
 
+            GameEntity ent = null;
+            Skeleton skel = null;
+            Vec3 resolvedHit = hitPos;
             try
             {
                 var visuals = affected.AgentVisuals;
-                var ent  = visuals?.GetEntity();
-                var skel = visuals?.GetSkeleton();
+                ent  = visuals?.GetEntity();
+                skel = visuals?.GetSkeleton();
                 if (ent != null || skel != null)
                 {
-                    var contactImmediate = hitPos;
+                    resolvedHit = ResolveHitPosition(hitPos, ent, affected.Position);
+                    var contactImmediate = resolvedHit;
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     float imp = ToPhysicsImpulse(mag);
                     if (imp > 0f)
@@ -1310,6 +1364,8 @@ namespace ExtremeRagdoll
                 }
             }
             catch { }
+
+            hitPos = ResolveHitPosition(resolvedHit, ent, affected.Position);
 
             // Schedule with retries (safety net in case MakeDead timing was late)
             int postTries = ER_Config.CorpsePostDeathTries;
