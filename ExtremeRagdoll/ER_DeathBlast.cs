@@ -875,63 +875,60 @@ namespace ExtremeRagdoll
             {
                 EnsureRagdollReady();
                 EnsureExtensionImpulseMethods();
-                try
+                // Try ALL known extension paths in order. Do not short-circuit on failure.
+                if (_extEntImp3 != null && !ok)
                 {
-                    if (_extEntImp3 != null)
+                    try
                     {
-                        if (_extEntImp3Delegate != null)
+                        bool requiresLocal3 = MethodRequiresLocalSpace(_extEntImp3);
+                        var vImp = impulse; var vPos = pos;
+                        if (!requiresLocal3 || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
                         {
-                            try
-                            {
-                                _extEntImp3Delegate(ent, impulse, pos, false);
-                            }
-                            catch
-                            {
-                                _extEntImp3Delegate(ent, impulse, pos, true);
-                            }
+                            bool local = requiresLocal3;
+                            if (_extEntImp3Delegate != null)
+                                _extEntImp3Delegate(ent, vImp, vPos, local);
+                            else
+                                _extEntImp3.Invoke(null, new object[] { ent, vImp, vPos, local });
+                            ok = true;
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info("IMPULSE_USE ext ent3 ApplyImpulseToDynamicBody(entity,Vec3,Vec3)");
                         }
-                        else
-                        {
-                            var args = new object[] { ent, impulse, pos, false };
-                            try
-                            {
-                                _extEntImp3.Invoke(null, args);
-                            }
-                            catch
-                            {
-                                args[3] = true;
-                                _extEntImp3.Invoke(null, args);
-                            }
-                        }
-                        ok = true;
-                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent3");
                     }
-                    else if (_extEntImp2 != null)
+                    catch { /* try next */ }
+                }
+                if (_extEntImp2 != null && !ok)
+                {
+                    try
                     {
-                        Vec3 callImpulse = impulse;
-                        Vec3 callPos = pos;
-                        bool requiresLocal = MethodRequiresLocalSpace(_extEntImp2);
-                        if (requiresLocal)
-                            TryConvertWorldToLocal(ent, impulse, pos, out callImpulse, out callPos);
-                        if (_extEntImp2Delegate != null)
-                            _extEntImp2Delegate(ent, callImpulse, callPos);
-                        else
-                            _extEntImp2.Invoke(null, new object[] { ent, callImpulse, callPos });
-                        ok = true;
-                        if (ER_Config.DebugLogging)
-                            ER_Log.Info(requiresLocal ? "IMPULSE_USE ext ent2 (local)" : "IMPULSE_USE ext ent2");
+                        bool requiresLocal2 = MethodRequiresLocalSpace(_extEntImp2);
+                        var vImp = impulse; var vPos = pos;
+                        if (!requiresLocal2 || TryConvertWorldToLocal(ent, impulse, pos, out vImp, out vPos))
+                        {
+                            if (_extEntImp2Delegate != null)
+                                _extEntImp2Delegate(ent, vImp, vPos);
+                            else
+                                _extEntImp2.Invoke(null, new object[] { ent, vImp, vPos });
+                            ok = true;
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info("IMPULSE_USE ext ent2 ApplyLocalImpulseToDynamicBody(entity,Vec3,Vec3)");
+                        }
                     }
-                    else if (_extEntImp1 != null)
+                    catch { /* try next */ }
+                }
+                if (_extEntImp1 != null && !ok)
+                {
+                    try
                     {
                         if (_extEntImp1Delegate != null)
                             _extEntImp1Delegate(ent, impulse);
                         else
                             _extEntImp1.Invoke(null, new object[] { ent, impulse });
                         ok = true;
-                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent1");
+                        if (ER_Config.DebugLogging)
+                            ER_Log.Info("IMPULSE_USE ext ent1 ApplyForceToDynamicBody(entity,Vec3)");
                     }
+                    catch { }
                 }
-                catch { }
             }
             // --- Skeleton route (ragdoll bones) ---
             if (!ok && skel != null)
@@ -1420,8 +1417,8 @@ namespace ExtremeRagdoll
         private static float ToPhysicsImpulse(float mag)
         {
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
-            // Calibrated so typical lethal hits (≈20k magnitude) yield ~5 units of impulse.
-            float imp = mag * 2.5e-4f;
+            // Make corpse nudges visible. Old: 25k → 6.3. New: 25k → 25.
+            float imp = mag * 1.0e-3f;
 
             float minImpulse = ER_Config.CorpseImpulseMinimum;
             if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
