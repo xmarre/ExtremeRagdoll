@@ -10,10 +10,14 @@ namespace ExtremeRagdoll
     {
         private static bool _ent1Unsafe, _ent2Unsafe, _ent3Unsafe, _sk1Unsafe, _sk2Unsafe;
         private static MethodInfo _ent3, _ent2, _ent1;
+        private static MethodInfo _ent3Inst, _ent2Inst, _ent1Inst;
         private static MethodInfo _sk2, _sk1;
         private static Action<GameEntity, Vec3, Vec3, bool> _dEnt3;
         private static Action<GameEntity, Vec3, Vec3> _dEnt2;
         private static Action<GameEntity, Vec3> _dEnt1;
+        private static Action<GameEntity, Vec3, Vec3, bool> _dEnt3Inst;
+        private static Action<GameEntity, Vec3, Vec3> _dEnt2Inst;
+        private static Action<GameEntity, Vec3> _dEnt1Inst;
         private static Action<Skeleton, Vec3, Vec3> _dSk2;
         private static Action<Skeleton, Vec3> _dSk1;
 
@@ -49,6 +53,35 @@ namespace ExtremeRagdoll
                     try { _dEnt1 = (Action<GameEntity, Vec3>)_ent1.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
                     catch { _dEnt1 = null; }
                 }
+            }
+
+            var ge = typeof(GameEntity);
+
+            _ent3Inst = ge.GetMethod("ApplyImpulseToDynamicBody",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
+            if (_ent3Inst != null)
+            {
+                try { _dEnt3Inst = (Action<GameEntity, Vec3, Vec3, bool>)_ent3Inst.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3, bool>)); }
+                catch { _dEnt3Inst = null; }
+            }
+
+            _ent2Inst = ge.GetMethod("ApplyLocalImpulseToDynamicBody",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, new[] { typeof(Vec3), typeof(Vec3) }, null);
+            if (_ent2Inst != null)
+            {
+                try { _dEnt2Inst = (Action<GameEntity, Vec3, Vec3>)_ent2Inst.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3>)); }
+                catch { _dEnt2Inst = null; }
+            }
+
+            _ent1Inst = ge.GetMethod("ApplyForceToDynamicBody",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, new[] { typeof(Vec3) }, null);
+            if (_ent1Inst != null)
+            {
+                try { _dEnt1Inst = (Action<GameEntity, Vec3>)_ent1Inst.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
+                catch { _dEnt1Inst = null; }
             }
 
             var sk = typeof(Skeleton);
@@ -107,6 +140,23 @@ namespace ExtremeRagdoll
                 }
             }
 
+            if (!_ent3Unsafe && ent != null && (_dEnt3Inst != null || _ent3Inst != null))
+            {
+                try
+                {
+                    if (_dEnt3Inst != null)
+                        _dEnt3Inst(ent, worldImpulse, worldPos, false);
+                    else
+                        _ent3Inst.Invoke(ent, new object[] { worldImpulse, worldPos, false });
+                    if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE inst ent3");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    MarkUnsafe(3, ex);
+                }
+            }
+
             if (!_ent2Unsafe && ent != null && (_dEnt2 != null || _ent2 != null))
             {
                 try
@@ -127,6 +177,26 @@ namespace ExtremeRagdoll
                 }
             }
 
+            if (!_ent2Unsafe && ent != null && (_dEnt2Inst != null || _ent2Inst != null))
+            {
+                try
+                {
+                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, worldPos, out var impL, out var posL))
+                    {
+                        if (_dEnt2Inst != null)
+                            _dEnt2Inst(ent, impL, posL);
+                        else
+                            _ent2Inst.Invoke(ent, new object[] { impL, posL });
+                        if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE inst ent2");
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MarkUnsafe(2, ex);
+                }
+            }
+
             if (!_ent1Unsafe && ent != null && (_dEnt1 != null || _ent1 != null))
             {
                 try
@@ -136,6 +206,23 @@ namespace ExtremeRagdoll
                     else
                         _ent1.Invoke(null, new object[] { ent, worldImpulse });
                     if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE ext ent1");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    MarkUnsafe(1, ex);
+                }
+            }
+
+            if (!_ent1Unsafe && ent != null && (_dEnt1Inst != null || _ent1Inst != null))
+            {
+                try
+                {
+                    if (_dEnt1Inst != null)
+                        _dEnt1Inst(ent, worldImpulse);
+                    else
+                        _ent1Inst.Invoke(ent, new object[] { worldImpulse });
+                    if (ER_Config.DebugLogging) ER_Log.Info("IMPULSE_USE inst ent1");
                     return true;
                 }
                 catch (Exception ex)
@@ -205,6 +292,15 @@ namespace ExtremeRagdoll
                 lImp = frame.TransformToLocal(wPos + wImp) - lPos;
                 return true;
             } catch { return false; }
+        }
+
+        // No reliable Skeleton frame API on this TW branch: caller must pass via entity frame.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool TryWorldToLocal(Skeleton skel, in Vec3 wImp, in Vec3 wPos, out Vec3 lImp, out Vec3 lPos)
+        {
+            lImp = wImp;
+            lPos = wPos;
+            return false;
         }
 
     }
