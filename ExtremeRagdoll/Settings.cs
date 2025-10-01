@@ -124,12 +124,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
             Order = 117, RequireRestart = false)]
-        public float CorpseLaunchContactHeight { get; set; } = 0.12f;
+        public float CorpseLaunchContactHeight { get; set; } = 0.20f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
             Order = 118, RequireRestart = false)]
-        public float CorpseLaunchRetryDelay { get; set; } = 0.02f;
+        public float CorpseLaunchRetryDelay { get; set; } = 0.03f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Jitter (s)", 0f, 0.5f, "0.000",
@@ -144,7 +144,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 25f, 500_000f, "0.0",
             Order = 121, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 800f;
+        public float CorpseImpulseMinimum { get; set; } = 1_500f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
@@ -164,7 +164,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Post-Death Launch Tries", 0, 100,
             Order = 125, RequireRestart = false)]
-        public int CorpsePostDeathTries { get; set; } = 12;
+        public int CorpsePostDeathTries { get; set; } = 20;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Corpse Launches Per Tick", 0, 2048,

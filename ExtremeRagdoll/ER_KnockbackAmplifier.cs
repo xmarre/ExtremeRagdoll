@@ -47,11 +47,11 @@ namespace ExtremeRagdoll
                 return threshold;
             }
         }
-        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 800f);
+        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 1_500f);
         public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 1_500f);
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
-        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.12f);
-        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.02f);
+        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.20f);
+        public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.03f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
@@ -82,7 +82,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                int value = Settings.Instance?.CorpsePostDeathTries ?? 12;
+                int value = Settings.Instance?.CorpsePostDeathTries ?? 20;
                 if (value < 0) return 0;
                 if (value > 100) return 100;
                 return value;
@@ -142,6 +142,8 @@ namespace ExtremeRagdoll
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
         private static readonly Dictionary<int, float> _lastBigShoveLog = new Dictionary<int, float>();
+        private static float _lastBigShoveTime;
+        private static readonly HashSet<int> _bigShoveThisTick = new HashSet<int>();
         private static readonly FieldInfo MissileSpeedField = typeof(AttackCollisionData).GetField("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileSpeedProperty = typeof(AttackCollisionData).GetProperty("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly FieldInfo SpeedFieldFallback = typeof(AttackCollisionData).GetField("Speed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -252,6 +254,8 @@ namespace ExtremeRagdoll
             _pending.Clear();
             _lastScheduled.Clear();
             _lastBigShoveLog.Clear();
+            _bigShoveThisTick.Clear();
+            _lastBigShoveTime = 0f;
             _lastAnyLog = 0f;
         }
 
@@ -341,6 +345,13 @@ namespace ExtremeRagdoll
         {
             if (__instance == null) return;
 
+            float timeNow = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
+            if (timeNow != _lastBigShoveTime)
+            {
+                _lastBigShoveTime = timeNow;
+                _bigShoveThisTick.Clear();
+            }
+
             float hp = __instance.Health;
             if (hp <= 0f)
             {
@@ -395,6 +406,7 @@ namespace ExtremeRagdoll
 
             // Horse/body shove fallback: strong non-missile hits should still knock back.
             bool bigShove = !lethal && missileSpeed <= 0f && blow.BaseMagnitude >= 3000f;
+            bool canBoostBigShove = false;
             if (bigShove)
             {
                 blow.BlowFlag |= BlowFlags.KnockBack;
@@ -402,6 +414,7 @@ namespace ExtremeRagdoll
                 float kdThreshold = ER_Config.HorseRamKnockDownThreshold;
                 if (kdThreshold > 0f && blow.BaseMagnitude >= kdThreshold && !__instance.HasMount)
                     blow.BlowFlag |= BlowFlags.KnockDown;
+                canBoostBigShove = _bigShoveThisTick.Add(__instance.Index);
             }
 
             bool respectBlow = ER_Config.RespectEngineBlowFlags;
@@ -433,10 +446,10 @@ namespace ExtremeRagdoll
                     {
                         if (ER_Config.DebugLogging)
                         {
-                            float now = __instance.Mission?.CurrentTime ?? 0f;
-                            if (now - _lastAnyLog > 0.5f)
+                            float nowLog = timeNow;
+                            if (nowLog - _lastAnyLog > 0.5f)
                             {
-                                _lastAnyLog = now;
+                                _lastAnyLog = nowLog;
                                 ER_Log.Info($"[ER] LethalBoost -> {desired:0}");
                             }
                         }
@@ -458,10 +471,10 @@ namespace ExtremeRagdoll
                         blow.BaseMagnitude = floor;
                         if (ER_Config.DebugLogging)
                         {
-                            float now = __instance.Mission?.CurrentTime ?? 0f;
-                            if (now - _lastAnyLog > 0.5f)
+                            float nowLog = timeNow;
+                            if (nowLog - _lastAnyLog > 0.5f)
                             {
-                                _lastAnyLog = now;
+                                _lastAnyLog = nowLog;
                                 ER_Log.Info($"[ER] ArrowFloor -> {floor:0}");
                             }
                         }
@@ -473,15 +486,15 @@ namespace ExtremeRagdoll
                     float shoveFloor = MathF.Max(10000f, 7000f + origBase * 0.20f);
                     shoveFloor       = Cap(shoveFloor, ER_Config.MaxBlowBaseMagnitude, HARD_BIGSHOVE_FLOOR_CAP);
                     if (ER_Config.MaxNonLethalKnockback > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
-                    if (origBase + 800f < shoveFloor) // ignore tiny nudges
+                    if (canBoostBigShove && origBase + 800f < shoveFloor) // ignore tiny nudges
                     {
                         blow.BaseMagnitude = shoveFloor;
                         if (ER_Config.DebugLogging)
                         {
-                            float now = __instance.Mission?.CurrentTime ?? 0f;
-                            if (!_lastBigShoveLog.TryGetValue(__instance.Index, out var last) || now - last >= 0.5f)
+                            float nowLog = timeNow;
+                            if (!_lastBigShoveLog.TryGetValue(__instance.Index, out var last) || nowLog - last >= 0.5f)
                             {
-                                _lastBigShoveLog[__instance.Index] = now;
+                                _lastBigShoveLog[__instance.Index] = nowLog;
                                 ER_Log.Info($"[ER] BigShove {origBase:0}->{blow.BaseMagnitude:0}");
                             }
                         }

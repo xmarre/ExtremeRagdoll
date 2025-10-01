@@ -14,8 +14,8 @@ namespace ExtremeRagdoll
 {
     public sealed class ER_DeathBlastBehavior : MissionBehavior
     {
-        private static readonly Dictionary<Type, Func<object, bool>> _ragdollStateCache = new Dictionary<Type, Func<object, bool>>();
         private static readonly object _ragdollStateLock = new object();
+        private static readonly Dictionary<Type, Func<object, bool>> _ragdollStateCache = new Dictionary<Type, Func<object, bool>>();
         private static readonly ConditionalWeakTable<GameEntity, object> _preparedEntities = new ConditionalWeakTable<GameEntity, object>();
         private static readonly object _preparedMarker = new object();
         private static Func<GameEntity, bool> _isDynamicBodyAccessor;
@@ -92,6 +92,44 @@ namespace ExtremeRagdoll
         {
             float s = v.x * v.x + v.y * v.y + v.z * v.z;
             return s < 1e-8f || float.IsNaN(s) || float.IsInfinity(s);
+        }
+
+        private static bool IsRagdollActiveFast(Skeleton sk)
+        {
+            if (sk == null)
+                return false;
+            try
+            {
+                var t = sk.GetType();
+                if (!_ragdollStateCache.TryGetValue(t, out var eval))
+                {
+                    var pi = t.GetProperty("IsRagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                             ?? t.GetProperty("IsRagdollModeActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                             ?? t.GetProperty("RagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                    if (pi != null)
+                    {
+                        eval = obj =>
+                        {
+                            try { return (bool)pi.GetValue(obj); }
+                            catch { return false; }
+                        };
+                    }
+                    else
+                    {
+                        eval = _ => false;
+                    }
+
+                    lock (_ragdollStateLock)
+                        _ragdollStateCache[t] = eval;
+                }
+
+                return eval?.Invoke(sk) ?? false;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static Vec3 ResolveHitPosition(Vec3 candidate, GameEntity ent, in Vec3 fallback)
@@ -717,21 +755,16 @@ namespace ExtremeRagdoll
                         }
                         else
                         {
-                            Vec3 contact = entry.Pos;
-                            if (!Vec3IsFinite(contact))
+                            Vec3 fallbackContact = entry.Pos;
+                            try { fallbackContact = agent.Position; }
+                            catch { fallbackContact = entry.Pos; }
+                            Vec3 contact = ResolveHitPosition(entry.Pos, ent, fallbackContact);
+                            try
                             {
-                                try { contact = agent.Position; }
-                                catch { contact = entry.Pos; }
+                                contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
                             }
-                            else
+                            catch
                             {
-                                try
-                                {
-                                    contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
-                                }
-                                catch
-                                {
-                                }
                             }
                             Vec3 dir = entry.Dir;
                             try
@@ -877,7 +910,15 @@ namespace ExtremeRagdoll
                         queueDecremented = true;
                     }
                 }
-                _launches.RemoveAt(i);
+                bool launchRemoved = false;
+                void RemoveLaunch()
+                {
+                    if (!launchRemoved)
+                    {
+                        _launches.RemoveAt(i);
+                        launchRemoved = true;
+                    }
+                }
                 Vec3 dir = L.Dir;
                 if (!Vec3IsFinite(dir) || dir.LengthSquared < 1e-6f)
                 {
@@ -909,15 +950,27 @@ namespace ExtremeRagdoll
                 }
                 L.Ent  = ent;
                 L.Skel = skel;
+
+                if (skel != null && !IsRagdollActiveFast(skel))
+                {
+                    WarmRagdoll(ent, skel);
+                    L.T = now + MathF.Max(0.02f, ER_Config.CorpseLaunchRetryDelay);
+                    L.Warmed = true;
+                    L.Pos = agent?.Position ?? L.Pos;
+                    _launches[i] = L;
+                    continue;
+                }
                 bool agentMissing = agent == null || agent.Mission == null || agent.Mission != mission;
                 if (agentMissing)
                 {
+                    RemoveLaunch();
                     if (ent != null || skel != null)
                     {
                         float impMag = ToPhysicsImpulse(L.Mag);
                         if (impMag > 0f)
                         {
-                            var contactMiss = XYJitter(L.Pos); contactMiss.z += contactHeight;
+                            var contactMiss = XYJitter(ResolveHitPosition(L.Pos, ent, L.Pos));
+                            contactMiss.z += contactHeight;
                             bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactMiss, agentIndex);
                             nudged |= ok;
                             if (ok)
@@ -932,6 +985,7 @@ namespace ExtremeRagdoll
                 }
                 if (agent.Health > 0f)
                 {
+                    RemoveLaunch();
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
                     continue; // only launch ragdolls still in mission
@@ -940,6 +994,7 @@ namespace ExtremeRagdoll
                 float dirSq = dir.LengthSquared;
                 if (dirSq < 1e-8f || float.IsNaN(dirSq) || float.IsInfinity(dirSq))
                 {
+                    RemoveLaunch();
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
                     continue;
@@ -951,11 +1006,16 @@ namespace ExtremeRagdoll
                 }
                 if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 {
+                    RemoveLaunch();
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
                     continue;
                 }
-                Vec3 hit = XYJitter(L.Pos);
+                Vec3 fallbackPos = L.Pos;
+                try { fallbackPos = agent.Position; }
+                catch { fallbackPos = L.Pos; }
+                Vec3 baseContact = ResolveHitPosition(L.Pos, ent, fallbackPos);
+                Vec3 hit = XYJitter(baseContact);
                 Vec3 contactPoint = hit;
                 contactPoint.z += contactHeight;
                 contactPoint.z = MathF.Min(contactPoint.z, agent.Position.z + zClamp);
@@ -980,7 +1040,7 @@ namespace ExtremeRagdoll
                     L.Pos = agent.Position;
                     L.Ent = ent;
                     L.Skel = skel;
-                    _launches.Add(L);
+                    _launches[i] = L;
                     continue; // measure on next tick
                 }
                 if (!RagdollActive(agent, L.Warmed))
@@ -991,7 +1051,7 @@ namespace ExtremeRagdoll
                     L.Pos = agent.Position;
                     L.Ent = ent;
                     L.Skel = skel;
-                    _launches.Add(L);
+                    _launches[i] = L;
                     continue;
                 }
                 // Ragdoll/Visuals kommen oft 1–2 Ticks verspätet. Requeue statt Drop.
@@ -1000,6 +1060,7 @@ namespace ExtremeRagdoll
                 {
                     if (!AgentRemoved(agent) && L.Tries > 0)
                     {
+                        RemoveLaunch();
                         L.Tries--;
                         L.Warmed = false;                 // neu messen, wenn Visuals dran sind
                         L.T      = now + MathF.Max(0.05f, retryDelay);
@@ -1013,6 +1074,7 @@ namespace ExtremeRagdoll
                         DecOnce(); // alten Eintrag sauber abbuchen
                         continue;
                     }
+                    RemoveLaunch();
                     DecOnce();
                     continue;
                 }
@@ -1051,12 +1113,17 @@ namespace ExtremeRagdoll
                 }
                 if (AgentRemoved(agent))
                 {
+                    RemoveLaunch();
                     if (ent != null || skel != null)
                     {
                         float impMag = ToPhysicsImpulse(L.Mag);
                         if (impMag > 0f)
                         {
-                            var contactEntity = XYJitter(L.Pos); contactEntity.z += contactHeight;
+                            Vec3 fallbackEntity = L.Pos;
+                            try { fallbackEntity = agent.Position; }
+                            catch { fallbackEntity = L.Pos; }
+                            var contactEntity = XYJitter(ResolveHitPosition(L.Pos, ent, fallbackEntity));
+                            contactEntity.z += contactHeight;
                             bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactEntity, agentIndex);
                             nudged |= ok;
                             if (ok)
@@ -1080,6 +1147,7 @@ namespace ExtremeRagdoll
 
                 if (!took)
                 {
+                    RemoveLaunch();
                     // Fallback: directly impulse ragdoll physics if RegisterBlow had no effect
                     try
                     {
@@ -1133,6 +1201,16 @@ namespace ExtremeRagdoll
                             L.Mag *= 2.0f;
                             L.Boosted = true;
                         }
+                        else
+                        {
+                            float target = ER_Config.CorpseImpulseMaximum;
+                            if (target > 0f)
+                            {
+                                float cur = ToPhysicsImpulse(L.Mag);
+                                if (cur + 1e-3f < target)
+                                    L.Mag *= MathF.Max(1.25f, target / MathF.Max(1f, cur));
+                            }
+                        }
                         if (clampMag && L.Mag > tickMaxSetting)
                         {
                             L.Mag = tickMaxSetting;
@@ -1162,6 +1240,7 @@ namespace ExtremeRagdoll
                             L.Warmed = false;
                             L.Ent = ent;
                             L.Skel = skel;
+                            RemoveLaunch();
                             _launches.Add(L);
                             IncQueue(agentIndex);
                             if (ER_Config.DebugLogging && agentIndex >= 0 && (L.Tries % 3 == 0))
@@ -1185,6 +1264,7 @@ namespace ExtremeRagdoll
                 }
                 else
                 {
+                    RemoveLaunch();
                     _launchFailLogged.Remove(agentIndex);
                     DecOnce();
                     MarkLaunched(agentIndex);
@@ -1321,6 +1401,21 @@ namespace ExtremeRagdoll
             if (!ER_Amplify_RegisterBlowPatch.TryTakePending(affected.Index, out var p))
             {
                 ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
+                // Scripted/spell death: synthesize a push + queued launches
+                var d = affected.LookDirection;
+                if (d.LengthSquared < 1e-6f)
+                    d = new Vec3(0f, 1f, 0f);
+                d = PrepDir(d, 0.35f, 1.05f);
+                float m = MathF.Min(12000f, ER_Config.MaxBlowBaseMagnitude > 0f
+                    ? ER_Config.MaxBlowBaseMagnitude : 12000f);
+                var pos0 = affected.Position;
+                int postTries = ER_Config.CorpsePostDeathTries;
+                int pulse2 = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
+                EnqueueLaunch(affected, d, m,                         pos0, ER_Config.LaunchDelay1, retries: postTries);
+                EnqueueLaunch(affected, d, m * ER_Config.LaunchPulse2Scale, pos0, ER_Config.LaunchDelay2, retries: pulse2);
+                EnqueueKick  (affected, d, m, 1.2f);
+                if (ER_Config.DebugLogging)
+                    ER_Log.Info($"OnAgentRemoved: synthesized corpse launch Agent#{affected.Index}");
                 return;
             }
             ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
@@ -1351,6 +1446,7 @@ namespace ExtremeRagdoll
                 skel = visuals?.GetSkeleton();
                 if (ent != null || skel != null)
                 {
+                    WarmRagdoll(ent, skel);
                     resolvedHit = ResolveHitPosition(hitPos, ent, affected.Position);
                     var contactImmediate = resolvedHit;
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
