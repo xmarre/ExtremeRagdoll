@@ -67,10 +67,9 @@ namespace ExtremeRagdoll
         {
             try
             {
-                var aabb = ent.GetBoundingBox();
-                var mn = aabb.Min;
-                var mx = aabb.Max;
-                if (!ER_Math.IsFinite(mn) || !ER_Math.IsFinite(mx)) return false;
+                var mn = ent.GetPhysicsBoundingBoxMin();
+                var mx = ent.GetPhysicsBoundingBoxMax();
+                if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx)) return false;
 
                 var d = mx - mn;
                 if (d.x <= 0f || d.y <= 0f || d.z <= 0f) return false;

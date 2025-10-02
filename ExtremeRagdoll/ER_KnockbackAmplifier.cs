@@ -479,7 +479,7 @@ namespace ExtremeRagdoll
             if (lethal)
             {
                 // Remove engine knockback so physics impulses drive motion post-death.
-                blow.BlowFlag &= ~(BlowFlags.KnockBack | BlowFlags.KnockBackNoInterrupt);
+                blow.BlowFlag &= ~BlowFlags.KnockBack;
                 blow.BlowFlag |= BlowFlags.KnockDown | BlowFlags.NoSound;
                 if (ER_Config.DebugLogging)
                 {
