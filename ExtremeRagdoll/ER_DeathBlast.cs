@@ -974,9 +974,9 @@ namespace ExtremeRagdoll
                     var blow = new Blow(-1)
                     {
                         DamageType      = DamageTypes.Blunt,
-                        // Seed motion so ragdoll is fully dynamic even if physics impulse route fails.
-                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                        BaseMagnitude   = MathF.Max(1f, ER_Config.WarmupBlowBaseMagnitude),
+                        // Enable ragdoll without strong engine knockback; physics impulse adds motion.
+                        BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
+                        BaseMagnitude   = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f)),
                         SwingDirection  = dir,
                         GlobalPosition  = contactPoint,
                         InflictedDamage = 0

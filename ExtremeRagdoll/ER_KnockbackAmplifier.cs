@@ -44,9 +44,9 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float value = Settings.Instance?.WarmupBlowBaseMagnitude ?? 10000f;
+                float value = Settings.Instance?.WarmupBlowBaseMagnitude ?? 20f;
                 if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f) return 0f;
-                return value;
+                return MathF.Min(value, 200f);
             }
         }
         public static float HorseRamKnockDownThreshold
@@ -454,9 +454,6 @@ namespace ExtremeRagdoll
                     // lethal must ragdoll
                     if (blow.SwingDirection.LengthSquared <= 1e-6f)
                         blow.SwingDirection = dir;
-                    blow.BlowFlag |= BlowFlags.KnockBack;
-                    if (!__instance.HasMount)
-                        blow.BlowFlag |= BlowFlags.KnockDown;
 
                     // lethal magnitude (reduced missile weight + hard cap)
                     // Safe lethal boost (low) to avoid vertical pop while impulses are validated
@@ -477,6 +474,26 @@ namespace ExtremeRagdoll
                         blow.BaseMagnitude = desired;
                     }
                 }
+            }
+
+            if (lethal)
+            {
+                // Remove engine knockback so physics impulses drive motion post-death.
+                blow.BlowFlag &= ~(BlowFlags.KnockBack | BlowFlags.KnockBackNoInterrupt);
+                blow.BlowFlag |= BlowFlags.KnockDown | BlowFlags.NoSound;
+                if (ER_Config.DebugLogging)
+                {
+                    float nowLog = timeNow;
+                    if (nowLog - _lastAnyLog > 0.5f)
+                    {
+                        _lastAnyLog = nowLog;
+                        ER_Log.Info("[ER] LethalStrip: removed engine KB");
+                    }
+                }
+
+                if (blow.SwingDirection.LengthSquared <= 1e-6f)
+                    blow.SwingDirection = dir;
+                blow.SwingDirection = ER_DeathBlastBehavior.FinalizeImpulseDir(blow.SwingDirection);
             }
             // Apply magnitude floors even when respecting engine flags
             if (!lethal)
