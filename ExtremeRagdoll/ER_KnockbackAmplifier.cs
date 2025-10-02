@@ -44,11 +44,8 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float value = Settings.Instance?.WarmupBlowBaseMagnitude ?? 1f;
-                if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
-                    return 0f;
-                if (value > 5f)
-                    return 5f;
+                float value = Settings.Instance?.WarmupBlowBaseMagnitude ?? 10000f;
+                if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f) return 0f;
                 return value;
             }
         }

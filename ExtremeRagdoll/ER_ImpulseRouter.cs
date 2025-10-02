@@ -325,7 +325,9 @@ namespace ExtremeRagdoll
                 return false;
             }
 
-            bool canEnt = ent != null && LooksDynamic(ent) && AabbSane(ent);
+            // Corpses often report IsDynamicBody=false even though entity routes work.
+            // Do not gate on IsDynamicBody; only require a sane entity.
+            bool canEnt = ent != null && AabbSane(ent);
             bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
             bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
             bool skeletonAvailable = skel != null;
@@ -339,7 +341,7 @@ namespace ExtremeRagdoll
 
             // Prefer entity routes; skeleton paths are handled as a fallback below when permitted.
 
-            if (haveContact && canEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (haveContact && ent != null && canEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
@@ -373,7 +375,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && canEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (haveContact && ent != null && canEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -407,7 +409,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && canEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && ent != null && canEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -428,7 +430,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && canEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && ent != null && canEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -449,7 +451,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (canEnt && !_ent1Unsafe && (_dEnt1Inst != null || _ent1Inst != null))
+            if (ent != null && canEnt && !_ent1Unsafe && (_dEnt1Inst != null || _ent1Inst != null))
             {
                 try
                 {
@@ -467,7 +469,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (canEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            if (ent != null && canEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
                 try
                 {
