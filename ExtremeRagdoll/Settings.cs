@@ -94,7 +94,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Warmup Blow Base Magnitude", 0f, 100000f, "0.0",
             Order = 111, RequireRestart = false)]
-        public float WarmupBlowBaseMagnitude { get; set; } = 10000f;
+        public float WarmupBlowBaseMagnitude { get; set; } = 20f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Horse Ram Knockdown Threshold", 0f, 500_000_000f, "0.0",

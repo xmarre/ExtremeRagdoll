@@ -67,24 +67,13 @@ namespace ExtremeRagdoll
         {
             try
             {
-                var mn = ent.GetPhysicsBoundingBoxMin();
-                var mx = ent.GetPhysicsBoundingBoxMax();
-                if (float.IsNaN(mn.x) || float.IsNaN(mn.y) || float.IsNaN(mn.z) ||
-                    float.IsNaN(mx.x) || float.IsNaN(mx.y) || float.IsNaN(mx.z) ||
-                    float.IsInfinity(mn.x) || float.IsInfinity(mn.y) || float.IsInfinity(mn.z) ||
-                    float.IsInfinity(mx.x) || float.IsInfinity(mx.y) || float.IsInfinity(mx.z))
-                    return false;
-
-                if (MathF.Abs(mn.x) > 1e5f || MathF.Abs(mn.y) > 1e5f || MathF.Abs(mn.z) > 1e5f)
-                    return false;
-                if (MathF.Abs(mx.x) > 1e5f || MathF.Abs(mx.y) > 1e5f || MathF.Abs(mx.z) > 1e5f)
-                    return false;
+                var aabb = ent.GetBoundingBox();
+                var mn = aabb.Min;
+                var mx = aabb.Max;
+                if (!ER_Math.IsFinite(mn) || !ER_Math.IsFinite(mx)) return false;
 
                 var d = mx - mn;
-                if (d.x <= 0f || d.y <= 0f || d.z <= 0f)
-                    return false;
-                if (d.x * d.y * d.z < 1e-6f)
-                    return false;
+                if (d.x <= 0f || d.y <= 0f || d.z <= 0f) return false;
 
                 return true;
             }
@@ -325,24 +314,25 @@ namespace ExtremeRagdoll
                 return false;
             }
 
-            // Corpses often report IsDynamicBody=false even though entity routes work.
-            // Do not gate on IsDynamicBody; only require a sane entity.
-            bool canEnt = ent != null && AabbSane(ent);
+            // Always try entity routes; AABB is only a hint for contact-based path.
+            bool hasEnt = ent != null;
+            bool entOkForContact = hasEnt && AabbSane(ent);
             bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
             bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
             bool skeletonAvailable = skel != null;
-            bool allowSkeletonNow = skeletonAvailable && (!forceEntity || (!canEnt && allowFallbackWhenInvalid));
-            if (!canEnt)
+            bool allowSkeletonNow = skeletonAvailable && (!forceEntity || (!hasEnt && allowFallbackWhenInvalid));
+            if (!hasEnt)
             {
                 bool skeletonWillHandle = skeletonAvailable && (!forceEntity ? true : allowFallbackWhenInvalid);
                 if (!skeletonWillHandle && !forceEntity)
-                    Log("IMPULSE_SKIP ent routes: non-dynamic or bad AABB");
+                    Log("IMPULSE_SKIP ent routes: missing entity");
             }
 
             // Prefer entity routes; skeleton paths are handled as a fallback below when permitted.
 
-            if (haveContact && ent != null && canEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (haveContact && hasEnt && entOkForContact && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
+                try { ent.ActivateRagdoll(); } catch { }
                 try
                 {
                     if (_dEnt3Inst != null)
@@ -375,8 +365,9 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && ent != null && canEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (haveContact && hasEnt && entOkForContact && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
+                try { ent.ActivateRagdoll(); } catch { }
                 try
                 {
                     if (_dEnt3 != null)
@@ -409,8 +400,9 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && ent != null && canEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && hasEnt && entOkForContact && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
+                try { ent.ActivateRagdoll(); } catch { }
                 try
                 {
                     if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
@@ -430,8 +422,9 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && ent != null && canEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && entOkForContact && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
+                try { ent.ActivateRagdoll(); } catch { }
                 try
                 {
                     if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
@@ -451,8 +444,10 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (ent != null && canEnt && !_ent1Unsafe && (_dEnt1Inst != null || _ent1Inst != null))
+            // Center-of-mass impulse works even if AABB looks odd: use it as universal fallback.
+            if (hasEnt && !_ent1Unsafe && (_dEnt1Inst != null || _ent1Inst != null))
             {
+                try { ent.ActivateRagdoll(); } catch { }
                 try
                 {
                     if (_dEnt1Inst != null)
@@ -469,8 +464,9 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (ent != null && canEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            if (hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
+                try { ent.ActivateRagdoll(); } catch { }
                 try
                 {
                     if (_dEnt1 != null)
