@@ -92,108 +92,128 @@ namespace ExtremeRagdoll
         public float MaxNonLethalKnockback { get; set; } = 0f;
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyFloatingInteger("Horse Ram Knockdown Threshold", 0f, 500_000_000f, "0.0",
+        [SettingPropertyFloatingInteger("Warmup Blow Base Magnitude", 0f, 10f, "0.00",
             Order = 111, RequireRestart = false)]
+        public float WarmupBlowBaseMagnitude { get; set; } = 1f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Horse Ram Knockdown Threshold", 0f, 500_000_000f, "0.0",
+            Order = 112, RequireRestart = false)]
         public float HorseRamKnockDownThreshold { get; set; } = 9_000f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Missile Speed For Push", 0f, 1_000f, "0.0",
-            Order = 112, RequireRestart = false)]
+            Order = 113, RequireRestart = false)]
         public float MinMissileSpeedForPush { get; set; } = 5f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Blocked Missiles Can Push",
-            Order = 113, RequireRestart = false)]
+            Order = 114, RequireRestart = false)]
         public bool BlockedMissilesCanPush { get; set; } = false;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch XY Jitter", 0f, 0.5f, "0.000",
-            Order = 114, RequireRestart = false)]
-        public float CorpseLaunchXYJitter { get; set; } = 0.003f;
+            Order = 115, RequireRestart = false)]
+        public float CorpseLaunchXYJitter { get; set; } = 0.002f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Z Nudge", 0f, 0.5f, "0.000",
-            Order = 115, RequireRestart = false)]
+            Order = 116, RequireRestart = false)]
         public float CorpseLaunchZNudge { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Z Clamp Above", 0f, 1.0f, "0.000",
-            Order = 116, RequireRestart = false)]
-        public float CorpseLaunchZClampAbove { get; set; } = 0.08f;
+            Order = 117, RequireRestart = false)]
+        public float CorpseLaunchZClampAbove { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
-            Order = 117, RequireRestart = false)]
-        public float CorpseLaunchContactHeight { get; set; } = 0.20f;
+            Order = 118, RequireRestart = false)]
+        public float CorpseLaunchContactHeight { get; set; } = 0.18f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
-            Order = 118, RequireRestart = false)]
+            Order = 119, RequireRestart = false)]
         public float CorpseLaunchRetryDelay { get; set; } = 0.03f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Jitter (s)", 0f, 0.5f, "0.000",
-            Order = 119, RequireRestart = false)]
+            Order = 120, RequireRestart = false)]
         public float CorpseLaunchRetryJitter { get; set; } = 0.005f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Launch Queue Cap", 0, 20,
-            Order = 120, RequireRestart = false)]
+            Order = 121, RequireRestart = false)]
         public int CorpseLaunchQueueCap { get; set; } = 3;
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 25f, 500_000f, "0.0",
-            Order = 121, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 1_500f;
+        [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
+            Order = 122, RequireRestart = false)]
+        public float CorpseImpulseMinimum { get; set; } = 0f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
-            Order = 122, RequireRestart = false)]
-        public float CorpseImpulseMaximum { get; set; } = 1_500f;
+            Order = 123, RequireRestart = false)]
+        public float CorpseImpulseMaximum { get; set; } = 0f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
+            Order = 124, RequireRestart = false)]
+        public float CorpseImpulseHardCap { get; set; } = 30f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
-            Order = 123, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.12f;
+            Order = 125, RequireRestart = false)]
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
-            Order = 124, RequireRestart = false)]
+            Order = 126, RequireRestart = false)]
         public int CorpsePrelaunchTries { get; set; } = 12;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Post-Death Launch Tries", 0, 100,
-            Order = 125, RequireRestart = false)]
+            Order = 127, RequireRestart = false)]
         public int CorpsePostDeathTries { get; set; } = 20;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Corpse Launches Per Tick", 0, 2048,
-            Order = 126, RequireRestart = false)]
+            Order = 128, RequireRestart = false)]
         public int CorpseLaunchesPerTick { get; set; } = 128;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max AoE Agents Per Tick", 0, 4096,
-            Order = 127, RequireRestart = false)]
+            Order = 129, RequireRestart = false)]
         public int AoEAgentsPerTick { get; set; } = 256;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Kick Impulses Per Tick", 0, 2048,
-            Order = 128, RequireRestart = false)]
+            Order = 130, RequireRestart = false)]
         public int KicksPerTick { get; set; } = 128;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Schedule Window (s)", 0f, 0.5f, "0.00",
-            Order = 129, RequireRestart = false)]
+            Order = 131, RequireRestart = false)]
         public float CorpseLaunchScheduleWindow { get; set; } = 0.08f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Death Blast Memory (s)", 0f, 5f, "0.00",
-            Order = 130, RequireRestart = false)]
+            Order = 132, RequireRestart = false)]
         public float DeathBlastTtl { get; set; } = 0.75f;
 
         [SettingPropertyGroup("Advanced")]
+        [SettingPropertyBool("Force Entity-Space Impulses",
+            Order = 133, RequireRestart = false)]
+        public bool ForceEntityImpulse { get; set; } = true;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
+            Order = 134, RequireRestart = false)]
+        public bool AllowSkeletonFallbackForInvalidEntity { get; set; } = true;
+
+        [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Respect Engine Blow Flags",
-            Order = 131, RequireRestart = false)]
+            Order = 135, RequireRestart = false)]
         public bool RespectEngineBlowFlags { get; set; } = false;
     }
 }
