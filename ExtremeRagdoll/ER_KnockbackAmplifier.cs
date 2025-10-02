@@ -478,22 +478,22 @@ namespace ExtremeRagdoll
 
             if (lethal)
             {
-                // Remove engine knockback so physics impulses drive motion post-death.
+                // Let physics impulses drive motion; keep ragdoll/no-sound only.
                 blow.BlowFlag &= ~BlowFlags.KnockBack;
                 blow.BlowFlag |= BlowFlags.KnockDown | BlowFlags.NoSound;
+
                 if (ER_Config.DebugLogging)
                 {
                     float nowLog = timeNow;
                     if (nowLog - _lastAnyLog > 0.5f)
                     {
                         _lastAnyLog = nowLog;
-                        ER_Log.Info("[ER] LethalStrip: removed engine KB");
+                        ER_Log.Info("[ER] LethalKeep: engine KB stripped");
                     }
                 }
 
-                if (blow.SwingDirection.LengthSquared <= 1e-6f)
-                    blow.SwingDirection = dir;
-                blow.SwingDirection = ER_DeathBlastBehavior.FinalizeImpulseDir(blow.SwingDirection);
+                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, 0.95f, 0.05f);
+                blow.SwingDirection = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
             }
             // Apply magnitude floors even when respecting engine flags
             if (!lethal)
