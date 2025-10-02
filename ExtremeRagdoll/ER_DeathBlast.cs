@@ -480,18 +480,6 @@ namespace ExtremeRagdoll
             ER_Amplify_RegisterBlowPatch.ClearPending();
         }
 
-        public override void OnMissionDeactivate()
-        {
-            _recent.Clear();
-            _kicks.Clear();
-            _preLaunches.Clear();
-            _launches.Clear();
-            _launchFailLogged.Clear();
-            _launchedOnce.Clear();
-            _queuedPerAgent.Clear();
-            ER_Amplify_RegisterBlowPatch.ClearPending();
-        }
-
         public void QueuePreDeath(Agent agent, Vec3 dir, float mag, Vec3 pos)
         {
             if (agent == null)
