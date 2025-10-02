@@ -16,6 +16,8 @@ namespace ExtremeRagdoll
         public static float DeathBlastForceMultiplier => MathF.Max(0f, Settings.Instance?.DeathBlastForceMultiplier ?? 1f);
         public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? false;
         public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
+        public static bool  ForceEntityImpulse        => Settings.Instance?.ForceEntityImpulse ?? true;
+        public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? true;
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;
@@ -38,6 +40,18 @@ namespace ExtremeRagdoll
         public static float MaxAoEForce                         => Settings.Instance?.MaxAoEForce ?? 200_000_000f;
         public static float MaxBlowBaseMagnitude                => MathF.Max(0f, Settings.Instance?.MaxBlowBaseMagnitude ?? 0f);
         public static float MaxNonLethalKnockback               => Settings.Instance?.MaxNonLethalKnockback ?? 0f;
+        public static float WarmupBlowBaseMagnitude
+        {
+            get
+            {
+                float value = Settings.Instance?.WarmupBlowBaseMagnitude ?? 1f;
+                if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+                    return 0f;
+                if (value > 5f)
+                    return 5f;
+                return value;
+            }
+        }
         public static float HorseRamKnockDownThreshold
         {
             get
@@ -47,21 +61,31 @@ namespace ExtremeRagdoll
                 return threshold;
             }
         }
-        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 1_500f);
-        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 1_500f);
-        public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.003f);
-        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.20f);
+        public static float CorpseImpulseMinimum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMinimum ?? 0f);
+        public static float CorpseImpulseMaximum                => MathF.Max(0f, Settings.Instance?.CorpseImpulseMaximum ?? 0f);
+        public static float CorpseImpulseHardCap
+        {
+            get
+            {
+                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 30f;
+                if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
+                    return 0f;
+                return cap;
+            }
+        }
+        public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.002f);
+        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.18f);
         public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.03f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
-        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.08f);
+        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.05f);
         public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
         public static float CorpseLaunchMaxUpFraction
         {
             get
             {
-                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.12f;
+                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.05f;
                 if (frac < 0f) return 0f;
                 if (frac > 1f) return 1f;
                 return frac;
