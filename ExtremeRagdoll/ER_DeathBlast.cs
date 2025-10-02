@@ -480,6 +480,18 @@ namespace ExtremeRagdoll
             ER_Amplify_RegisterBlowPatch.ClearPending();
         }
 
+        public override void OnMissionDeactivate()
+        {
+            _recent.Clear();
+            _kicks.Clear();
+            _preLaunches.Clear();
+            _launches.Clear();
+            _launchFailLogged.Clear();
+            _launchedOnce.Clear();
+            _queuedPerAgent.Clear();
+            ER_Amplify_RegisterBlowPatch.ClearPending();
+        }
+
         public void QueuePreDeath(Agent agent, Vec3 dir, float mag, Vec3 pos)
         {
             if (agent == null)
@@ -852,13 +864,6 @@ namespace ExtremeRagdoll
                 }
                 var agent = L.A;
                 int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
-                if (agentIndex >= 0 && _launchedOnce.Contains(agentIndex))
-                {
-                    _launches.RemoveAt(i);
-                    _launchFailLogged.Remove(agentIndex);
-                    DecQueue(agentIndex);
-                    continue;
-                }
                 bool nudged = false;
                 bool queueDecremented = false;
                 void DecOnce()
@@ -877,6 +882,13 @@ namespace ExtremeRagdoll
                         _launches.RemoveAt(i);
                         launchRemoved = true;
                     }
+                }
+                if (agentIndex >= 0 && _launchedOnce.Contains(agentIndex))
+                {
+                    RemoveLaunch();
+                    _launchFailLogged.Remove(agentIndex);
+                    DecOnce();
+                    continue;
                 }
                 Vec3 dir = FinalizeImpulseDir(L.Dir);
                 L.Dir = dir;
@@ -1050,7 +1062,17 @@ namespace ExtremeRagdoll
                                 bool ok2 = TryApplyImpulse(ent2, skel, dir * impMag2, contactPoint, agentIndex);
                                 nudged |= ok2;
                                 if (ok2)
+                                {
                                     MarkLaunched(agentIndex);   // ensure one-shot across retries
+                                    if (agentIndex >= 0)
+                                        _launchedOnce.Add(agentIndex);
+                                    RemoveLaunch();              // remove L from _launches
+                                    _launchFailLogged.Remove(agentIndex);
+                                    DecOnce();
+                                    if (ER_Config.DebugLogging)
+                                        ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
+                                    continue;
+                                }
                                 if (ER_Config.DebugLogging)
                                     ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
                             }
@@ -1075,7 +1097,17 @@ namespace ExtremeRagdoll
                             bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactEntity, agentIndex);
                             nudged |= ok;
                             if (ok)
-                                MarkLaunched(agentIndex);   // ensure one-shot across retries
+                            {
+                                MarkLaunched(agentIndex);   // one-shot across retries
+                                if (agentIndex >= 0)
+                                    _launchedOnce.Add(agentIndex);
+                                RemoveLaunch();              // drop from _launches
+                                _launchFailLogged.Remove(agentIndex);
+                                DecOnce();
+                                if (ER_Config.DebugLogging)
+                                    ER_Log.Info($"corpse nudge(fallback) Agent#{agentIndex} impMag={impMag:F1} ok={ok}");
+                                continue;
+                            }
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
                         }
