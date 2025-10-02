@@ -92,9 +92,9 @@ namespace ExtremeRagdoll
         public float MaxNonLethalKnockback { get; set; } = 0f;
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyFloatingInteger("Warmup Blow Base Magnitude", 0f, 10f, "0.00",
+        [SettingPropertyFloatingInteger("Warmup Blow Base Magnitude", 0f, 100000f, "0.0",
             Order = 111, RequireRestart = false)]
-        public float WarmupBlowBaseMagnitude { get; set; } = 1f;
+        public float WarmupBlowBaseMagnitude { get; set; } = 10000f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Horse Ram Knockdown Threshold", 0f, 500_000_000f, "0.0",
