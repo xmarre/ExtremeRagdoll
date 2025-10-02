@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using HarmonyLib;
 using TaleWorlds.Core;
-using TaleWorlds.Engine;           // for GameEntity, Skeleton
+using TaleWorlds.Engine;           // for GameEntity, Skeleton, MBCommon
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 using System.Reflection;           // reflection fallback for impulse API
@@ -23,9 +23,6 @@ namespace ExtremeRagdoll
         // tiny, cheap per-frame guard
         private float _lastTickT;
         private static int _impulseLogCount;
-        private static PropertyInfo _piIsPaused;
-        private static volatile bool _piIsPausedResolved;
-
         internal static Vec3 ClampVertical(Vec3 dir)
         {
             if (dir.LengthSquared < DirectionTinySqThreshold)
@@ -1294,27 +1291,8 @@ namespace ExtremeRagdoll
             }
         }
 
-        private static bool IsPausedFast()
-        {
-            try
-            {
-                if (!Volatile.Read(ref _piIsPausedResolved))
-                {
-                    var t = AccessTools.TypeByName("TaleWorlds.Engine.MBCommon");
-                    if (t != null)
-                    {
-                        _piIsPaused = t.GetProperty("IsPaused", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                        Volatile.Write(ref _piIsPausedResolved, true);
-                    }
-                }
-                if (_piIsPaused != null)
-                    return (bool)_piIsPaused.GetValue(null);
-            }
-            catch
-            {
-            }
-            return false;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsPausedFast() => MBCommon.IsPaused;
 
         // Fire post-death fallback if MakeDead scheduling failed to consume the pending entry
         public override void OnAgentRemoved(Agent affected, Agent affector, AgentState state, KillingBlow killingBlow)
