@@ -96,6 +96,7 @@
     <Compile Include="ER_ImpulseRouter.cs" />
     <Compile Include="ER_KnockbackAmplifier.cs" />
     <Compile Include="ER_DeathBlast.cs" />
+    <Compile Include="ER_Math.cs" />
     <Compile Include="ER_Log.cs" />
     <Compile Include="ER_RagdollPrep.cs" />
     <Compile Include="ER_TOR_Adapter.cs" />

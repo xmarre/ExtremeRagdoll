@@ -1,14 +1,24 @@
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
 {
+    // Bone-space impulses can misalign on missile kills. Prefer entity-space.
+    internal static class ER_ImpulsePrefs
+    {
+        internal static bool ForceEntityImpulse => ER_Config.ForceEntityImpulse;
+        internal static bool AllowSkeletonFallbackForInvalidEntity => ER_Config.AllowSkeletonFallbackForInvalidEntity;
+    }
+
     internal static class ER_ImpulseRouter
     {
+        private const float ContactTinySqThreshold = ER_Math.ContactTinySq;
+        private const float ImpulseTinySqThreshold = ER_Math.ImpulseTinySq;
         private static bool _ensured;
         private static bool _ent1Unsafe, _ent2Unsafe, _ent3Unsafe, _sk1Unsafe, _sk2Unsafe;
         private static MethodInfo _ent3, _ent2, _ent1;
@@ -84,10 +94,21 @@ namespace ExtremeRagdoll
             }
         }
 
+        private static bool TryWorldToLocalSafe(GameEntity ent, Vec3 worldImpulse, Vec3 contact, out Vec3 impLocal, out Vec3 posLocal)
+        {
+            if (ent == null)
+            {
+                impLocal = Vec3.Zero;
+                posLocal = Vec3.Zero;
+                return false;
+            }
+            return ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out impLocal, out posLocal);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Ensure()
         {
-            if (_ensured)
+            if (Volatile.Read(ref _ensured))
                 return;
 
             var ext = typeof(GameEntity).Assembly.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
@@ -187,12 +208,15 @@ namespace ExtremeRagdoll
                             $"sk2:{_sk2!=null}|{_dSk2!=null} sk1:{_sk1!=null}|{_dSk1!=null} isDyn:{_isDyn!=null}");
             }
 
-            _ensured = true;
+            Volatile.Write(ref _ensured, true);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void MarkUnsafe(int which, Exception ex)
         {
+            if (ex is TargetInvocationException tie && tie.InnerException != null)
+                ex = tie.InnerException;
+
             if (!(ex is AccessViolationException))
                 return;
 
@@ -237,20 +261,18 @@ namespace ExtremeRagdoll
         {
             if (ex is AccessViolationException)
                 return;
+            if (ex is TargetInvocationException tie && tie.InnerException is AccessViolationException)
+                return;
             Log($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsValidVec(in Vec3 v)
-        {
-            return !float.IsNaN(v.x) && !float.IsNaN(v.y) && !float.IsNaN(v.z) &&
-                   !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
-        }
+        private static bool IsValidVec(in Vec3 v) => ER_Math.IsFinite(in v);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool TryResolveContact(GameEntity ent, ref Vec3 contact)
         {
-            if (IsValidVec(contact) && contact.LengthSquared >= 1e-10f)
+            if (IsValidVec(contact) && contact.LengthSquared >= ContactTinySqThreshold)
                 return true;
 
             if (ent != null)
@@ -268,8 +290,12 @@ namespace ExtremeRagdoll
                     if (IsValidVec(fallback))
                     {
                         fallback.z += ER_Config.CorpseLaunchContactHeight;
-                        contact = fallback;
-                        return true;
+                        var l2 = fallback.LengthSquared;
+                        if (IsValidVec(fallback) && l2 >= ContactTinySqThreshold && !float.IsNaN(l2) && !float.IsInfinity(l2))
+                        {
+                            contact = fallback;
+                            return true;
+                        }
                     }
                 }
                 catch
@@ -285,7 +311,7 @@ namespace ExtremeRagdoll
         {
             Ensure();
 
-            if (!IsValidVec(worldImpulse) || worldImpulse.LengthSquared < 1e-12f)
+            if (!IsValidVec(worldImpulse) || worldImpulse.LengthSquared < ImpulseTinySqThreshold)
             {
                 Log("IMPULSE_SKIP invalid impulse");
                 return false;
@@ -300,51 +326,18 @@ namespace ExtremeRagdoll
             }
 
             bool canEnt = ent != null && LooksDynamic(ent) && AabbSane(ent);
+            bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
+            bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
+            bool skeletonAvailable = skel != null;
+            bool allowSkeletonNow = skeletonAvailable && (!forceEntity || (!canEnt && allowFallbackWhenInvalid));
             if (!canEnt)
-                Log("IMPULSE_SKIP ent routes: non-dynamic or bad AABB");
-
-            // Prefer skeleton paths before entity routes; corpses often retain non-dynamic entities
-            if (skel != null)
             {
-                if (haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
-                {
-                    try
-                    {
-                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
-                        {
-                            if (_dSk2 != null)
-                                _dSk2(skel, impL, posL);
-                            else
-                                _sk2.Invoke(skel, new object[] { impL, posL });
-                            Log("IMPULSE_USE skel2-first");
-                            return true;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        LogFailure("skel2-first", ex);
-                        MarkUnsafe(5, ex);
-                    }
-                }
-
-                if (!_sk1Unsafe && (_dSk1 != null || _sk1 != null))
-                {
-                    try
-                    {
-                        if (_dSk1 != null)
-                            _dSk1(skel, worldImpulse);
-                        else
-                            _sk1.Invoke(skel, new object[] { worldImpulse });
-                        Log("IMPULSE_USE skel1-first");
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogFailure("skel1-first", ex);
-                        MarkUnsafe(4, ex);
-                    }
-                }
+                bool skeletonWillHandle = skeletonAvailable && (!forceEntity ? true : allowFallbackWhenInvalid);
+                if (!skeletonWillHandle && !forceEntity)
+                    Log("IMPULSE_SKIP ent routes: non-dynamic or bad AABB");
             }
+
+            // Prefer entity routes; skeleton paths are handled as a fallback below when permitted.
 
             if (haveContact && canEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
@@ -362,17 +355,19 @@ namespace ExtremeRagdoll
                     LogFailure("inst ent3(false)", ex);
                     try
                     {
-                        var ok = ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL);
+                        var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                        var imp = ok ? impL : worldImpulse;
+                        var pos = ok ? posL : contact;
                         if (_dEnt3Inst != null)
-                            _dEnt3Inst(ent, ok ? impL : worldImpulse, ok ? posL : contact, true);
+                            _dEnt3Inst(ent, imp, pos, ok);
                         else
-                            _ent3Inst.Invoke(ent, new object[] { ok ? impL : worldImpulse, ok ? posL : contact, true });
-                        Log("IMPULSE_USE inst ent3(true)");
+                            _ent3Inst.Invoke(ent, new object[] { imp, pos, ok });
+                        Log($"IMPULSE_USE inst ent3({ok})");
                         return true;
                     }
                     catch (Exception ex2)
                     {
-                        LogFailure("inst ent3(true)", ex2);
+                        LogFailure("inst ent3(fallback)", ex2);
                         MarkUnsafe(3, ex2);
                     }
                 }
@@ -394,17 +389,19 @@ namespace ExtremeRagdoll
                     LogFailure("ext ent3(false)", ex);
                     try
                     {
-                        var ok = ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL);
+                        var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                        var imp = ok ? impL : worldImpulse;
+                        var pos = ok ? posL : contact;
                         if (_dEnt3 != null)
-                            _dEnt3(ent, ok ? impL : worldImpulse, ok ? posL : contact, true);
+                            _dEnt3(ent, imp, pos, ok);
                         else
-                            _ent3.Invoke(null, new object[] { ent, ok ? impL : worldImpulse, ok ? posL : contact, true });
-                        Log("IMPULSE_USE ext ent3(true)");
+                            _ent3.Invoke(null, new object[] { ent, imp, pos, ok });
+                        Log($"IMPULSE_USE ext ent3({ok})");
                         return true;
                     }
                     catch (Exception ex2)
                     {
-                        LogFailure("ext ent3(true)", ex2);
+                        LogFailure("ext ent3(fallback)", ex2);
                         MarkUnsafe(3, ex2);
                     }
                 }
@@ -414,7 +411,7 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
+                    if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
                     {
                         if (_dEnt2Inst != null)
                             _dEnt2Inst(ent, impL, posL);
@@ -435,7 +432,7 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
+                    if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
                     {
                         if (_dEnt2 != null)
                             _dEnt2(ent, impL, posL);
@@ -488,13 +485,14 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (skel != null)
+            // Fallback to skeleton if entity routes were unavailable/unsafe.
+            if (allowSkeletonNow)
             {
                 if (haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
                 {
                     try
                     {
-                        if (ER_Space.TryWorldToLocal(ent, worldImpulse, contact, out var impL, out var posL))
+                        if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
                         {
                             if (_dSk2 != null)
                                 _dSk2(skel, impL, posL);
