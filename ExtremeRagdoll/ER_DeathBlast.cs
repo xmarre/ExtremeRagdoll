@@ -56,7 +56,7 @@ namespace ExtremeRagdoll
             else
                 dir = dir.NormalizedCopy();
 
-            var biased = dir * planarScale + new Vec3(0f, 0f, upBias);
+            var biased = dir * planarScale + new Vec3(0f, 0f, upBias); // caller now passes upBias=0 for missiles
             biased = ClampVertical(biased);
 
             float lenSq = biased.LengthSquared;
@@ -933,6 +933,8 @@ namespace ExtremeRagdoll
                             nudged |= ok;
                             if (ok)
                                 MarkLaunched(agentIndex);   // ensure one-shot across retries
+                            else
+                                ER_Log.Info($"IMPULSE_APPLY_FAIL launch_noagent agent#{agentIndex}");
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
                         }
@@ -1073,6 +1075,10 @@ namespace ExtremeRagdoll
                                         ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
                                     continue;
                                 }
+                                else
+                                {
+                                    ER_Log.Info($"IMPULSE_APPLY_FAIL launch_visuals agent#{agentIndex}");
+                                }
                                 if (ER_Config.DebugLogging)
                                     ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
                             }
@@ -1108,6 +1114,8 @@ namespace ExtremeRagdoll
                                     ER_Log.Info($"corpse nudge(fallback) Agent#{agentIndex} impMag={impMag:F1} ok={ok}");
                                 continue;
                             }
+                            else
+                                ER_Log.Info($"IMPULSE_APPLY_FAIL launch_fallback agent#{agentIndex}");
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
                         }
@@ -1151,6 +1159,8 @@ namespace ExtremeRagdoll
                             nudged |= ok;
                             if (ok)
                                 MarkLaunched(agentIndex);   // ensure one-shot across retries
+                            else
+                                ER_Log.Info($"IMPULSE_APPLY_FAIL launch_physics agent#{agentIndex}");
                             if (ok && ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
                         }
@@ -1398,12 +1408,19 @@ namespace ExtremeRagdoll
                     var contactImmediate = resolvedHit;
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     // direction finalized above before feeding the impulse
-                    float imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale));
+                    float imp = 0f;
+                    // Immediate impulse only if ragdoll is already active to avoid freeze rockets
+                    try
+                    {
+                        if (IsRagdollActiveFast(skel))
+                            imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale));
+                    }
+                    catch { imp = 0f; }
                     if (imp > 0f)
                     {
                         bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
-                        if (ok)
-                            MarkLaunched(affected.Index);
+                        if (ok) MarkLaunched(affected.Index);
+                        else    ER_Log.Info($"IMPULSE_APPLY_FAIL immediate agent#{affected.Index}");
                     }
                 }
             }
@@ -1416,6 +1433,12 @@ namespace ExtremeRagdoll
             int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
             EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
             EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
+            // small smoothing pulse DISABLED for validation (can reintroduce verticals)
+            const float p3Scale = 0f;
+            if (p3Scale > 0f)
+                EnqueueLaunch(affected, dir, mag * p3Scale, hitPos,
+                              ER_Config.LaunchDelay2 + 0.04f,
+                              retries: Math.Max(0, postTries / 2));
             RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
             if (ER_Config.DebugLogging)
                 ER_Log.Info($"OnAgentRemoved fallback: scheduled corpse launch Agent#{affected.Index} mag={mag}");
