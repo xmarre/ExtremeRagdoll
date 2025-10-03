@@ -209,7 +209,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
             Order = 134, RequireRestart = false)]
-        public bool AllowSkeletonFallbackForInvalidEntity { get; set; } = false;
+        public bool AllowSkeletonFallbackForInvalidEntity { get; set; } = true;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Respect Engine Blow Flags",
