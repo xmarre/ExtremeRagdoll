@@ -231,7 +231,7 @@ namespace ExtremeRagdoll
                 catch { _dSk1 = null; }
             }
 
-            // --- try static Skeleton extension methods (common in many builds) ---
+            // --- static Skeleton extension fallbacks ---
             if (_sk2 == null || _dSk2 == null || _sk1 == null || _dSk1 == null)
             {
                 var asm = typeof(Skeleton).Assembly;
@@ -244,35 +244,29 @@ namespace ExtremeRagdoll
                 {
                     // (Skeleton, Vec3, Vec3)
                     _sk2 = _sk2 ?? (
-                        skExt.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                        skExt.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddForceToBoneAtPos", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                     ?? skExt.GetMethod("AddForceToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                     ?? skExt.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                     ?? skExt.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("ApplyImpulseToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                     ?? skExt.GetMethod("ApplyImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null));
-
                     if (_sk2 != null && _dSk2 == null)
-                    {
                         _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { _sk2.Invoke(null, new object[] { s, a, b }); } catch { } };
-                    }
 
                     // (Skeleton, Vec3)
                     _sk1 = _sk1 ?? (
-                        skExt.GetMethod("ApplyForceToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                        skExt.GetMethod("ApplyForceToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddForceToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                     ?? skExt.GetMethod("AddForceToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddImpulseToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                     ?? skExt.GetMethod("AddImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3) }, null));
-
                     if (_sk1 != null && _dSk1 == null)
-                    {
                         _dSk1 = (Skeleton s, Vec3 a) => { try { _sk1.Invoke(null, new object[] { s, a }); } catch { } };
-                    }
                 }
             }
 
@@ -412,6 +406,11 @@ namespace ExtremeRagdoll
             Ensure();
             MaybeReEnable();
 
+            try { skel?.ActivateRagdoll(); } catch { }
+            try { skel?.ForceUpdateBoneFrames(); } catch { }
+
+            try { ent?.ActivateRagdoll(); } catch { }
+
             if (!IsValidVec(worldImpulse) || worldImpulse.LengthSquared < ImpulseTinySqThreshold)
             {
                 Log("IMPULSE_SKIP invalid impulse");
@@ -420,8 +419,9 @@ namespace ExtremeRagdoll
 
             var contact = worldPos;
             bool haveContact = TryResolveContact(ent, ref contact);
+            bool hasEnt = ent != null;
             // If we have an entity but no contact, use its origin as a best-effort contact.
-            if (!haveContact && ent != null)
+            if (!haveContact && hasEnt)
             {
                 try
                 {
@@ -437,14 +437,35 @@ namespace ExtremeRagdoll
                 }
                 catch { }
             }
-            if (!haveContact && skel == null)
+
+            // Do NOT early-return here: ent1 (COM) and skel1 don't need contact.
+            // Only skip if we have neither an entity nor a skeleton to target.
+            if (!haveContact && !hasEnt && skel == null)
             {
-                Log("IMPULSE_SKIP invalid contact");
+                Log("IMPULSE_SKIP: no entity, no skeleton, no contact");
                 return false;
             }
 
+            // If no usable contact, push COM immediately (no gating on AABB).
+            if (!haveContact && hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            {
+                try
+                {
+                    // make sure bones are live
+                    try { skel?.ForceUpdateBoneFrames(); } catch { }
+                    if (_dEnt1 != null) _dEnt1(ent, worldImpulse);
+                    else _ent1.Invoke(null, new object[] { ent, worldImpulse });
+                    Log("IMPULSE_USE ext ent1(COM, no-contact)");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("ext ent1(no-contact)", ex);
+                    MarkUnsafe(1, ex);
+                }
+            }
+
             // Always try entity routes when we have contact+entity.
-            bool hasEnt = ent != null;
             bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
             bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
             bool skeletonAvailable = skel != null;
@@ -573,15 +594,16 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // New guarded ent1 (center-of-mass) fallback for cases where ent2 routes are missing/unsafe.
-            if (hasEnt && AabbSane(ent) && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            // COM fallback (no contact required)
+            if (hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
+                bool okAabb = AabbSane(ent);
+                if (!okAabb) Log("ENT1_SKIP: AABB not sane, attempting anyway");
+
                 try
                 {
-                    if (_dEnt1 != null)
-                        _dEnt1(ent, worldImpulse);
-                    else
-                        _ent1.Invoke(null, new object[] { ent, worldImpulse });
+                    if (_dEnt1 != null) _dEnt1(ent, worldImpulse);
+                    else _ent1.Invoke(null, new object[] { ent, worldImpulse });
                     Log("IMPULSE_USE ext ent1(COM)");
                     return true;
                 }
@@ -616,24 +638,21 @@ namespace ExtremeRagdoll
                     }
                 }
 
-                // Final skeleton fallback: impulse-only (no contact required)
+                // Final skeleton fallback: no contact required
                 if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
                 {
                     try
                     {
                         if (_dSk1 != null)
-                        {
                             _dSk1(skel, worldImpulse);
-                        }
                         else
                         {
-                            // Support both instance and static extension forms
                             if (_sk1.IsStatic)
                                 _sk1.Invoke(null, new object[] { skel, worldImpulse });
                             else
                                 _sk1.Invoke(skel, new object[] { worldImpulse });
                         }
-                        Log("IMPULSE_USE skel1");
+                        Log("IMPULSE_USE skel1(no-contact)");
                         return true;
                     }
                     catch (Exception ex)
@@ -644,6 +663,7 @@ namespace ExtremeRagdoll
                 }
             }
 
+            Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
             Log("IMPULSE_END: no entity/skeleton path succeeded");
             return false;
         }
