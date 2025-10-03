@@ -231,6 +231,51 @@ namespace ExtremeRagdoll
                 catch { _dSk1 = null; }
             }
 
+            // --- try static Skeleton extension methods (common in many builds) ---
+            if (_sk2 == null || _dSk2 == null || _sk1 == null || _dSk1 == null)
+            {
+                var asm = typeof(Skeleton).Assembly;
+                var skExt =
+                    asm.GetType("TaleWorlds.Engine.SkeletonExtensions") ??
+                    asm.GetType("TaleWorlds.Engine.Extensions.SkeletonExtensions") ??
+                    asm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions");
+
+                if (skExt != null)
+                {
+                    // (Skeleton, Vec3, Vec3)
+                    _sk2 = _sk2 ?? (
+                        skExt.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                     ?? skExt.GetMethod("AddForceToBoneAtPos", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                     ?? skExt.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                     ?? skExt.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                     ?? skExt.GetMethod("ApplyImpulseToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null));
+
+                    if (_sk2 != null && _dSk2 == null)
+                    {
+                        _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { _sk2.Invoke(null, new object[] { s, a, b }); } catch { } };
+                    }
+
+                    // (Skeleton, Vec3)
+                    _sk1 = _sk1 ?? (
+                        skExt.GetMethod("ApplyForceToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3) }, null)
+                     ?? skExt.GetMethod("AddForceToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3) }, null)
+                     ?? skExt.GetMethod("AddImpulseToBone", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                        new[] { typeof(Skeleton), typeof(Vec3) }, null));
+
+                    if (_sk1 != null && _dSk1 == null)
+                    {
+                        _dSk1 = (Skeleton s, Vec3 a) => { try { _sk1.Invoke(null, new object[] { s, a }); } catch { } };
+                    }
+                }
+            }
+
             if (ER_Config.DebugLogging)
             {
                 ER_Log.Info($"IMP_BIND ent3:{_ent3!=null}|{_dEnt3!=null} inst:{_ent3Inst!=null}|{_dEnt3Inst!=null} " +
@@ -375,6 +420,23 @@ namespace ExtremeRagdoll
 
             var contact = worldPos;
             bool haveContact = TryResolveContact(ent, ref contact);
+            // If we have an entity but no contact, use its origin as a best-effort contact.
+            if (!haveContact && ent != null)
+            {
+                try
+                {
+                    MatrixFrame f;
+                    try { f = ent.GetGlobalFrame(); } catch { f = ent.GetFrame(); }
+                    var o = f.origin;
+                    if (o.IsValid)
+                    {
+                        o.z += ER_Config.CorpseLaunchContactHeight;
+                        contact = o;
+                        haveContact = true;
+                    }
+                }
+                catch { }
+            }
             if (!haveContact && skel == null)
             {
                 Log("IMPULSE_SKIP invalid contact");
@@ -554,15 +616,23 @@ namespace ExtremeRagdoll
                     }
                 }
 
-                // New: skel1 fallback does not require contact (handles scripted/spell deaths).
-                if (!_sk1Unsafe && (_dSk1 != null || _sk1 != null))
+                // Final skeleton fallback: impulse-only (no contact required)
+                if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
                 {
                     try
                     {
                         if (_dSk1 != null)
+                        {
                             _dSk1(skel, worldImpulse);
+                        }
                         else
-                            _sk1.Invoke(skel, new object[] { worldImpulse });
+                        {
+                            // Support both instance and static extension forms
+                            if (_sk1.IsStatic)
+                                _sk1.Invoke(null, new object[] { skel, worldImpulse });
+                            else
+                                _sk1.Invoke(skel, new object[] { worldImpulse });
+                        }
                         Log("IMPULSE_USE skel1");
                         return true;
                     }
