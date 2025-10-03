@@ -9,7 +9,6 @@ namespace ExtremeRagdoll
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Prep(GameEntity ent, Skeleton skel)
         {
-            try { ent?.ActivateRagdoll(); } catch { }
             try { skel?.ActivateRagdoll(); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
             try
@@ -21,7 +20,9 @@ namespace ExtremeRagdoll
                     try { frame = ent?.GetFrame() ?? default; }
                     catch { frame = default; }
                 }
-                skel?.TickAnimationsAndForceUpdate(0.001f, frame, true);
+                // Give physics a full frame (twice) to settle before impulses.
+                skel?.TickAnimationsAndForceUpdate(0.016f, frame, true);
+                skel?.TickAnimationsAndForceUpdate(0.016f, frame, true);
             }
             catch { }
         }

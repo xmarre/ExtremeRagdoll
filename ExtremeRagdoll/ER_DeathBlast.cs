@@ -23,6 +23,7 @@ namespace ExtremeRagdoll
         // tiny, cheap per-frame guard
         private float _lastTickT;
         private static int _impulseLogCount;
+        private bool _missionRouterResetDone;
         internal static Vec3 ClampVertical(Vec3 dir)
         {
             if (dir.LengthSquared < DirectionTinySqThreshold)
@@ -464,11 +465,17 @@ namespace ExtremeRagdoll
 
         public static ER_DeathBlastBehavior Instance;
 
-        public override void OnBehaviorInitialize() => Instance = this;
+        public override void OnBehaviorInitialize()
+        {
+            Instance = this;
+            ER_ImpulseRouter.ResetUnsafeState();
+            _missionRouterResetDone = false;
+        }
 
         public override void OnRemoveBehavior()
         {
             Instance = null;
+            _missionRouterResetDone = false;
             _recent.Clear();
             _kicks.Clear();
             _preLaunches.Clear();
@@ -606,7 +613,6 @@ namespace ExtremeRagdoll
 
         private static void WarmRagdoll(GameEntity ent, Skeleton skel)
         {
-            try { ent?.ActivateRagdoll(); } catch { }
             try { skel?.ActivateRagdoll(); } catch { }
             // For perf, don't force LOD=0 globally; it’s heavy on crowds.
             // try { ent?.SetEnforcedMaximumLodLevel(0); } catch { }
@@ -620,6 +626,11 @@ namespace ExtremeRagdoll
             if (dt <= 1e-6f) return;
             var mission = Mission;
             if (mission == null || mission.Agents == null) return;
+            if (!_missionRouterResetDone)
+            {
+                ER_ImpulseRouter.ResetUnsafeState();
+                _missionRouterResetDone = true;
+            }
             if (IsPausedFast()) return;
             float now = mission.CurrentTime;
             // Gentle ramp after UI resume

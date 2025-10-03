@@ -34,6 +34,19 @@ namespace ExtremeRagdoll
         private static Action<Skeleton, Vec3> _dSk1;
         private static Func<GameEntity, bool> _isDyn;
         private static float _lastImpulseLog = float.NegativeInfinity;
+        // AV throttling state: indexes 1..5 map to routes.
+        private static readonly float[] _disableUntil = new float[6];
+        private static readonly int[] _avCount = new int[6];
+
+        internal static void ResetUnsafeState()
+        {
+            _ent1Unsafe = _ent2Unsafe = _ent3Unsafe = _sk1Unsafe = _sk2Unsafe = false;
+            for (int i = 0; i < _disableUntil.Length; i++)
+            {
+                _disableUntil[i] = 0f;
+                _avCount[i] = 0;
+            }
+        }
 
         private static bool LooksDynamic(GameEntity ent)
         {
@@ -63,18 +76,13 @@ namespace ExtremeRagdoll
             return false;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool AabbSane(GameEntity ent)
         {
             try
             {
-                var mn = ent.GetPhysicsBoundingBoxMin();
-                var mx = ent.GetPhysicsBoundingBoxMax();
-                if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx)) return false;
-
-                var d = mx - mn;
-                if (d.x <= 0f || d.y <= 0f || d.z <= 0f) return false;
-
-                return true;
+                ent.GetBoundingBoxMinMax(out var mn, out var mx);
+                return mn.IsValid && mx.IsValid && (mx - mn).LengthSquared > 1e-6f;
             }
             catch
             {
@@ -178,6 +186,28 @@ namespace ExtremeRagdoll
                 try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
                 catch { _dSk2 = null; }
             }
+            // Fallback: bind any reasonable (Vec3, Vec3) bone force/impulse method.
+            if (_sk2 == null)
+            {
+                foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    var ps = mi.GetParameters();
+                    if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
+                    {
+                        var name = mi.Name.ToLowerInvariant();
+                        if ((name.Contains("force") || name.Contains("impulse")) && (name.Contains("bone") || name.Contains("ragdoll")))
+                        {
+                            try
+                            {
+                                _dSk2 = (Action<Skeleton, Vec3, Vec3>)mi.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
+                                _sk2 = mi;
+                                break;
+                            }
+                            catch { }
+                        }
+                    }
+                }
+            }
             _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
                                 new[] { typeof(Vec3) }, null)
                 ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
@@ -188,6 +218,27 @@ namespace ExtremeRagdoll
             {
                 try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
                 catch { _dSk1 = null; }
+            }
+            if (_sk1 == null)
+            {
+                foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    var ps = mi.GetParameters();
+                    if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
+                    {
+                        var name = mi.Name.ToLowerInvariant();
+                        if ((name.Contains("force") || name.Contains("impulse")) && (name.Contains("bone") || name.Contains("ragdoll")))
+                        {
+                            try
+                            {
+                                _dSk1 = (Action<Skeleton, Vec3>)mi.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+                                _sk1 = mi;
+                                break;
+                            }
+                            catch { }
+                        }
+                    }
+                }
             }
 
             if (ER_Config.DebugLogging)
@@ -202,6 +253,17 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void MaybeReEnable()
+        {
+            float now = GetNow();
+            if (_ent1Unsafe && _disableUntil[1] <= now) _ent1Unsafe = false;
+            if (_ent2Unsafe && _disableUntil[2] <= now) _ent2Unsafe = false;
+            if (_ent3Unsafe && _disableUntil[3] <= now) _ent3Unsafe = false;
+            if (_sk1Unsafe && _disableUntil[4] <= now) _sk1Unsafe = false;
+            if (_sk2Unsafe && _disableUntil[5] <= now) _sk2Unsafe = false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void MarkUnsafe(int which, Exception ex)
         {
             if (ex is TargetInvocationException tie && tie.InnerException != null)
@@ -209,6 +271,19 @@ namespace ExtremeRagdoll
 
             if (!(ex is AccessViolationException))
                 return;
+
+            float now = GetNow();
+            if (which < 1 || which > 5)
+                return;
+            if (_disableUntil[which] > now)
+                return;
+
+            int count = ++_avCount[which];
+            if (count < 3)
+                return;
+
+            _avCount[which] = 0;
+            _disableUntil[which] = now + 5.0f;
 
             switch (which)
             {
@@ -219,7 +294,7 @@ namespace ExtremeRagdoll
                 case 5: _sk2Unsafe = true; break;
             }
 
-            ER_Log.Info($"IMPULSE_DISABLE route#{which} after {ex.GetType().Name}");
+            ER_Log.Info($"IMPULSE_DISABLE route#{which} for 5.0s after {ex.GetType().Name}");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -300,6 +375,7 @@ namespace ExtremeRagdoll
         public static bool TryImpulse(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos)
         {
             Ensure();
+            MaybeReEnable();
 
             if (!IsValidVec(worldImpulse) || worldImpulse.LengthSquared < ImpulseTinySqThreshold)
             {
@@ -331,19 +407,23 @@ namespace ExtremeRagdoll
             // Prefer contact entity routes first
             if (haveContact && hasEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
-                try { ent.ActivateRagdoll(); } catch { }
+                if (!LooksDynamic(ent) || !AabbSane(ent))
+                    goto SKIP_ENT3_INST;
                 try
                 {
-                    if (_dEnt3Inst != null)
-                        _dEnt3Inst(ent, worldImpulse, contact, false);
-                    else
-                        _ent3Inst.Invoke(ent, new object[] { worldImpulse, contact, false });
-                    Log("IMPULSE_USE inst ent3(false)");
-                    return true;
+                    if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
+                    {
+                        if (_dEnt3Inst != null)
+                            _dEnt3Inst(ent, impL, posL, true);
+                        else
+                            _ent3Inst.Invoke(ent, new object[] { impL, posL, true });
+                        Log("IMPULSE_USE inst ent3(true)");
+                        return true;
+                    }
                 }
                 catch (Exception ex)
                 {
-                    LogFailure("inst ent3(false)", ex);
+                    LogFailure("inst ent3(true)", ex);
                     try
                     {
                         var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
@@ -363,22 +443,27 @@ namespace ExtremeRagdoll
                     }
                 }
             }
+SKIP_ENT3_INST:
 
             if (haveContact && hasEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
-                try { ent.ActivateRagdoll(); } catch { }
+                if (!LooksDynamic(ent) || !AabbSane(ent))
+                    goto SKIP_ENT3_EXT;
                 try
                 {
-                    if (_dEnt3 != null)
-                        _dEnt3(ent, worldImpulse, contact, false);
-                    else
-                        _ent3.Invoke(null, new object[] { ent, worldImpulse, contact, false });
-                    Log("IMPULSE_USE ext ent3(false)");
-                    return true;
+                    if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
+                    {
+                        if (_dEnt3 != null)
+                            _dEnt3(ent, impL, posL, true);
+                        else
+                            _ent3.Invoke(null, new object[] { ent, impL, posL, true });
+                        Log("IMPULSE_USE ext ent3(true)");
+                        return true;
+                    }
                 }
                 catch (Exception ex)
                 {
-                    LogFailure("ext ent3(false)", ex);
+                    LogFailure("ext ent3(true)", ex);
                     try
                     {
                         var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
@@ -398,10 +483,13 @@ namespace ExtremeRagdoll
                     }
                 }
             }
+SKIP_ENT3_EXT:
 
             if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
-                try { ent.ActivateRagdoll(); } catch { }
+                // Only touch ent2 when the body is truly dynamic and sane
+                if (!LooksDynamic(ent) || !AabbSane(ent))
+                    goto SKIP_ENT2_INST;
                 try
                 {
                     if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
@@ -420,10 +508,12 @@ namespace ExtremeRagdoll
                     MarkUnsafe(2, ex);
                 }
             }
+SKIP_ENT2_INST:
 
             if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
-                try { ent.ActivateRagdoll(); } catch { }
+                if (!LooksDynamic(ent) || !AabbSane(ent))
+                    goto SKIP_ENT2_EXT;
                 try
                 {
                     if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
@@ -442,8 +532,29 @@ namespace ExtremeRagdoll
                     MarkUnsafe(2, ex);
                 }
             }
+SKIP_ENT2_EXT:
 
-            // Skip ent1 (center-of-mass) paths entirely — they AV on some builds.
+            // New guarded ent1 (center-of-mass) fallback for cases where ent2 routes are missing/unsafe.
+            if (hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            {
+                if (LooksDynamic(ent) && AabbSane(ent))
+                {
+                    try
+                    {
+                        if (_dEnt1 != null)
+                            _dEnt1(ent, worldImpulse);
+                        else
+                            _ent1.Invoke(null, new object[] { ent, worldImpulse });
+                        Log("IMPULSE_USE ext ent1");
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("ext ent1", ex);
+                        MarkUnsafe(1, ex);
+                    }
+                }
+            }
 
             // Fallback to skeleton if entity routes were unavailable/unsafe.
             if (allowSkeletonNow)
@@ -468,24 +579,24 @@ namespace ExtremeRagdoll
                         MarkUnsafe(5, ex);
                     }
                 }
-            }
 
-            // Final skeleton fallback: impulse-only (no contact required).
-            if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
-            {
-                try
+                // New: skel1 fallback does not require contact (handles scripted/spell deaths).
+                if (!_sk1Unsafe && (_dSk1 != null || _sk1 != null))
                 {
-                    if (_dSk1 != null)
-                        _dSk1(skel, worldImpulse);
-                    else
-                        _sk1.Invoke(skel, new object[] { worldImpulse });
-                    Log("IMPULSE_USE skel1");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("skel1", ex);
-                    MarkUnsafe(4, ex);
+                    try
+                    {
+                        if (_dSk1 != null)
+                            _dSk1(skel, worldImpulse);
+                        else
+                            _sk1.Invoke(skel, new object[] { worldImpulse });
+                        Log("IMPULSE_USE skel1");
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("skel1", ex);
+                        MarkUnsafe(4, ex);
+                    }
                 }
             }
 
