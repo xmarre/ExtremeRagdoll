@@ -64,7 +64,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 30f;
+                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 60f;
                 if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
                     return 0f;
                 return cap;

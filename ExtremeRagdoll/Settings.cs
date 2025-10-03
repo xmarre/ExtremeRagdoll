@@ -159,7 +159,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
             Order = 124, RequireRestart = false)]
-        public float CorpseImpulseHardCap { get; set; } = 12f;
+        public float CorpseImpulseHardCap { get; set; } = 60f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
