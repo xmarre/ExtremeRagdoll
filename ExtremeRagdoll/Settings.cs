@@ -159,12 +159,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
             Order = 124, RequireRestart = false)]
-        public float CorpseImpulseHardCap { get; set; } = 25f;
+        public float CorpseImpulseHardCap { get; set; } = 12f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.015f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.010f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -204,7 +204,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        public bool ForceEntityImpulse { get; set; } = false;
+        public bool ForceEntityImpulse { get; set; } = false; // allow skeleton fallback
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
