@@ -562,6 +562,9 @@ namespace ExtremeRagdoll
             }
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
+            // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
+            // Agent ragdolls often flip to dynamic a frame later; skipping here kills the launch.
+            bool dynSure = true;
             // Entity impulses require a contact point; COM route remains disabled.
             // Don't return; let skeleton routes handle no-contact cases.
             if (dynOk && !haveContact)
@@ -602,12 +605,10 @@ namespace ExtremeRagdoll
                 }
                 catch { }
             }
-            // Keep ent2/ent3 on sane AABB; ent2 only skips dyn gating when IsDynamicBody is unavailable.
-            // Only block ent2/ent3 when the engine definitively reports a static body.
-            bool dynKnownNotDynamic = (_isDyn != null) && !dynOk;
-            if (dynKnownNotDynamic && !allowSkeletonNow)
+            // Don't hard-stop on dyn/AABB; ent2 can still work with world->local fallback.
+            if (!hasEnt && !allowSkeletonNow)
             {
-                Log($"IMPULSE_SKIP: no safe route (dyn={dynOk} aabb={aabbOk})");
+                Log("IMPULSE_SKIP: no entity or skeleton route");
                 return false;
             }
 
@@ -620,7 +621,7 @@ namespace ExtremeRagdoll
             }
 
             // Prefer contact entity routes first
-            if (haveContact && hasEnt && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
@@ -662,7 +663,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -704,9 +705,8 @@ namespace ExtremeRagdoll
                 }
             }
 
-            bool dynSure = (_isDyn == null) || dynOk;
-
-            if (haveContact && hasEnt && aabbOk && dynSure && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            // ent2 is safe behind try/catch; don't over-gate on dyn/AABB
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -729,7 +729,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && aabbOk && dynSure && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {

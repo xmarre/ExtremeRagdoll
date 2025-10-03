@@ -21,12 +21,12 @@ namespace ExtremeRagdoll
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;
-        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.07f;
+        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.06f;
         public static float LaunchPulse2Scale
         {
             get
             {
-                float scale = Settings.Instance?.LaunchPulse2Scale ?? 0.60f;
+                float scale = Settings.Instance?.LaunchPulse2Scale ?? 0.50f;
                 if (scale < 0f) scale = 0f;
                 else if (scale > 2f) scale = 2f;
                 return scale;
@@ -90,6 +90,18 @@ namespace ExtremeRagdoll
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
         public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.05f);
         public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
+        public static float ImmediateImpulseScale
+        {
+            get
+            {
+                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.40f;
+                if (float.IsNaN(scale) || float.IsInfinity(scale))
+                    return 0f;
+                if (scale < 0f) return 0f;
+                if (scale > 1f) return 1f;
+                return scale;
+            }
+        }
         public static float CorpseLaunchMaxUpFraction
         {
             get
@@ -455,7 +467,7 @@ namespace ExtremeRagdoll
             if ((!missileBlocked || allowBlockedPush) && !lethal && missileSpeed > 0f)
             {
                 // Mostly planar. Final vertical clamp happens in PrepDir/ClampVertical.
-                var flat = ER_DeathBlastBehavior.PrepDir(dir, 0.96f, 0.06f);
+                var flat = ER_DeathBlastBehavior.PrepDir(dir, 1f, 0f);
                 blow.SwingDirection = flat;
             }
 
@@ -504,8 +516,11 @@ namespace ExtremeRagdoll
                     }
                 }
 
-                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, 0.95f, 0.05f);
-                blow.SwingDirection = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
+                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, missileSpeed > 0f ? 1f : 0.95f, missileSpeed > 0f ? 0f : 0.05f);
+                lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
+                blow.SwingDirection = lethalDir;
+                // ensure pending corpse-launch uses the same (flattened) direction
+                dir = lethalDir;
             }
             // Apply magnitude floors even when respecting engine flags
             if (!lethal)
