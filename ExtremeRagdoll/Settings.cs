@@ -204,7 +204,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        public bool ForceEntityImpulse { get; set; } = true; // disable skeleton fallback on TW branch
+        public bool ForceEntityImpulse { get; set; } = false; // allow skeleton fallback by default
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
@@ -215,5 +215,10 @@ namespace ExtremeRagdoll
         [SettingPropertyBool("Respect Engine Blow Flags",
             Order = 135, RequireRestart = false)]
         public bool RespectEngineBlowFlags { get; set; } = false;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Max Entity AABB Extent (m)", 1f, 5000f, "0.0",
+            Order = 136, RequireRestart = false)]
+        public float MaxAabbExtent { get; set; } = 1024f;
     }
 }

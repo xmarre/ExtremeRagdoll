@@ -72,6 +72,18 @@ namespace ExtremeRagdoll
         }
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.002f);
         public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.18f);
+        public static float MaxAabbExtent
+        {
+            get
+            {
+                float cap = Settings.Instance?.MaxAabbExtent ?? 1024f;
+                if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
+                    return 1024f;
+                if (cap < 1f) cap = 1f;
+                else if (cap > 10_000f) cap = 10_000f;
+                return cap;
+            }
+        }
         public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.03f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
