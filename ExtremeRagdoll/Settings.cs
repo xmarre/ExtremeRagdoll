@@ -39,17 +39,17 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #1 (s)", 0f, 0.25f, "0.00",
             Order = 100, RequireRestart = false)]
-        public float LaunchDelay1 { get; set; } = 0.03f;
+        public float LaunchDelay1 { get; set; } = 0.02f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #2 (s)", 0f, 0.30f, "0.00",
             Order = 101, RequireRestart = false)]
-        public float LaunchDelay2 { get; set; } = 0.09f;
+        public float LaunchDelay2 { get; set; } = 0.06f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Second Pulse Scale", 0f, 2.0f, "0.00",
             Order = 102, RequireRestart = false)]
-        public float LaunchPulse2Scale { get; set; } = 0.80f;
+        public float LaunchPulse2Scale { get; set; } = 0.50f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Velocity Scale Threshold", 1.0f, 2.0f, "0.00",
@@ -220,5 +220,10 @@ namespace ExtremeRagdoll
         [SettingPropertyFloatingInteger("Max Entity AABB Extent (m)", 1f, 5000f, "0.0",
             Order = 136, RequireRestart = false)]
         public float MaxAabbExtent { get; set; } = 1024f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
+            Order = 137, RequireRestart = false)]
+        public float ImmediateImpulseScale { get; set; } = 0.40f;
     }
 }

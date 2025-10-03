@@ -511,7 +511,7 @@ namespace ExtremeRagdoll
             if (mag <= 0f)
                 return;
 
-            Vec3 safeDir = PrepDir(dir);
+            Vec3 safeDir = FinalizeImpulseDir(PrepDir(dir, 1f, 0f));
             if (!ER_Math.IsFinite(in safeDir) || safeDir.LengthSquared < DirectionTinySqThreshold)
                 return;
 
@@ -594,7 +594,7 @@ namespace ExtremeRagdoll
             }
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 return;
-            Vec3 safeDir = PrepDir(dir);
+            Vec3 safeDir = FinalizeImpulseDir(PrepDir(dir, 1f, 0f));
             if (!ER_Math.IsFinite(in safeDir) || safeDir.LengthSquared < DirectionTinySqThreshold)
                 return;
             Vec3 nudgedPos = pos;
@@ -742,7 +742,7 @@ namespace ExtremeRagdoll
                                 try { dir = agent.LookDirection; } catch { dir = new Vec3(0f, 1f, 0.25f); }
                             }
                             // Minimal up-bias to prevent vertical rockets
-                            dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 0.25f);
+                            dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 0.00f);
                             dir = FinalizeImpulseDir(dir);
 
                             // Warm ragdoll only. Do not shove pre-death.
@@ -1352,7 +1352,7 @@ namespace ExtremeRagdoll
             // Kontaktpunkt: konservativ das Agent-Center verwenden (kein KillingBlow.GlobalPosition vorhanden)
             Vec3 hitPos = affected.Position;
             Vec3 flat   = new Vec3(affected.LookDirection.x, affected.LookDirection.y, 0f);
-            Vec3 fallbackDir = PrepDir(flat, 0.35f, 0.25f);
+            Vec3 fallbackDir = PrepDir(flat, 0.35f, 0.00f);
 
             // Fallback only if MakeDead didn’t consume the pending entry
             if (!ER_Amplify_RegisterBlowPatch.TryTakePending(affected.Index, out var p))
@@ -1362,7 +1362,7 @@ namespace ExtremeRagdoll
                 var d = affected.LookDirection;
                 if (d.LengthSquared < DirectionTinySqThreshold)
                     d = new Vec3(0f, 1f, 0f);
-                d = PrepDir(d, 0.35f, 0.25f);
+                d = PrepDir(d, 0.35f, 0.00f);
                 float m = MathF.Min(12000f, ER_Config.MaxBlowBaseMagnitude > 0f
                     ? ER_Config.MaxBlowBaseMagnitude : 12000f);
                 var pos0 = affected.Position;
@@ -1398,7 +1398,7 @@ namespace ExtremeRagdoll
                     var contactImmediate = resolvedHit;
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     // direction finalized above before feeding the impulse
-                    float imp = ToPhysicsImpulse(mag);
+                    float imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale));
                     if (imp > 0f)
                     {
                         bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
