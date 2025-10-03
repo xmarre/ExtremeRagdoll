@@ -81,8 +81,13 @@ namespace ExtremeRagdoll
         {
             try
             {
-                ent.GetBoundingBoxMinMax(out var mn, out var mx);
-                return mn.IsValid && mx.IsValid && (mx - mn).LengthSquared > 1e-6f;
+                var mn = ent.GetPhysicsBoundingBoxMin();
+                var mx = ent.GetPhysicsBoundingBoxMax();
+                if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx))
+                    return false;
+
+                var d = mx - mn;
+                return d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f;
             }
             catch
             {
