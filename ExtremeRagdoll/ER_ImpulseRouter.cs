@@ -285,6 +285,7 @@ namespace ExtremeRagdoll
                 var skExt =
                     skAsm.GetType("TaleWorlds.Engine.SkeletonExtensions") ??
                     skAsm.GetType("TaleWorlds.Engine.Extensions.SkeletonExtensions") ??
+                    skAsm.GetType("TaleWorlds.Engine.ManagedExtensions.SkeletonExtensions") ??
                     skAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions");
 
                 if (skExt != null)
@@ -602,7 +603,9 @@ namespace ExtremeRagdoll
                 catch { }
             }
             // Keep ent2/ent3 on sane AABB; ent2 only skips dyn gating when IsDynamicBody is unavailable.
-            if (!dynOk && !allowSkeletonNow)
+            // Only block ent2/ent3 when the engine definitively reports a static body.
+            bool dynKnownNotDynamic = (_isDyn != null) && !dynOk;
+            if (dynKnownNotDynamic && !allowSkeletonNow)
             {
                 Log($"IMPULSE_SKIP: no safe route (dyn={dynOk} aabb={aabbOk})");
                 return false;
