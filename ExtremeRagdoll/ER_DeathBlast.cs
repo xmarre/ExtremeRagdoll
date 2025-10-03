@@ -613,6 +613,7 @@ namespace ExtremeRagdoll
 
         private static void WarmRagdoll(GameEntity ent, Skeleton skel)
         {
+            try { ent?.ActivateRagdoll(); } catch { }
             try { skel?.ActivateRagdoll(); } catch { }
             // For perf, don't force LOD=0 globally; it’s heavy on crowds.
             // try { ent?.SetEnforcedMaximumLodLevel(0); } catch { }

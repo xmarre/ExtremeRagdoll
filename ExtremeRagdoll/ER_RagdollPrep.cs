@@ -9,6 +9,7 @@ namespace ExtremeRagdoll
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Prep(GameEntity ent, Skeleton skel)
         {
+            try { ent?.ActivateRagdoll(); } catch { }
             try { skel?.ActivateRagdoll(); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
             try

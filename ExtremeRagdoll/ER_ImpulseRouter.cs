@@ -50,30 +50,32 @@ namespace ExtremeRagdoll
 
         private static bool LooksDynamic(GameEntity ent)
         {
-            if (_isDyn != null)
+            try
             {
-                try
-                {
+                if (_isDyn != null)
                     return _isDyn(ent);
-                }
-                catch { }
             }
+            catch { }
 
             try
             {
                 var bf = ent.BodyFlag.ToString();
-                if (!string.IsNullOrEmpty(bf) && bf.IndexOf("Dynamic", StringComparison.Ordinal) >= 0)
-                    return true;
+                if (!string.IsNullOrEmpty(bf) &&
+                    bf.IndexOf("Static", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;
             }
             catch { }
+
             try
             {
                 var pdf = ent.PhysicsDescBodyFlag.ToString();
-                if (!string.IsNullOrEmpty(pdf) && pdf.IndexOf("Dynamic", StringComparison.Ordinal) >= 0)
-                    return true;
+                if (!string.IsNullOrEmpty(pdf) &&
+                    pdf.IndexOf("Static", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;
             }
             catch { }
-            return false;
+
+            return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -83,15 +85,17 @@ namespace ExtremeRagdoll
             {
                 var mn = ent.GetPhysicsBoundingBoxMin();
                 var mx = ent.GetPhysicsBoundingBoxMax();
+                // Fail-open: newly ragdolled bodies can report junk/zero here.
                 if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx))
-                    return false;
+                    return true;
 
                 var d = mx - mn;
                 return d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f;
             }
             catch
             {
-                return false;
+                // Also fail-open on exceptions.
+                return true;
             }
         }
 
@@ -176,22 +180,11 @@ namespace ExtremeRagdoll
             }
 
             var sk = typeof(Skeleton);
-            _sk2 = sk.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3), typeof(Vec3) }, null)
-                ?? sk.GetMethod("AddForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3), typeof(Vec3) }, null)
-                ?? sk.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3), typeof(Vec3) }, null)
-                ?? sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3), typeof(Vec3) }, null)
-                ?? sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3), typeof(Vec3) }, null);
-            if (_sk2 != null)
-            {
-                try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
-                catch { _dSk2 = null; }
-            }
-            // Fallback: bind any reasonable (Vec3, Vec3) bone force/impulse method.
+            _sk2 = sk.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                 ?? sk.GetMethod("AddForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                 ?? sk.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                 ?? sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                 ?? sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null);
             if (_sk2 == null)
             {
                 foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
@@ -199,31 +192,23 @@ namespace ExtremeRagdoll
                     var ps = mi.GetParameters();
                     if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
                     {
-                        var name = mi.Name.ToLowerInvariant();
-                        if ((name.Contains("force") || name.Contains("impulse")) && (name.Contains("bone") || name.Contains("ragdoll")))
+                        var n = mi.Name.ToLowerInvariant();
+                        if ((n.Contains("force") || n.Contains("impulse")) && (n.Contains("bone") || n.Contains("ragdoll")))
                         {
-                            try
-                            {
-                                _dSk2 = (Action<Skeleton, Vec3, Vec3>)mi.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
-                                _sk2 = mi;
-                                break;
-                            }
-                            catch { }
+                            _sk2 = mi;
+                            break;
                         }
                     }
                 }
             }
-            _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3) }, null)
-                ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3) }, null)
-                ?? sk.GetMethod("AddImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                new[] { typeof(Vec3) }, null);
-            if (_sk1 != null)
+            if (_sk2 != null)
             {
-                try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
-                catch { _dSk1 = null; }
+                try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
+                catch { _dSk2 = null; }
             }
+            _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
+                 ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
+                 ?? sk.GetMethod("AddImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null);
             if (_sk1 == null)
             {
                 foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
@@ -231,19 +216,19 @@ namespace ExtremeRagdoll
                     var ps = mi.GetParameters();
                     if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
                     {
-                        var name = mi.Name.ToLowerInvariant();
-                        if ((name.Contains("force") || name.Contains("impulse")) && (name.Contains("bone") || name.Contains("ragdoll")))
+                        var n = mi.Name.ToLowerInvariant();
+                        if ((n.Contains("force") || n.Contains("impulse")) && (n.Contains("bone") || n.Contains("ragdoll")))
                         {
-                            try
-                            {
-                                _dSk1 = (Action<Skeleton, Vec3>)mi.CreateDelegate(typeof(Action<Skeleton, Vec3>));
-                                _sk1 = mi;
-                                break;
-                            }
-                            catch { }
+                            _sk1 = mi;
+                            break;
                         }
                     }
                 }
+            }
+            if (_sk1 != null)
+            {
+                try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
+                catch { _dSk1 = null; }
             }
 
             if (ER_Config.DebugLogging)
@@ -410,10 +395,8 @@ namespace ExtremeRagdoll
             }
 
             // Prefer contact entity routes first
-            if (haveContact && hasEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (haveContact && hasEnt && AabbSane(ent) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
-                if (!LooksDynamic(ent) || !AabbSane(ent))
-                    goto SKIP_ENT3_INST;
                 try
                 {
                     if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
@@ -448,12 +431,9 @@ namespace ExtremeRagdoll
                     }
                 }
             }
-SKIP_ENT3_INST:
 
-            if (haveContact && hasEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (haveContact && hasEnt && AabbSane(ent) && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
-                if (!LooksDynamic(ent) || !AabbSane(ent))
-                    goto SKIP_ENT3_EXT;
                 try
                 {
                     if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
@@ -488,24 +468,20 @@ SKIP_ENT3_INST:
                     }
                 }
             }
-SKIP_ENT3_EXT:
 
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && hasEnt && AabbSane(ent) && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
-                // Only touch ent2 when the body is truly dynamic and sane
-                if (!LooksDynamic(ent) || !AabbSane(ent))
-                    goto SKIP_ENT2_INST;
                 try
                 {
-                    if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
-                    {
-                        if (_dEnt2Inst != null)
-                            _dEnt2Inst(ent, impL, posL);
-                        else
-                            _ent2Inst.Invoke(ent, new object[] { impL, posL });
-                        Log("IMPULSE_USE inst ent2");
-                        return true;
-                    }
+                    var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                    var imp = ok ? impL : worldImpulse;
+                    var pos = ok ? posL : contact;
+                    if (_dEnt2Inst != null)
+                        _dEnt2Inst(ent, imp, pos);
+                    else
+                        _ent2Inst.Invoke(ent, new object[] { imp, pos });
+                    Log($"IMPULSE_USE inst ent2(local={ok})");
+                    return true;
                 }
                 catch (Exception ex)
                 {
@@ -513,23 +489,20 @@ SKIP_ENT3_EXT:
                     MarkUnsafe(2, ex);
                 }
             }
-SKIP_ENT2_INST:
 
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && AabbSane(ent) && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
-                if (!LooksDynamic(ent) || !AabbSane(ent))
-                    goto SKIP_ENT2_EXT;
                 try
                 {
-                    if (TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL))
-                    {
-                        if (_dEnt2 != null)
-                            _dEnt2(ent, impL, posL);
-                        else
-                            _ent2.Invoke(null, new object[] { ent, impL, posL });
-                        Log("IMPULSE_USE ext ent2");
-                        return true;
-                    }
+                    var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                    var imp = ok ? impL : worldImpulse;
+                    var pos = ok ? posL : contact;
+                    if (_dEnt2 != null)
+                        _dEnt2(ent, imp, pos);
+                    else
+                        _ent2.Invoke(null, new object[] { ent, imp, pos });
+                    Log($"IMPULSE_USE ext ent2(local={ok})");
+                    return true;
                 }
                 catch (Exception ex)
                 {
@@ -537,27 +510,23 @@ SKIP_ENT2_INST:
                     MarkUnsafe(2, ex);
                 }
             }
-SKIP_ENT2_EXT:
 
             // New guarded ent1 (center-of-mass) fallback for cases where ent2 routes are missing/unsafe.
-            if (hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            if (hasEnt && AabbSane(ent) && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
-                if (LooksDynamic(ent) && AabbSane(ent))
+                try
                 {
-                    try
-                    {
-                        if (_dEnt1 != null)
-                            _dEnt1(ent, worldImpulse);
-                        else
-                            _ent1.Invoke(null, new object[] { ent, worldImpulse });
-                        Log("IMPULSE_USE ext ent1");
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        LogFailure("ext ent1", ex);
-                        MarkUnsafe(1, ex);
-                    }
+                    if (_dEnt1 != null)
+                        _dEnt1(ent, worldImpulse);
+                    else
+                        _ent1.Invoke(null, new object[] { ent, worldImpulse });
+                    Log("IMPULSE_USE ext ent1(COM)");
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("ext ent1", ex);
+                    MarkUnsafe(1, ex);
                 }
             }
 
