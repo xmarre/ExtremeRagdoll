@@ -204,12 +204,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        public bool ForceEntityImpulse { get; set; } = false; // allow skeleton fallback
+        public bool ForceEntityImpulse { get; set; } = true; // disable skeleton fallback on TW branch
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
             Order = 134, RequireRestart = false)]
-        public bool AllowSkeletonFallbackForInvalidEntity { get; set; } = true;
+        public bool AllowSkeletonFallbackForInvalidEntity { get; set; } = false;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Respect Engine Blow Flags",

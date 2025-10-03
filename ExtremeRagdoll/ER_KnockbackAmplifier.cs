@@ -17,7 +17,7 @@ namespace ExtremeRagdoll
         public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? false;
         public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
         public static bool  ForceEntityImpulse        => Settings.Instance?.ForceEntityImpulse ?? true;
-        public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? true;
+        public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? false;
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;

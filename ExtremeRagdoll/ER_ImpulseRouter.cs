@@ -51,32 +51,37 @@ namespace ExtremeRagdoll
 
         private static bool LooksDynamic(GameEntity ent)
         {
-            try
-            {
-                if (_isDyn != null)
-                    return _isDyn(ent);
-            }
-            catch { }
-
+            // Prefer engine check if available
+            try { if (_isDyn != null) return _isDyn(ent); }
+            catch { ER_Log.Info("ISDYN_EX"); }
+            // Fallback: explicit "Dynamic" beats "Static"; default = NOT dynamic
             try
             {
                 var bf = ent.BodyFlag.ToString();
-                if (!string.IsNullOrEmpty(bf) &&
-                    bf.IndexOf("Static", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return false;
+                if (!string.IsNullOrEmpty(bf))
+                {
+                    if (bf.IndexOf("Dynamic", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                    if (bf.IndexOf("Static", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return false;
+                }
             }
             catch { }
 
             try
             {
                 var pdf = ent.PhysicsDescBodyFlag.ToString();
-                if (!string.IsNullOrEmpty(pdf) &&
-                    pdf.IndexOf("Static", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return false;
+                if (!string.IsNullOrEmpty(pdf))
+                {
+                    if (pdf.IndexOf("Dynamic", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return true;
+                    if (pdf.IndexOf("Static", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return false;
+                }
             }
             catch { }
 
-            return true;
+            return true; // fail-open if we can't tell; AabbSane now guards native calls
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -86,17 +91,17 @@ namespace ExtremeRagdoll
             {
                 var mn = ent.GetPhysicsBoundingBoxMin();
                 var mx = ent.GetPhysicsBoundingBoxMax();
-                // Fail-open: newly ragdolled bodies can report junk/zero here.
+                // Fail-closed: if junk/zero, DO NOT touch native physics.
                 if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx))
-                    return true;
+                    return false;
 
                 var d = mx - mn;
                 return d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f;
             }
             catch
             {
-                // Also fail-open on exceptions.
-                return true;
+                // Also fail-closed on exceptions.
+                return false;
             }
         }
 
@@ -452,32 +457,26 @@ namespace ExtremeRagdoll
                 return false;
             }
 
-            // If no usable contact, push COM immediately (no gating on AABB).
-            if (!haveContact && hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
-            {
-                try
-                {
-                    // make sure bones are live
-                    try { skel?.ForceUpdateBoneFrames(); } catch { }
-                    if (_dEnt1 != null) _dEnt1(ent, worldImpulse);
-                    else _ent1.Invoke(null, new object[] { ent, worldImpulse });
-                    Log("IMPULSE_USE ext ent1(COM, no-contact)");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    // force-print the actual exception even if LogFailure throttles
-                    ER_Log.Info($"ENT1_EX: {_ent1Name ?? "?"} -> {ex}");
-                    LogFailure("ext ent1(no-contact)", ex);
-                    MarkUnsafe(1, ex);
-                }
-            }
-
-            // Always try entity routes when we have contact+entity.
             bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
             bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
             bool skeletonAvailable = skel != null;
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
+            bool dynOk = hasEnt && LooksDynamic(ent);
+            bool aabbOk = hasEnt && AabbSane(ent);
+            bool entOk = dynOk && aabbOk;
+            // With COM route disabled, entity impulses require a contact point.
+            if (entOk && !haveContact)
+            {
+                Log("IMPULSE_SKIP: no contact for entity route (COM disabled)");
+                return false;
+            }
+            if (!entOk && !allowSkeletonNow)
+            {
+                Log($"IMPULSE_SKIP: no safe route (dyn={dynOk} aabb={aabbOk})");
+                return false;
+            }
+
+            // Always try entity routes when we have contact+entity.
             if (!hasEnt)
             {
                 bool skeletonWillHandle = skeletonAvailable && (!forceEntity ? true : allowFallbackWhenInvalid);
@@ -486,7 +485,7 @@ namespace ExtremeRagdoll
             }
 
             // Prefer contact entity routes first
-            if (haveContact && hasEnt && AabbSane(ent) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (haveContact && hasEnt && LooksDynamic(ent) && AabbSane(ent) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
@@ -523,7 +522,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && AabbSane(ent) && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (haveContact && hasEnt && LooksDynamic(ent) && AabbSane(ent) && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -560,7 +559,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && AabbSane(ent) && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && hasEnt && LooksDynamic(ent) && AabbSane(ent) && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -581,7 +580,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && AabbSane(ent) && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && LooksDynamic(ent) && AabbSane(ent) && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -602,26 +601,11 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // COM fallback (no contact required)
-            if (hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+            // COM fallback DISABLED on this TW branch: ApplyForceToDynamicBody is AV-prone.
+            // Leave a breadcrumb when it would have fired so we can see frequency in logs.
+            if (hasEnt && LooksDynamic(ent) && AabbSane(ent) && (_dEnt1 != null || _ent1 != null))
             {
-                bool okAabb = AabbSane(ent);
-                if (!okAabb) Log("ENT1_SKIP: AABB not sane, attempting anyway");
-
-                try
-                {
-                    if (_dEnt1 != null) _dEnt1(ent, worldImpulse);
-                    else _ent1.Invoke(null, new object[] { ent, worldImpulse });
-                    Log("IMPULSE_USE ext ent1(COM)");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    // force-print the actual exception even if LogFailure throttles
-                    ER_Log.Info($"ENT1_EX: {_ent1Name ?? "?"} -> {ex}");
-                    LogFailure("ext ent1", ex);
-                    MarkUnsafe(1, ex);
-                }
+                Log("ENT1_DISABLED: skipping COM route on this branch");
             }
 
             // Fallback to skeleton if entity routes were unavailable/unsafe.
@@ -676,6 +660,16 @@ namespace ExtremeRagdoll
             }
 
             Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
+            try
+            {
+                if (hasEnt)
+                {
+                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    var mx = ent.GetPhysicsBoundingBoxMax();
+                    ER_Log.Info($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                }
+            }
+            catch { }
             Log("IMPULSE_END: no entity/skeleton path succeeded");
             return false;
         }
