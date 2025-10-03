@@ -36,6 +36,7 @@ namespace ExtremeRagdoll
         private static float _lastImpulseLog = float.NegativeInfinity; // keep
         private static float _lastNoiseLog = float.NegativeInfinity;
         private static string _ent1Name, _ent2Name, _ent3Name, _sk1Name, _sk2Name; // debug
+        private static float _lastAvLog = float.NegativeInfinity;
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
@@ -422,6 +423,13 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void LogAlways(string message)
+        {
+            if (ER_Config.DebugLogging)
+                ER_Log.Info(message);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void LogNoiseOncePer(float minDelta, string message)
         {
             float now = GetNow();
@@ -434,11 +442,20 @@ namespace ExtremeRagdoll
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void LogFailure(string context, Exception ex)
         {
+            // Do not fully hide AVs; throttle them
+            if (ex is TargetInvocationException tie && tie.InnerException != null)
+                ex = tie.InnerException;
             if (ex is AccessViolationException)
+            {
+                float now = GetNow();
+                if (now - _lastAvLog >= 0.25f)
+                {
+                    _lastAvLog = now;
+                    LogAlways($"IMPULSE_FAIL_AV {context}");
+                }
                 return;
-            if (ex is TargetInvocationException tie && tie.InnerException is AccessViolationException)
-                return;
-            Log($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
+            }
+            LogAlways($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -634,32 +651,15 @@ namespace ExtremeRagdoll
                             _dEnt3Inst(ent, impL, posL, true);
                         else
                             _ent3Inst.Invoke(ent, new object[] { impL, posL, true });
-                        Log("IMPULSE_USE inst ent3(true)");
+                        LogAlways("IMPULSE_USE inst ent3(true)");
                         return true;
                     }
+                    else LogAlways("IMPULSE_SKIP inst ent3: local transform failed");
                 }
                 catch (Exception ex)
                 {
                     LogFailure("inst ent3(true)", ex);
-                    try
-                    {
-                        var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
-                        if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                            ok = false;
-                        var imp = ok ? impL : worldImpulse;
-                        var pos = ok ? posL : contact;
-                        if (_dEnt3Inst != null)
-                            _dEnt3Inst(ent, imp, pos, ok);
-                        else
-                            _ent3Inst.Invoke(ent, new object[] { imp, pos, ok });
-                        Log($"IMPULSE_USE inst ent3({ok})");
-                        return true;
-                    }
-                    catch (Exception ex2)
-                    {
-                        LogFailure("inst ent3(fallback)", ex2);
-                        MarkUnsafe(3, ex2);
-                    }
+                    MarkUnsafe(3, ex);
                 }
             }
 
@@ -676,32 +676,15 @@ namespace ExtremeRagdoll
                             _dEnt3(ent, impL, posL, true);
                         else
                             _ent3.Invoke(null, new object[] { ent, impL, posL, true });
-                        Log("IMPULSE_USE ext ent3(true)");
+                        LogAlways("IMPULSE_USE ext ent3(true)");
                         return true;
                     }
+                    else LogAlways("IMPULSE_SKIP ext ent3: local transform failed");
                 }
                 catch (Exception ex)
                 {
                     LogFailure("ext ent3(true)", ex);
-                    try
-                    {
-                        var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
-                        if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                            ok = false;
-                        var imp = ok ? impL : worldImpulse;
-                        var pos = ok ? posL : contact;
-                        if (_dEnt3 != null)
-                            _dEnt3(ent, imp, pos, ok);
-                        else
-                            _ent3.Invoke(null, new object[] { ent, imp, pos, ok });
-                        Log($"IMPULSE_USE ext ent3({ok})");
-                        return true;
-                    }
-                    catch (Exception ex2)
-                    {
-                        LogFailure("ext ent3(fallback)", ex2);
-                        MarkUnsafe(3, ex2);
-                    }
+                    MarkUnsafe(3, ex);
                 }
             }
 
@@ -713,14 +696,16 @@ namespace ExtremeRagdoll
                     var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
                     if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         ok = false;
-                    var imp = ok ? impL : worldImpulse;
-                    var pos = ok ? posL : contact;
-                    if (_dEnt2Inst != null)
-                        _dEnt2Inst(ent, imp, pos);
-                    else
-                        _ent2Inst.Invoke(ent, new object[] { imp, pos });
-                    Log($"IMPULSE_USE inst ent2(local={ok})");
-                    return true;
+                    if (ok)
+                    {
+                        if (_dEnt2Inst != null)
+                            _dEnt2Inst(ent, impL, posL);
+                        else
+                            _ent2Inst.Invoke(ent, new object[] { impL, posL });
+                        LogAlways("IMPULSE_USE inst ent2(local)");
+                        return true;
+                    }
+                    LogAlways("IMPULSE_SKIP inst ent2: local transform failed");
                 }
                 catch (Exception ex)
                 {
@@ -736,14 +721,16 @@ namespace ExtremeRagdoll
                     var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
                     if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         ok = false;
-                    var imp = ok ? impL : worldImpulse;
-                    var pos = ok ? posL : contact;
-                    if (_dEnt2 != null)
-                        _dEnt2(ent, imp, pos);
-                    else
-                        _ent2.Invoke(null, new object[] { ent, imp, pos });
-                    Log($"IMPULSE_USE ext ent2(local={ok})");
-                    return true;
+                    if (ok)
+                    {
+                        if (_dEnt2 != null)
+                            _dEnt2(ent, impL, posL);
+                        else
+                            _ent2.Invoke(null, new object[] { ent, impL, posL });
+                        LogAlways("IMPULSE_USE ext ent2(local)");
+                        return true;
+                    }
+                    LogAlways("IMPULSE_SKIP ext ent2: local transform failed");
                 }
                 catch (Exception ex)
                 {
@@ -788,43 +775,21 @@ namespace ExtremeRagdoll
                 }
 
                 // Final skeleton fallback: no contact required
-                if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
-                {
-                    try
-                    {
-                        if (_dSk1 != null)
-                            _dSk1(skel, worldImpulse);
-                        else
-                        {
-                            if (_sk1.IsStatic)
-                                _sk1.Invoke(null, new object[] { skel, worldImpulse });
-                            else
-                                _sk1.Invoke(skel, new object[] { worldImpulse });
-                        }
-                        Log("IMPULSE_USE skel1(no-contact)");
-                        return true;
-                    }
-                    catch (Exception ex)
-                    {
-                        ER_Log.Info($"SKEL1_EX: {_sk1Name ?? "?"} -> {ex}");
-                        LogFailure("skel1", ex);
-                        MarkUnsafe(4, ex);
-                    }
-                }
+                // skel1(no-contact) disabled: prone to vertical launches
             }
 
-            Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
+            LogAlways($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
             try
             {
                 if (hasEnt)
                 {
                     var mn = ent.GetPhysicsBoundingBoxMin();
                     var mx = ent.GetPhysicsBoundingBoxMax();
-                    ER_Log.Info($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                    LogAlways($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
                 }
             }
             catch { }
-            Log("IMPULSE_END: no entity/skeleton path succeeded");
+            LogAlways("IMPULSE_END: no entity/skeleton path succeeded");
             return false;
         }
     }

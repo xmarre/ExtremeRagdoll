@@ -516,7 +516,11 @@ namespace ExtremeRagdoll
                     }
                 }
 
-                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, missileSpeed > 0f ? 1f : 0.95f, missileSpeed > 0f ? 0f : 0.05f);
+                // Missile kills keep zero up-bias; others small
+                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir,
+                                   missileSpeed > 0f ? 1f : 0.95f,
+                                   missileSpeed > 0f ? 0f : 0.02f);
+                if (missileSpeed > 0f) lethalDir.z = 0f; // hard-flat missiles
                 lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
                 blow.SwingDirection = lethalDir;
                 // ensure pending corpse-launch uses the same (flattened) direction
