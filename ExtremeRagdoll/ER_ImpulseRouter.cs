@@ -431,7 +431,24 @@ namespace ExtremeRagdoll
             var contact = worldPos;
             bool haveContact = TryResolveContact(ent, ref contact);
             bool hasEnt = ent != null;
-            // If we have an entity but no contact, use its origin as a best-effort contact.
+            // If we have an entity but no contact, prefer its AABB center (then origin) as a best-effort contact.
+            if (!haveContact && ent != null)
+            {
+                try
+                {
+                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    var mx = ent.GetPhysicsBoundingBoxMax();
+                    if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx) && (mx - mn).LengthSquared > 1e-6f)
+                    {
+                        var c = (mn + mx) * 0.5f;
+                        c.z += ER_Config.CorpseLaunchContactHeight;
+                        contact = c;
+                        haveContact = true;
+                    }
+                }
+                catch { }
+            }
+
             if (!haveContact && ent != null)
             {
                 try
@@ -463,14 +480,16 @@ namespace ExtremeRagdoll
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
-            bool entOk = dynOk && aabbOk;
-            // With COM route disabled, entity impulses require a contact point.
-            if (entOk && !haveContact)
-            {
-                Log("IMPULSE_SKIP: no contact for entity route (COM disabled)");
-                return false;
-            }
-            if (!entOk && !allowSkeletonNow)
+            // Entity impulses require a contact point; COM route remains disabled.
+            // Don't return; let skeleton routes handle no-contact cases.
+            if (dynOk && !haveContact)
+                Log("IMPULSE_SKIP_ENT_ONLY: no contact (COM disabled) — trying skeleton routes");
+
+            // if contact got set to NaN/Inf somewhere, don't feed it to transforms
+            if (!ER_Math.IsFinite(in contact))
+                haveContact = false;
+            // Do not hard-block entity route on AABB for ent2; keep AABB for ent3 only.
+            if (!dynOk && !allowSkeletonNow)
             {
                 Log($"IMPULSE_SKIP: no safe route (dyn={dynOk} aabb={aabbOk})");
                 return false;
@@ -559,7 +578,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && LooksDynamic(ent) && AabbSane(ent) && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && hasEnt && LooksDynamic(ent) && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -580,7 +599,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && LooksDynamic(ent) && AabbSane(ent) && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && LooksDynamic(ent) && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -603,7 +622,7 @@ namespace ExtremeRagdoll
 
             // COM fallback DISABLED on this TW branch: ApplyForceToDynamicBody is AV-prone.
             // Leave a breadcrumb when it would have fired so we can see frequency in logs.
-            if (hasEnt && LooksDynamic(ent) && AabbSane(ent) && (_dEnt1 != null || _ent1 != null))
+            if (hasEnt && LooksDynamic(ent) && (_dEnt1 != null || _ent1 != null))
             {
                 Log("ENT1_DISABLED: skipping COM route on this branch");
             }
@@ -659,7 +678,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
+            Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
             try
             {
                 if (hasEnt)
