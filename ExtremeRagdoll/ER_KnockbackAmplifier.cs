@@ -516,11 +516,11 @@ namespace ExtremeRagdoll
                     }
                 }
 
-                // Let our impulses drive it. Neutralize engine push.
+                // Let impulses drive motion; neutralize engine KB
                 var lethalDir = ER_DeathBlastBehavior.PrepDir(dir,
                                    1f,
-                                   missileSpeed > 0f ? 0f : 0.0f);
-                blow.BaseMagnitude = 0f; // hard-zero engine KB on lethal
+                                   missileSpeed > 0f ? 0f : 0.02f);
+                blow.BaseMagnitude = 0f;
                 if (missileSpeed > 0f) lethalDir.z = 0f; // hard-flat missiles
                 lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
                 blow.SwingDirection = lethalDir;
