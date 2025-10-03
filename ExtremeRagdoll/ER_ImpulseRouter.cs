@@ -33,7 +33,8 @@ namespace ExtremeRagdoll
         private static Action<Skeleton, Vec3, Vec3> _dSk2;
         private static Action<Skeleton, Vec3> _dSk1;
         private static Func<GameEntity, bool> _isDyn;
-        private static float _lastImpulseLog = float.NegativeInfinity;
+        private static float _lastImpulseLog = float.NegativeInfinity; // keep
+        private static string _ent1Name, _ent2Name, _ent3Name, _sk1Name, _sk2Name; // debug
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
@@ -272,10 +273,13 @@ namespace ExtremeRagdoll
 
             if (ER_Config.DebugLogging)
             {
+                _ent3Name = _ent3?.Name; _ent2Name = _ent2?.Name; _ent1Name = _ent1?.Name;
+                _sk2Name = _sk2?.Name; _sk1Name = _sk1?.Name;
                 ER_Log.Info($"IMP_BIND ent3:{_ent3!=null}|{_dEnt3!=null} inst:{_ent3Inst!=null}|{_dEnt3Inst!=null} " +
                             $"ent2:{_ent2!=null}|{_dEnt2!=null} inst:{_ent2Inst!=null}|{_dEnt2Inst!=null} " +
                             $"ent1:{_ent1!=null}|{_dEnt1!=null} inst:{_ent1Inst!=null}|{_dEnt1Inst!=null} " +
                             $"sk2:{_sk2!=null}|{_dSk2!=null} sk1:{_sk1!=null}|{_dSk1!=null} isDyn:{_isDyn!=null}");
+                ER_Log.Info($"IMP_BIND_NAMES ent3:{_ent3Name} ent2:{_ent2Name} ent1:{_ent1Name} sk2:{_sk2Name} sk1:{_sk1Name}");
             }
 
             Volatile.Write(ref _ensured, true);
@@ -405,6 +409,8 @@ namespace ExtremeRagdoll
         {
             Ensure();
             MaybeReEnable();
+            // show every exception for this attempt (disable throttling)
+            _lastImpulseLog = float.NegativeInfinity;
 
             try { skel?.ActivateRagdoll(); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
@@ -421,7 +427,7 @@ namespace ExtremeRagdoll
             bool haveContact = TryResolveContact(ent, ref contact);
             bool hasEnt = ent != null;
             // If we have an entity but no contact, use its origin as a best-effort contact.
-            if (!haveContact && hasEnt)
+            if (!haveContact && ent != null)
             {
                 try
                 {
@@ -440,7 +446,7 @@ namespace ExtremeRagdoll
 
             // Do NOT early-return here: ent1 (COM) and skel1 don't need contact.
             // Only skip if we have neither an entity nor a skeleton to target.
-            if (!haveContact && !hasEnt && skel == null)
+            if (!haveContact && skel == null && ent == null)
             {
                 Log("IMPULSE_SKIP: no entity, no skeleton, no contact");
                 return false;
@@ -460,6 +466,8 @@ namespace ExtremeRagdoll
                 }
                 catch (Exception ex)
                 {
+                    // force-print the actual exception even if LogFailure throttles
+                    ER_Log.Info($"ENT1_EX: {_ent1Name ?? "?"} -> {ex}");
                     LogFailure("ext ent1(no-contact)", ex);
                     MarkUnsafe(1, ex);
                 }
@@ -609,6 +617,8 @@ namespace ExtremeRagdoll
                 }
                 catch (Exception ex)
                 {
+                    // force-print the actual exception even if LogFailure throttles
+                    ER_Log.Info($"ENT1_EX: {_ent1Name ?? "?"} -> {ex}");
                     LogFailure("ext ent1", ex);
                     MarkUnsafe(1, ex);
                 }
@@ -633,6 +643,7 @@ namespace ExtremeRagdoll
                     }
                     catch (Exception ex)
                     {
+                        ER_Log.Info($"SKEL2_EX: {_sk2Name ?? "?"} -> {ex}");
                         LogFailure("skel2", ex);
                         MarkUnsafe(5, ex);
                     }
@@ -657,6 +668,7 @@ namespace ExtremeRagdoll
                     }
                     catch (Exception ex)
                     {
+                        ER_Log.Info($"SKEL1_EX: {_sk1Name ?? "?"} -> {ex}");
                         LogFailure("skel1", ex);
                         MarkUnsafe(4, ex);
                     }
