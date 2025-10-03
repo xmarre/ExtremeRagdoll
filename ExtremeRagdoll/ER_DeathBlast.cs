@@ -1409,14 +1409,18 @@ namespace ExtremeRagdoll
                     resolvedHit = ResolveHitPosition(hitPos, ent, affected.Position);
                     var contactImmediate = resolvedHit;
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
-                    // direction finalized above before feeding the impulse
-                    float imp = 0f;
-                    try { if (IsRagdollActiveFast(skel)) imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale)); } catch { imp = 0f; }
-                    if (imp > 0f)
+                    // HARD SAFE: disable immediate impulse
+                    const bool ER_HARDSAFE = true;
+                    if (!ER_HARDSAFE)
                     {
-                        bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
-                        if (ok) MarkLaunched(affected.Index);
-                        else    ER_Log.Info($"IMPULSE_APPLY_FAIL immediate agent#{affected.Index}");
+                        float imp = 0f;
+                        try { if (IsRagdollActiveFast(skel)) imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale)); } catch { imp = 0f; }
+                        if (imp > 0f)
+                        {
+                            bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
+                            if (ok) MarkLaunched(affected.Index);
+                            else    ER_Log.Info($"IMPULSE_APPLY_FAIL immediate agent#{affected.Index}");
+                        }
                     }
                 }
             }
@@ -1432,8 +1436,9 @@ namespace ExtremeRagdoll
                 dir.z = 0f;
             if (dir.z > CorpseLaunchMaxUpFrac)
                 dir.z = CorpseLaunchMaxUpFrac;
-            EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
-            EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
+            // HARD SAFE: do not schedule corpse launches
+            // EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
+            // EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
             // disabled for validation
             float p3Scale = 0f;
             if (p3Scale > 0f)
