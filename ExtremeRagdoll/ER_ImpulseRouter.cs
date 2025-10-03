@@ -159,6 +159,23 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vec3 ClampUpLocal(Vec3 v)
+        {
+            if (!IsValidVec(v))
+                return new Vec3(0f, 0f, 0f);
+            float l2 = v.LengthSquared;
+            if (l2 <= 1e-9f || float.IsNaN(l2) || float.IsInfinity(l2))
+                return new Vec3(0f, 0f, 0f);
+            float len = MathF.Sqrt(l2);
+            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFrac);
+            if (v.z > zMax)
+                v.z = zMax;
+            if (v.z < 0f)
+                v.z = 0f;
+            return v;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Ensure()
         {
             if (Volatile.Read(ref _ensured))
@@ -506,6 +523,19 @@ namespace ExtremeRagdoll
             MaybeReEnable();
             // show every exception for this attempt (disable throttling)
             _lastImpulseLog = float.NegativeInfinity;
+            // HARD FAILSAFE: clamp world-Z before any transform
+            var impW = worldImpulse;
+            if (!IsValidVec(impW) || impW.LengthSquared < ImpulseTinySqThreshold)
+            {
+                Log("IMPULSE_SKIP invalid/tiny impulse");
+                return false;
+            }
+            float len = MathF.Sqrt(impW.LengthSquared);
+            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFrac);
+            if (impW.z > zMax)
+                impW.z = zMax;
+            if (impW.z < 0f)
+                impW.z = 0f;
 
             if (!_bindLogged)
             {
@@ -518,12 +548,6 @@ namespace ExtremeRagdoll
             try { skel?.ForceUpdateBoneFrames(); } catch { }
 
             try { ent?.ActivateRagdoll(); } catch { }
-
-            if (!IsValidVec(worldImpulse) || worldImpulse.LengthSquared < ImpulseTinySqThreshold)
-            {
-                Log("IMPULSE_SKIP invalid impulse");
-                return false;
-            }
 
             var contact = worldPos;
             bool haveContact = TryResolveContact(ent, ref contact);
@@ -650,11 +674,14 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var okLocal = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                    var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
                     if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         okLocal = false;
                     if (okLocal)
                     {
+                        impL = ClampUpLocal(impL);
+                        if (impL.LengthSquared < ImpulseTinySqThreshold)
+                            return false;
                         if (_dEnt3Inst != null)
                             _dEnt3Inst(ent, impL, posL, true);
                         else
@@ -675,11 +702,14 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var okLocal = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                    var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
                     if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         okLocal = false;
                     if (okLocal)
                     {
+                        impL = ClampUpLocal(impL);
+                        if (impL.LengthSquared < ImpulseTinySqThreshold)
+                            return false;
                         if (_dEnt3 != null)
                             _dEnt3(ent, impL, posL, true);
                         else
@@ -701,11 +731,14 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                    var ok = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
                     if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         ok = false;
                     if (ok)
                     {
+                        impL = ClampUpLocal(impL);
+                        if (impL.LengthSquared < ImpulseTinySqThreshold)
+                            return false;
                         if (_dEnt2Inst != null)
                             _dEnt2Inst(ent, impL, posL);
                         else
@@ -726,11 +759,14 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var ok = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                    var ok = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
                     if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         ok = false;
                     if (ok)
                     {
+                        impL = ClampUpLocal(impL);
+                        if (impL.LengthSquared < ImpulseTinySqThreshold)
+                            return false;
                         if (_dEnt2 != null)
                             _dEnt2(ent, impL, posL);
                         else
@@ -761,11 +797,14 @@ namespace ExtremeRagdoll
                 {
                     try
                     {
-                        var okLocal = TryWorldToLocalSafe(ent, worldImpulse, contact, out var impL, out var posL);
+                        var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
                         if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                             okLocal = false;
                         if (okLocal)
                         {
+                            impL = ClampUpLocal(impL);
+                            if (impL.LengthSquared < ImpulseTinySqThreshold)
+                                return false;
                             if (_dSk2 != null)
                                 _dSk2(skel, impL, posL);
                             else
@@ -783,7 +822,7 @@ namespace ExtremeRagdoll
                 }
 
                 // Final skeleton fallback: no contact required
-                // skel1(no-contact) disabled: prone to vertical launches
+                // skel1(no-contact) DISABLED: causes vertical launches
             }
 
             LogAlways($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");

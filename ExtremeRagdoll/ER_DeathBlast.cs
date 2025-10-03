@@ -1411,13 +1411,7 @@ namespace ExtremeRagdoll
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
                     // direction finalized above before feeding the impulse
                     float imp = 0f;
-                    // Immediate impulse only if ragdoll is already active to avoid freeze rockets
-                    try
-                    {
-                        if (IsRagdollActiveFast(skel))
-                            imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale));
-                    }
-                    catch { imp = 0f; }
+                    try { if (IsRagdollActiveFast(skel)) imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale)); } catch { imp = 0f; }
                     if (imp > 0f)
                     {
                         bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
@@ -1433,6 +1427,11 @@ namespace ExtremeRagdoll
             // Schedule with retries (safety net in case MakeDead timing was late)
             int postTries = ER_Config.CorpsePostDeathTries;
             int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
+            // enforce flat-ish dir for scheduled impulses
+            if (dir.z < 0f)
+                dir.z = 0f;
+            if (dir.z > CorpseLaunchMaxUpFrac)
+                dir.z = CorpseLaunchMaxUpFrac;
             EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
             EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
             // disabled for validation
