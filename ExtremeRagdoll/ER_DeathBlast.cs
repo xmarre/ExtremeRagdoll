@@ -207,6 +207,7 @@ namespace ExtremeRagdoll
         private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos, int agentId = -1)
         {
             _ = agentId;
+            ER_Log.Info($"IMP_ENTER ent={(ent!=null)} skel={(skel!=null)} imp2={impulse.LengthSquared:0} pos2={pos.LengthSquared:0} id={agentId}");
             if (!ER_Math.IsFinite(in impulse) || !ER_Math.IsFinite(in pos))
                 return false;
 
@@ -222,6 +223,7 @@ namespace ExtremeRagdoll
             }
 
             bool ok = ER_ImpulseRouter.TryImpulse(ent, skel, impulse, pos);
+            if (!ok) ER_Log.Info("IMP_TRY_RETURN false");
             if (!ok && (ent != null || skel != null))
             {
                 WarmRagdoll(ent, skel);
@@ -1433,8 +1435,8 @@ namespace ExtremeRagdoll
             int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
             EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
             EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
-            // small smoothing pulse DISABLED for validation (can reintroduce verticals)
-            const float p3Scale = 0f;
+            // disabled for validation
+            float p3Scale = 0f;
             if (p3Scale > 0f)
                 EnqueueLaunch(affected, dir, mag * p3Scale, hitPos,
                               ER_Config.LaunchDelay2 + 0.04f,

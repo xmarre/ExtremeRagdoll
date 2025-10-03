@@ -36,6 +36,7 @@ namespace ExtremeRagdoll
         private static float _lastImpulseLog = float.NegativeInfinity; // keep
         private static float _lastNoiseLog = float.NegativeInfinity;
         private static string _ent1Name, _ent2Name, _ent3Name, _sk1Name, _sk2Name; // debug
+        private static bool _bindLogged;
         private static float _lastAvLog = float.NegativeInfinity;
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
@@ -505,6 +506,13 @@ namespace ExtremeRagdoll
             MaybeReEnable();
             // show every exception for this attempt (disable throttling)
             _lastImpulseLog = float.NegativeInfinity;
+
+            if (!_bindLogged)
+            {
+                _bindLogged = true;
+                ER_Log.Info($"IMP_BIND_NAMES ent3Inst={_ent3Inst?.Name ?? "null"} ent3={_ent3?.Name ?? "null"} ent2Inst={_ent2Inst?.Name ?? "null"} ent2={_ent2?.Name ?? "null"} sk2={_sk2?.Name ?? "null"} sk1={_sk1?.Name ?? "null"}");
+            }
+            ER_Log.Info($"IMP_TRY haveEnt={(ent!=null)} haveSk={(skel!=null)} imp2={worldImpulse.LengthSquared:0} pos2={worldPos.LengthSquared:0}");
 
             try { skel?.ActivateRagdoll(); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
