@@ -39,12 +39,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #1 (s)", 0f, 0.25f, "0.00",
             Order = 100, RequireRestart = false)]
-        public float LaunchDelay1 { get; set; } = 0.05f;
+        public float LaunchDelay1 { get; set; } = 0.03f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #2 (s)", 0f, 0.30f, "0.00",
             Order = 101, RequireRestart = false)]
-        public float LaunchDelay2 { get; set; } = 0.12f;
+        public float LaunchDelay2 { get; set; } = 0.09f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Second Pulse Scale", 0f, 2.0f, "0.00",
@@ -159,12 +159,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
             Order = 124, RequireRestart = false)]
-        public float CorpseImpulseHardCap { get; set; } = 30f;
+        public float CorpseImpulseHardCap { get; set; } = 25f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.05f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.015f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -204,7 +204,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        public bool ForceEntityImpulse { get; set; } = true;
+        public bool ForceEntityImpulse { get; set; } = false;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
