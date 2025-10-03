@@ -167,7 +167,7 @@ namespace ExtremeRagdoll
             if (l2 <= 1e-9f || float.IsNaN(l2) || float.IsInfinity(l2))
                 return new Vec3(0f, 0f, 0f);
             float len = MathF.Sqrt(l2);
-            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFrac);
+            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFraction);
             if (v.z > zMax)
                 v.z = zMax;
             if (v.z < 0f)
@@ -531,7 +531,7 @@ namespace ExtremeRagdoll
                 return false;
             }
             float len = MathF.Sqrt(impW.LengthSquared);
-            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFrac);
+            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFraction);
             if (impW.z > zMax)
                 impW.z = zMax;
             if (impW.z < 0f)
