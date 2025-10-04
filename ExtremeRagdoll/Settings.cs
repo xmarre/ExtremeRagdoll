@@ -129,7 +129,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
             Order = 118, RequireRestart = false)]
-        public float CorpseLaunchContactHeight { get; set; } = 0.05f;
+        public float CorpseLaunchContactHeight { get; set; } = 0.02f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
@@ -164,7 +164,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.06f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.02f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -204,8 +204,8 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        // Default to entity-first routing so corpse pushes stay contact-driven out of the box.
-        public bool ForceEntityImpulse { get; set; } = true;
+        // Default to skeleton-first routing to avoid gear impulses before ragdoll.
+        public bool ForceEntityImpulse { get; set; } = false;  // allow skeleton-first path
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
@@ -225,7 +225,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 137, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.35f;
+        public float ImmediateImpulseScale { get; set; } = 0.0f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",
@@ -241,5 +241,9 @@ namespace ExtremeRagdoll
         [SettingPropertyFloatingInteger("Schedule Magnitude Duplicate Fraction", 0f, 1f, "0.00",
             Order = 140, RequireRestart = false)]
         public float ScheduleMagDuplicateFraction { get; set; } = 0.05f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyBool("Allow ent3(world) impulses", Order = 141, RequireRestart = false)]
+        public bool AllowEnt3World { get; set; } = false; // default OFF to test
     }
 }

@@ -628,6 +628,9 @@ namespace ExtremeRagdoll
             }
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
+            bool ragActive = false;
+            try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
+            catch { }
             // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
             // Agent ragdolls often flip to dynamic a frame later; skipping here kills the launch.
             bool dynSure = true;
@@ -671,6 +674,49 @@ namespace ExtremeRagdoll
                 }
                 catch { }
             }
+            // ---------- skeleton first (local) ----------
+            if (allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
+            {
+                try
+                {
+                    var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
+                    if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
+                        okLocal = false;
+                    // Fallback: if no valid transform (null ent / rare NaNs), use world values as "local".
+                    if (!okLocal)
+                    {
+                        impL = impW;
+                        posL = contact;
+                        okLocal = ER_Math.IsFinite(in impL) && ER_Math.IsFinite(in posL);
+                    }
+                    if (okLocal)
+                    {
+                        ClampLocalUp(ref impL);
+                        if (impL.LengthSquared < ImpulseTinySqThreshold)
+                            okLocal = false;
+                    }
+                    if (okLocal)
+                    {
+                        if (_dSk2 != null) _dSk2(skel, impL, posL);
+                        else               _sk2.Invoke(skel, new object[] { impL, posL });
+                        Log("IMPULSE_USE skel2(local)");
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("skel2(local)", ex);
+                    MarkUnsafe(5, ex);
+                }
+            }
+
+            // If ragdoll is already active, don't touch entity routes (they kick shields/weapons).
+            if (ragActive && allowSkeletonNow)
+            {
+                Log("IMPULSE_END: ragdoll active — skipping entity routes");
+                return false;
+            }
+
             // Don't hard-stop on dyn/AABB; ent2 can still work with world->local fallback.
             if (!hasEnt && !allowSkeletonNow)
             {
@@ -686,45 +732,43 @@ namespace ExtremeRagdoll
                     Log("IMPULSE_SKIP ent routes: missing entity");
             }
 
-            // Prefer contact entity routes first
-            if (haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            // Prefer contact entity routes (world) after skeleton attempt
+            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
-                    if (_dEnt3Inst != null)
-                        _dEnt3Inst(ent, impW, contact, true);
-                    else
-                        _ent3Inst.Invoke(ent, new object[] { impW, contact, true });
-                    Log("IMPULSE_USE inst ent3(world)");
+                    if (_dEnt3Inst != null) _dEnt3Inst(ent, impW, contact, false);
+                    else                    _ent3Inst.Invoke(ent, new object[] { impW, contact, false });
+                    Log("IMPULSE_USE ent3(world)");
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    LogFailure("inst ent3(true)", ex);
+                    LogFailure("ent3(world)", ex);
                     MarkUnsafe(3, ex);
                 }
             }
 
-            if (haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
                     if (_dEnt3 != null)
-                        _dEnt3(ent, impW, contact, true);
+                        _dEnt3(ent, impW, contact, false);
                     else
-                        _ent3.Invoke(null, new object[] { ent, impW, contact, true });
+                        _ent3.Invoke(null, new object[] { ent, impW, contact, false });
                     Log("IMPULSE_USE ext ent3(world)");
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    LogFailure("ext ent3(true)", ex);
+                    LogFailure("ext ent3(world)", ex);
                     MarkUnsafe(3, ex);
                 }
             }
 
             // ent2 is safe behind try/catch; don't over-gate on dyn/AABB
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (!ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -755,7 +799,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (!ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -791,44 +835,6 @@ namespace ExtremeRagdoll
             if (hasEnt && LooksDynamic(ent) && (_dEnt1 != null || _ent1 != null))
             {
                 Log("ENT1_DISABLED: skipping COM route on this branch");
-            }
-
-            // Fallback to skeleton if entity routes were unavailable/unsafe.
-            if (allowSkeletonNow)
-            {
-                if (haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
-                {
-                    try
-                    {
-                        var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
-                        if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                            okLocal = false;
-                        if (okLocal)
-                        {
-                            ClampLocalUp(ref impL);
-                            if (impL.LengthSquared < ImpulseTinySqThreshold)
-                                okLocal = false;
-                        }
-                        if (okLocal)
-                        {
-                            if (_dSk2 != null)
-                                _dSk2(skel, impL, posL);
-                            else
-                                _sk2.Invoke(skel, new object[] { impL, posL });
-                            Log("IMPULSE_USE skel2");
-                            return true;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        ER_Log.Info($"SKEL2_EX: {_sk2Name ?? "?"} -> {ex}");
-                        LogFailure("skel2", ex);
-                        MarkUnsafe(5, ex);
-                    }
-                }
-
-                // Final skeleton fallback: no contact required
-                // skel1(no-contact) DISABLED: causes vertical launches
             }
 
             if (ER_Config.DebugLogging)

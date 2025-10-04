@@ -35,6 +35,14 @@ namespace ExtremeRagdoll
         private float _lastTickT;
         private static int _impulseLogCount;
         private bool _missionRouterResetDone;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float CapImpulse(float imp)
+        {
+            float hard = ER_Config.CorpseImpulseHardCap;
+            return (hard > 0f && !float.IsNaN(imp) && !float.IsInfinity(imp)) ? MathF.Min(imp, hard) : imp;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static Vec3 ClampVertical(Vec3 dir) => ClampVertical(dir, CorpseLaunchMaxUpFrac);
 
@@ -1066,7 +1074,7 @@ namespace ExtremeRagdoll
                     RemoveLaunch();
                     if (ent != null || skel != null)
                     {
-                        float impMag = ToPhysicsImpulse(L.Mag);
+                        float impMag = CapImpulse(ToPhysicsImpulse(L.Mag));
                         if (impMag > 0f)
                         {
                             var contactMiss = XYJitter(ResolveHitPosition(L.Pos, ent, L.Pos));
@@ -1193,7 +1201,7 @@ namespace ExtremeRagdoll
                         skel = visualsCurrent.GetSkeleton();
                         if (ent2 != null || skel != null)
                         {
-                            float impMag2 = ToPhysicsImpulse(mag);
+                            float impMag2 = CapImpulse(ToPhysicsImpulse(mag));
                             if (impMag2 > 0f)
                             {
                                 try { skel?.ActivateRagdoll(); } catch { }
@@ -1237,7 +1245,7 @@ namespace ExtremeRagdoll
                     RemoveLaunch();
                     if (ent != null || skel != null)
                     {
-                        float impMag = ToPhysicsImpulse(L.Mag);
+                        float impMag = CapImpulse(ToPhysicsImpulse(L.Mag));
                         if (impMag > 0f)
                         {
                             Vec3 fallbackEntity = L.Pos;
@@ -1299,7 +1307,7 @@ namespace ExtremeRagdoll
                 {
                     var entLocal = visualsCurrent?.GetEntity();
                     var skelLocal = visualsCurrent?.GetSkeleton();
-                    float impMag = ToPhysicsImpulse(mag);
+                    float impMag = CapImpulse(ToPhysicsImpulse(mag));
                     if ((entLocal != null || skelLocal != null) && impMag > 0f)
                     {
                         var impulse = dir * impMag;
@@ -1554,39 +1562,7 @@ namespace ExtremeRagdoll
                 {
                     WarmRagdoll(ent, skel);
                     resolvedHit = ResolveHitPosition(hitPos, ent, affected.Position);
-                    var contactImmediate = resolvedHit;
-                    contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
-                    // Re-enable immediate impulse, aber nur wenn Ragdoll aktiv
-                    float imp = 0f;
-                    try
-                    {
-                        if (IsRagdollActiveFast(skel))
-                            imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale));
-                    }
-                    catch
-                    {
-                        imp = 0f;
-                    }
-                    if (imp > 0f)
-                    {
-                        float hardCap = ER_Config.CorpseImpulseHardCap;
-                        if (hardCap > 0f)
-                            imp = MathF.Min(imp, hardCap);
-                        if (imp > 0f)
-                        {
-                            Vec3 immediateDir = dir; // already validated upstream
-                            bool ok = TryApplyImpulse(ent, skel, immediateDir * imp, contactImmediate, affected.Index);
-                            if (ok)
-                            {
-                                MarkLaunched(agentIndex);
-                                RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
-                                PurgeQueuedLaunchesForAgent(affected, agentIndex);
-                                return;
-                            }
-                            if (ER_Config.DebugLogging)
-                                ER_Log.Info($"IMPULSE_APPLY_FAIL immediate agent#{agentIndex}");
-                        }
-                    }
+                    // no immediate impulse: schedule only, avoids hitting item dynamics before ragdoll
                 }
             }
             catch { }
