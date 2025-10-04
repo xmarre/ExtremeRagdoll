@@ -691,25 +691,12 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
-                    if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                        okLocal = false;
-                    if (okLocal)
-                    {
-                        ClampLocalUp(ref impL);
-                        if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            okLocal = false;
-                    }
-                    if (okLocal)
-                    {
-                        if (_dEnt3Inst != null)
-                            _dEnt3Inst(ent, impL, posL, true);
-                        else
-                            _ent3Inst.Invoke(ent, new object[] { impL, posL, true });
-                        Log("IMPULSE_USE inst ent3(true)");
-                        return true;
-                    }
-                    else Log("IMPULSE_SKIP inst ent3: local transform failed");
+                    if (_dEnt3Inst != null)
+                        _dEnt3Inst(ent, impW, contact, true);
+                    else
+                        _ent3Inst.Invoke(ent, new object[] { impW, contact, true });
+                    Log("IMPULSE_USE inst ent3(world)");
+                    return true;
                 }
                 catch (Exception ex)
                 {
@@ -722,25 +709,12 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
-                    if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                        okLocal = false;
-                    if (okLocal)
-                    {
-                        ClampLocalUp(ref impL);
-                        if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            okLocal = false;
-                    }
-                    if (okLocal)
-                    {
-                        if (_dEnt3 != null)
-                            _dEnt3(ent, impL, posL, true);
-                        else
-                            _ent3.Invoke(null, new object[] { ent, impL, posL, true });
-                        Log("IMPULSE_USE ext ent3(true)");
-                        return true;
-                    }
-                    else Log("IMPULSE_SKIP ext ent3: local transform failed");
+                    if (_dEnt3 != null)
+                        _dEnt3(ent, impW, contact, true);
+                    else
+                        _ent3.Invoke(null, new object[] { ent, impW, contact, true });
+                    Log("IMPULSE_USE ext ent3(world)");
+                    return true;
                 }
                 catch (Exception ex)
                 {
