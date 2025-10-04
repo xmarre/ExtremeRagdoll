@@ -18,6 +18,7 @@ namespace ExtremeRagdoll
         public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
         public static bool  ForceEntityImpulse        => Settings.Instance?.ForceEntityImpulse ?? true;
         public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? false;
+        public static bool  AllowEnt3World            => Settings.Instance?.AllowEnt3World ?? false;
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.035f;
@@ -590,25 +591,10 @@ namespace ExtremeRagdoll
                 }
 
                 // Let impulses drive motion; neutralize engine KB
-                float planarScale = 1f, upBias = 0f;
-                if (missileSpeed > 0f)
-                {
-                    planarScale = 1f;
-                    upBias = 0f;
-                }
-                else if (isExplosion)
-                {
-                    planarScale = 0.98f;
-                    upBias = 0.03f;
-                }
-                else
-                {
-                    planarScale = 0.96f;
-                    upBias = 0.04f;
-                }
-                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, planarScale, upBias);
+                // lethal: keep corpse impulses flat; avoid any upward bias
+                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, 1f, 0f);
+                lethalDir.z = 0f;
                 blow.BaseMagnitude = 0f;
-                if (missileSpeed > 0f) lethalDir.z = 0f; // hard-flat missiles
                 lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
                 blow.SwingDirection = lethalDir;
                 // ensure pending corpse-launch uses the same (flattened) direction
