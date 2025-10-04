@@ -132,7 +132,7 @@ namespace ExtremeRagdoll
             return true;
         }
 
-        private static bool IsRagdollActiveFast(Skeleton sk)
+        internal static bool IsRagdollActiveFast(Skeleton sk)
         {
             if (sk == null)
                 return false;
