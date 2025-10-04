@@ -39,17 +39,17 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #1 (s)", 0f, 0.25f, "0.00",
             Order = 100, RequireRestart = false)]
-        public float LaunchDelay1 { get; set; } = 0.02f;
+        public float LaunchDelay1 { get; set; } = 0.035f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #2 (s)", 0f, 0.30f, "0.00",
             Order = 101, RequireRestart = false)]
-        public float LaunchDelay2 { get; set; } = 0.06f;
+        public float LaunchDelay2 { get; set; } = 0.085f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Second Pulse Scale", 0f, 2.0f, "0.00",
             Order = 102, RequireRestart = false)]
-        public float LaunchPulse2Scale { get; set; } = 0.50f;
+        public float LaunchPulse2Scale { get; set; } = 0.18f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Velocity Scale Threshold", 1.0f, 2.0f, "0.00",
@@ -129,7 +129,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
             Order = 118, RequireRestart = false)]
-        public float CorpseLaunchContactHeight { get; set; } = 0.18f;
+        public float CorpseLaunchContactHeight { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
@@ -164,7 +164,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.010f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.06f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -174,7 +174,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Post-Death Launch Tries", 0, 100,
             Order = 127, RequireRestart = false)]
-        public int CorpsePostDeathTries { get; set; } = 20;
+        public int CorpsePostDeathTries { get; set; } = 2;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Corpse Launches Per Tick", 0, 2048,
@@ -204,7 +204,8 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        public bool ForceEntityImpulse { get; set; } = false; // allow skeleton fallback by default
+        // Default to entity-first routing so corpse pushes stay contact-driven out of the box.
+        public bool ForceEntityImpulse { get; set; } = true;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
@@ -224,6 +225,21 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 137, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.40f;
+        public float ImmediateImpulseScale { get; set; } = 0.35f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",
+            Order = 138, RequireRestart = false)]
+        public float ScheduleDirDuplicateSqThreshold { get; set; } = 0.001f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Schedule Position Duplicate Threshold", 0f, 1f, "0.000",
+            Order = 139, RequireRestart = false)]
+        public float SchedulePosDuplicateSqThreshold { get; set; } = 0.01f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Schedule Magnitude Duplicate Fraction", 0f, 1f, "0.00",
+            Order = 140, RequireRestart = false)]
+        public float ScheduleMagDuplicateFraction { get; set; } = 0.05f;
     }
 }

@@ -20,13 +20,13 @@ namespace ExtremeRagdoll
         public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? false;
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
-        public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.02f;
-        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.06f;
+        public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.035f;
+        public static float LaunchDelay2              => Settings.Instance?.LaunchDelay2 ?? 0.085f;
         public static float LaunchPulse2Scale
         {
             get
             {
-                float scale = Settings.Instance?.LaunchPulse2Scale ?? 0.50f;
+                float scale = Settings.Instance?.LaunchPulse2Scale ?? 0.18f;
                 if (scale < 0f) scale = 0f;
                 else if (scale > 2f) scale = 2f;
                 return scale;
@@ -71,7 +71,7 @@ namespace ExtremeRagdoll
             }
         }
         public static float CorpseLaunchXYJitter                => MathF.Max(0f, Settings.Instance?.CorpseLaunchXYJitter ?? 0.002f);
-        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.18f);
+        public static float CorpseLaunchContactHeight           => MathF.Max(0f, Settings.Instance?.CorpseLaunchContactHeight ?? 0.05f);
         public static float MaxAabbExtent
         {
             get
@@ -87,6 +87,39 @@ namespace ExtremeRagdoll
         public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.03f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
         public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
+        public static float ScheduleDirDuplicateSqThreshold
+        {
+            get
+            {
+                float value = Settings.Instance?.ScheduleDirDuplicateSqThreshold ?? 1e-3f;
+                if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+                    return 0f;
+                if (value > 4f) value = 4f;
+                return value;
+            }
+        }
+        public static float SchedulePosDuplicateSqThreshold
+        {
+            get
+            {
+                float value = Settings.Instance?.SchedulePosDuplicateSqThreshold ?? 0.01f;
+                if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+                    return 0f;
+                if (value > 100f) value = 100f;
+                return value;
+            }
+        }
+        public static float ScheduleMagDuplicateFraction
+        {
+            get
+            {
+                float value = Settings.Instance?.ScheduleMagDuplicateFraction ?? 0.05f;
+                if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+                    return 0f;
+                if (value > 1f) value = 1f;
+                return value;
+            }
+        }
         public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
         public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.05f);
         public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
@@ -94,7 +127,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.40f;
+                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.35f;
                 if (float.IsNaN(scale) || float.IsInfinity(scale))
                     return 0f;
                 if (scale < 0f) return 0f;
@@ -106,7 +139,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.05f;
+                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.06f;
                 if (frac < 0f) return 0f;
                 if (frac > 1f) return 1f;
                 return frac;
@@ -127,7 +160,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                int value = Settings.Instance?.CorpsePostDeathTries ?? 20;
+                int value = Settings.Instance?.CorpsePostDeathTries ?? 2;
                 if (value < 0) return 0;
                 if (value > 100) return 100;
                 return value;
@@ -196,6 +229,14 @@ namespace ExtremeRagdoll
         private static readonly FieldInfo VelocityField = typeof(AttackCollisionData).GetField("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileVelocityProperty = typeof(AttackCollisionData).GetProperty("MissileVelocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo VelocityProperty = typeof(AttackCollisionData).GetProperty("Velocity", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static FieldInfo _attackDamageTypeField;
+        private static PropertyInfo _attackDamageTypeProperty;
+        private static FieldInfo _attackSplashRadiusField;
+        private static PropertyInfo _attackSplashRadiusProperty;
+        private static FieldInfo _weaponRecordWeaponField;
+        private static PropertyInfo _weaponRecordWeaponProperty;
+        private static FieldInfo _weaponRecordWeaponClassField;
+        private static PropertyInfo _weaponRecordWeaponClassProperty;
 
         private static float ResolveMissileSpeed(AttackCollisionData data)
         {
@@ -417,6 +458,7 @@ namespace ExtremeRagdoll
             bool lethal = hp - blow.InflictedDamage <= 0f;
             bool missileBlocked = !lethal && missileSpeed > 0f && blow.InflictedDamage <= 0f;
             bool allowBlockedPush = ER_Config.BlockedMissilesCanPush;
+            bool isExplosion = GuessExplosion(attackCollisionData, blow, missileSpeed);
 
             // bail gate: only truly trivial taps
             if (!lethal && blow.InflictedDamage <= 0f && missileSpeed <= 0f && blow.BaseMagnitude <= 1f)
@@ -425,14 +467,45 @@ namespace ExtremeRagdoll
                 return;
             }
 
-            // compute a sane push dir (used only when we decide to replace)
-            Vec3 dir = __instance.Position - blow.GlobalPosition;
-            if (dir.LengthSquared < 1e-6f)
+            // Richtungsquelle priorisieren: Projektil → Swing → Explosion → Fallback
+            Vec3 fallbackDir = __instance.Position - blow.GlobalPosition;
+            if (fallbackDir.LengthSquared < 1e-6f)
             {
-                try { dir = __instance.LookDirection; }
-                catch { dir = new Vec3(0f, 1f, 0.25f); }
+                try { fallbackDir = __instance.LookDirection; }
+                catch { fallbackDir = new Vec3(0f, 1f, 0.25f); }
             }
-            dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 1.05f);
+
+            Vec3 dir = fallbackDir;
+            Vec3 missileV = Vec3.Zero;
+            try
+            {
+                object boxed = attackCollisionData;
+                object raw = MissileVelocityProperty?.GetValue(boxed, null)
+                             ?? MissileVelocityField?.GetValue(boxed)
+                             ?? VelocityProperty?.GetValue(boxed, null)
+                             ?? VelocityField?.GetValue(boxed);
+                if (raw is Vec3 vec && ER_Math.IsFinite(in vec))
+                    missileV = vec;
+            }
+            catch
+            {
+                missileV = Vec3.Zero;
+            }
+
+            if (missileSpeed > 0f && missileV.LengthSquared > 1e-6f)
+            {
+                dir = missileV;
+            }
+            else if (blow.SwingDirection.LengthSquared > 1e-6f)
+            {
+                dir = blow.SwingDirection;
+            }
+
+            if (dir.LengthSquared < 1e-6f)
+                dir = fallbackDir;
+
+            // Grund-Normalisierung ohne starke Up-Bias
+            dir = ER_DeathBlastBehavior.PrepDir(dir, 0.98f, 0.02f);
 
             // ensure flags so lethal always ragdolls; missiles shove
             if (lethal)
@@ -517,9 +590,23 @@ namespace ExtremeRagdoll
                 }
 
                 // Let impulses drive motion; neutralize engine KB
-                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir,
-                                   1f,
-                                   missileSpeed > 0f ? 0f : 0.02f);
+                float planarScale = 1f, upBias = 0f;
+                if (missileSpeed > 0f)
+                {
+                    planarScale = 1f;
+                    upBias = 0f;
+                }
+                else if (isExplosion)
+                {
+                    planarScale = 0.98f;
+                    upBias = 0.03f;
+                }
+                else
+                {
+                    planarScale = 0.96f;
+                    upBias = 0.04f;
+                }
+                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, planarScale, upBias);
                 blow.BaseMagnitude = 0f;
                 if (missileSpeed > 0f) lethalDir.z = 0f; // hard-flat missiles
                 lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
@@ -643,6 +730,120 @@ namespace ExtremeRagdoll
                 beh?.EnqueueKick(__instance, dir, kickMag, 0.10f);
                 _pending.Remove(__instance.Index);
             }
+        }
+
+        private static bool GuessExplosion(AttackCollisionData data, Blow blow, float missileSpeed)
+        {
+            bool flagged = false;
+            try
+            {
+                object boxed = data;
+                var type = boxed.GetType();
+                const BindingFlags bind = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+                if (_attackSplashRadiusField == null && _attackSplashRadiusProperty == null)
+                {
+                    _attackSplashRadiusField = type.GetField("SplashRadius", bind);
+                    _attackSplashRadiusProperty = type.GetProperty("SplashRadius", bind);
+                }
+                float radius = 0f;
+                bool radiusFound = false;
+                if (_attackSplashRadiusField != null)
+                {
+                    var raw = _attackSplashRadiusField.GetValue(boxed);
+                    if (raw != null)
+                    {
+                        radius = Convert.ToSingle(raw);
+                        radiusFound = !float.IsNaN(radius) && !float.IsInfinity(radius);
+                    }
+                }
+                if (!radiusFound && _attackSplashRadiusProperty != null)
+                {
+                    var raw = _attackSplashRadiusProperty.GetValue(boxed, null);
+                    if (raw != null)
+                    {
+                        radius = Convert.ToSingle(raw);
+                        radiusFound = !float.IsNaN(radius) && !float.IsInfinity(radius);
+                    }
+                }
+                if (radiusFound && radius > 0.75f)
+                    return true;
+
+                if (!flagged)
+                {
+                    if (_attackDamageTypeField == null && _attackDamageTypeProperty == null)
+                    {
+                        _attackDamageTypeField = type.GetField("DamageType", bind);
+                        _attackDamageTypeProperty = type.GetProperty("DamageType", bind);
+                    }
+                    object damageTypeObj = null;
+                    if (_attackDamageTypeField != null)
+                        damageTypeObj = _attackDamageTypeField.GetValue(boxed);
+                    if (damageTypeObj == null && _attackDamageTypeProperty != null)
+                        damageTypeObj = _attackDamageTypeProperty.GetValue(boxed, null);
+                    if (damageTypeObj != null)
+                    {
+                        string name = damageTypeObj.ToString();
+                        if (!string.IsNullOrEmpty(name) &&
+                            (name.IndexOf("expl", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             name.IndexOf("fire", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                             name.IndexOf("magic", StringComparison.OrdinalIgnoreCase) >= 0))
+                        {
+                            flagged = true;
+                        }
+                    }
+                }
+
+                if (!flagged && missileSpeed <= 0f)
+                {
+                    object weaponRecord = blow.WeaponRecord;
+                    if (weaponRecord != null)
+                    {
+                        var recordType = weaponRecord.GetType();
+                        if (_weaponRecordWeaponField == null && _weaponRecordWeaponProperty == null)
+                        {
+                            _weaponRecordWeaponField = recordType.GetField("Weapon", bind);
+                            _weaponRecordWeaponProperty = recordType.GetProperty("Weapon", bind);
+                        }
+                        object weaponObj = null;
+                        if (_weaponRecordWeaponField != null)
+                            weaponObj = _weaponRecordWeaponField.GetValue(weaponRecord);
+                        if (weaponObj == null && _weaponRecordWeaponProperty != null)
+                            weaponObj = _weaponRecordWeaponProperty.GetValue(weaponRecord, null);
+
+                        if (weaponObj == null)
+                        {
+                            if (_weaponRecordWeaponClassField == null && _weaponRecordWeaponClassProperty == null)
+                            {
+                                _weaponRecordWeaponClassField = recordType.GetField("WeaponClass", bind);
+                                _weaponRecordWeaponClassProperty = recordType.GetProperty("WeaponClass", bind);
+                            }
+                            object weaponClassObj = null;
+                            if (_weaponRecordWeaponClassField != null)
+                                weaponClassObj = _weaponRecordWeaponClassField.GetValue(weaponRecord);
+                            if (weaponClassObj == null && _weaponRecordWeaponClassProperty != null)
+                                weaponClassObj = _weaponRecordWeaponClassProperty.GetValue(weaponRecord, null);
+                            if (weaponClassObj != null)
+                            {
+                                string name = weaponClassObj.ToString();
+                                if (!string.IsNullOrEmpty(name) &&
+                                    (name.IndexOf("spell", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                     name.IndexOf("magic", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                     name.IndexOf("expl", StringComparison.OrdinalIgnoreCase) >= 0))
+                                {
+                                    flagged = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // fall through: heuristics only
+            }
+
+            return flagged;
         }
     }
 

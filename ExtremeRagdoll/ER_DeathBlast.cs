@@ -18,20 +18,48 @@ namespace ExtremeRagdoll
         private static readonly ConditionalWeakTable<GameEntity, object> _preparedEntities = new ConditionalWeakTable<GameEntity, object>();
         private static readonly object _preparedMarker = new object();
         private static float CorpseLaunchMaxUpFrac => ER_Config.CorpseLaunchMaxUpFraction;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float ResolveUpFraction(float value)
+        {
+            // Treat NaN/Infinity/<0 as "use configured default" while allowing 0 to mean "hard flat".
+            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+                return CorpseLaunchMaxUpFrac;
+            return value;
+        }
         private const float DirectionTinySqThreshold = ER_Math.DirectionTinySq;
         private const float PositionTinySqThreshold = ER_Math.PositionTinySq;
+        private static float ScheduleDirDuplicateSqThreshold => MathF.Max(0f, ER_Config.ScheduleDirDuplicateSqThreshold);
+        private static float SchedulePosDuplicateSqThreshold => MathF.Max(0f, ER_Config.SchedulePosDuplicateSqThreshold);
+        private static float ScheduleMagDuplicateFraction => MathF.Max(0f, ER_Config.ScheduleMagDuplicateFraction);
         // tiny, cheap per-frame guard
         private float _lastTickT;
         private static int _impulseLogCount;
         private bool _missionRouterResetDone;
-        internal static Vec3 ClampVertical(Vec3 dir)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static Vec3 ClampVertical(Vec3 dir) => ClampVertical(dir, CorpseLaunchMaxUpFrac);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static Vec3 ClampVertical(Vec3 dir, float maxUpFraction)
         {
-            if (dir.LengthSquared < DirectionTinySqThreshold)
-                return dir;
-            bool clamped = false;
-            if (dir.z > CorpseLaunchMaxUpFrac)
+            if (!ER_Math.IsFinite(in dir))
+                return new Vec3(0f, 1f, 0f);
+            float cap = ResolveUpFraction(maxUpFraction);
+            float lenSq = dir.LengthSquared;
+            if (lenSq < DirectionTinySqThreshold)
             {
-                dir.z = CorpseLaunchMaxUpFrac;
+                float safeZ = dir.z;
+                if (safeZ > cap)
+                    safeZ = cap;
+                if (safeZ < 0f)
+                    safeZ = 0f;
+                // Tiny inputs fall back to a canonical forward vector with a clamped up component.
+                var fallback = new Vec3(0f, 1f, safeZ);
+                return fallback.NormalizedCopy();
+            }
+            bool clamped = false;
+            if (dir.z > cap)
+            {
+                dir.z = cap;
                 clamped = true;
             }
             if (dir.z < 0f)
@@ -42,8 +70,10 @@ namespace ExtremeRagdoll
             if (!clamped)
                 return dir;
 
-            float lenSq = dir.LengthSquared;
-            if (lenSq < DirectionTinySqThreshold)
+            // Callers expect a direction vector (≈unit length). Renormalize only when we actually clamp.
+            // ClampVertical assumes callers already normalized input or will normalize after this call.
+            float lenSqAfterClamp = dir.LengthSquared;
+            if (lenSqAfterClamp < DirectionTinySqThreshold)
                 return new Vec3(0f, 1f, 0f);
 
             return dir.NormalizedCopy();
@@ -67,15 +97,31 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static Vec3 FinalizeImpulseDir(Vec3 dir)
+        internal static Vec3 FinalizeImpulseDir(Vec3 dir, float maxUpFraction = float.NaN)
         {
             if (!ER_Math.IsFinite(in dir))
                 return new Vec3(0f, 1f, 0f);
-            dir = ClampVertical(dir);
+            dir = ClampVertical(dir, maxUpFraction);
             float l2 = dir.LengthSquared;
             if (l2 < DirectionTinySqThreshold || float.IsNaN(l2) || float.IsInfinity(l2))
                 return new Vec3(0f, 1f, 0f);
             return dir.NormalizedCopy();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryClampAndNormalizeUp(ref Vec3 dir, float maxUpFraction)
+        {
+            if (!ER_Math.IsFinite(in dir) || dir.LengthSquared < DirectionTinySqThreshold)
+                dir = new Vec3(0f, 1f, 0f);
+
+            dir = FinalizeImpulseDir(dir, maxUpFraction);
+            if (!ER_Math.IsFinite(in dir))
+                return false;
+            float lenSq = dir.LengthSquared;
+            if (lenSq < DirectionTinySqThreshold || float.IsNaN(lenSq) || float.IsInfinity(lenSq))
+                return false;
+            // FinalizeImpulseDir guarantees the vector is normalized and capped to the requested fraction when successful.
+            return true;
         }
 
         private static bool IsRagdollActiveFast(Skeleton sk)
@@ -381,6 +427,46 @@ namespace ExtremeRagdoll
             _launchedOnce.Add(agentId);
             ER_Amplify_RegisterBlowPatch.ForgetScheduled(agentId);
         }
+
+        private void PurgeQueuedLaunchesForAgent(Agent agent, int agentId)
+        {
+            if (agent == null && agentId < 0)
+                return;
+
+            for (int i = _launches.Count - 1; i >= 0; i--)
+            {
+                var queued = _launches[i];
+                bool matches = false;
+                if (agentId >= 0 && queued.AgentId == agentId)
+                    matches = true;
+                else if (agent != null && queued.A == agent)
+                    matches = true;
+
+                if (!matches)
+                    continue;
+
+                _launches.RemoveAt(i);
+                int decId = queued.AgentId >= 0 ? queued.AgentId : agentId;
+                if (decId >= 0)
+                {
+                    DecQueue(decId);
+                    _launchFailLogged.Remove(decId);
+                }
+            }
+
+            for (int i = _preLaunches.Count - 1; i >= 0; i--)
+            {
+                var pre = _preLaunches[i];
+                bool matches = false;
+                if (agentId >= 0 && pre.AgentId == agentId)
+                    matches = true;
+                else if (agent != null && pre.Agent == agent)
+                    matches = true;
+
+                if (matches)
+                    _preLaunches.RemoveAt(i);
+            }
+        }
         private readonly Dictionary<int, int> _queuedPerAgent = new Dictionary<int, int>();
         private static float RecentBlastTtl => MathF.Max(0f, ER_Config.DeathBlastTtl);
 
@@ -441,7 +527,7 @@ namespace ExtremeRagdoll
                 if (count <= 1)
                     _queuedPerAgent.Remove(agentId);
                 else
-                    _queuedPerAgent[agentId] = count - 1;
+                    _queuedPerAgent[agentId] = Math.Max(0, count - 1);
             }
         }
 
@@ -470,6 +556,14 @@ namespace ExtremeRagdoll
         public override void OnBehaviorInitialize()
         {
             Instance = this;
+            _recent.Clear();
+            _kicks.Clear();
+            _preLaunches.Clear();
+            _launches.Clear();
+            _launchFailLogged.Clear();
+            _launchedOnce.Clear();
+            _queuedPerAgent.Clear();
+            ER_Amplify_RegisterBlowPatch.ClearPending();
             ER_ImpulseRouter.ResetUnsafeState();
             _missionRouterResetDone = false;
         }
@@ -485,7 +579,6 @@ namespace ExtremeRagdoll
             _launchFailLogged.Clear();
             _launchedOnce.Clear();
             _queuedPerAgent.Clear();
-            // also clear any cross-behavior pending impulses
             ER_Amplify_RegisterBlowPatch.ClearPending();
         }
 
@@ -565,28 +658,33 @@ namespace ExtremeRagdoll
             _kicks.Add(new Kick { A = a, Dir = safeDir, Force = force, T0 = Mission.CurrentTime, Dur = duration });
         }
 
+        [Obsolete("Use TryEnqueueLaunch(...).")]
         public void EnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f, int retries = 8)
+            => _ = TryEnqueueLaunch(a, dir, mag, pos, delaySec, retries);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryEnqueueLaunch(Agent a, Vec3 dir, float mag, Vec3 pos, float delaySec = 0.03f, int retries = 8)
         {
-            if (a == null) return;
+            if (a == null) return false;
             var mission = Mission;
-            if (mission == null) return;
-            if (a.Mission != null && a.Mission != mission) return;
-            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
-            if (mag <= 0f) return;
-            if (a.Health > 0f) return;
+            if (mission == null) return false;
+            if (a.Mission != null && a.Mission != mission) return false;
+            if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return false;
+            if (mag <= 0f) return false;
+            if (a.Health > 0f) return false;
             if (delaySec < 0f) delaySec = 0f;
-            delaySec = ApplyDelayJitter(delaySec);
+            delaySec = MathF.Max(0f, ApplyDelayJitter(delaySec));
             if (retries < 0) retries = 0;
             int maxRetries = Math.Max(0, ER_Config.CorpsePostDeathTries);
             if (retries > maxRetries) retries = maxRetries;
             int agentIndex = a.Index;
             if (_launchedOnce.Contains(agentIndex))
-                return;
+                return false;
             int queueCap = ER_Config.CorpseLaunchQueueCap;
             if (queueCap > 0)
             {
                 _queuedPerAgent.TryGetValue(agentIndex, out var queued);
-                if (queued >= queueCap) return;
+                if (queued >= queueCap) return false;
             }
 
             float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
@@ -595,22 +693,60 @@ namespace ExtremeRagdoll
                 mag = maxMag;
             }
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
-                return;
-            Vec3 safeDir = FinalizeImpulseDir(PrepDir(dir, 1f, 0f));
-            if (!ER_Math.IsFinite(in safeDir) || safeDir.LengthSquared < DirectionTinySqThreshold)
-                return;
+                return false;
+            Vec3 safeDir = dir;
+            if (!TryClampAndNormalizeUp(ref safeDir, ER_Config.CorpseLaunchMaxUpFraction))
+                return false;
             Vec3 nudgedPos = pos;
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
             float agentZ = nudgedPos.z;
             try { agentZ = a.Position.z; } catch { }
             nudgedPos.z = MathF.Min(nudgedPos.z + zNudge, agentZ + zClamp);
+            float scheduleTime = mission.CurrentTime + delaySec;
+            float window = MathF.Max(0f, ER_Config.CorpseLaunchScheduleWindow);
+            if (window > 0f && agentIndex >= 0)
+            {
+                for (int i = 0; i < _launches.Count; i++)
+                {
+                    var existing = _launches[i];
+                    if (existing.AgentId != agentIndex)
+                        continue;
+                    float delta = MathF.Abs(scheduleTime - existing.T);
+                    if (float.IsNaN(delta) || float.IsInfinity(delta) || delta > window)
+                        continue;
+
+                    float magMax = MathF.Max(mag, existing.Mag);
+                    if (magMax <= 0f || float.IsNaN(magMax) || float.IsInfinity(magMax))
+                        continue;
+                    float magDiffFrac = MathF.Abs(mag - existing.Mag) / magMax;
+                    if (magDiffFrac > ScheduleMagDuplicateFraction)
+                        continue;
+
+                    // Keep pulse cadence (1st vs 2nd) intact: only treat entries as duplicates when
+                    // timing, magnitude, direction, and contact point all align within tight tolerances.
+                    Vec3 dirDiff = safeDir - existing.Dir;
+                    float dirDiffSq = dirDiff.LengthSquared;
+                    if (float.IsNaN(dirDiffSq) || float.IsInfinity(dirDiffSq) || dirDiffSq > ScheduleDirDuplicateSqThreshold)
+                        continue;
+
+                    Vec3 posDiff = nudgedPos - existing.Pos;
+                    float posDiffSq = posDiff.LengthSquared;
+                    if (float.IsNaN(posDiffSq) || float.IsInfinity(posDiffSq) || posDiffSq > SchedulePosDuplicateSqThreshold)
+                        continue;
+
+                    if (ER_Config.DebugLogging)
+                        ER_Log.Info($"corpse launch dedupe agent#{agentIndex} dt={delta:F3}s magDiff={magDiffFrac:P0} dirDiffSq={dirDiffSq:0.0000} posDiffSq={posDiffSq:0.0000}");
+                    return false;
+                }
+            }
 
             GameEntity ent = null; Skeleton sk = null;
             try { ent = a.AgentVisuals?.GetEntity(); } catch { }
             try { sk = a.AgentVisuals?.GetSkeleton(); } catch { }
-            _launches.Add(new Launch { A = a, Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = mission.CurrentTime + delaySec, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
+            _launches.Add(new Launch { A = a, Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = scheduleTime, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
             IncQueue(agentIndex);
+            return true;
         }
 
         private static void WarmRagdoll(GameEntity ent, Skeleton skel)
@@ -854,16 +990,19 @@ namespace ExtremeRagdoll
             }
 
             // delayed corpse launches (run AFTER ragdoll is active)
+            bool ConsumeLaunchBudget()
+            {
+                if (!limitLaunches)
+                    return true;
+                if (launchesWorked >= maxLaunchesPerTick)
+                    return false;
+                launchesWorked++;
+                return true;
+            }
             for (int i = _launches.Count - 1; i >= 0; i--)
             {
                 var L = _launches[i];
                 if (now < L.T) continue;
-                if (limitLaunches)
-                {
-                    if (launchesWorked >= maxLaunchesPerTick)
-                        break;
-                    launchesWorked++;
-                }
                 var agent = L.A;
                 int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
                 bool nudged = false;
@@ -892,8 +1031,7 @@ namespace ExtremeRagdoll
                     DecOnce();
                     continue;
                 }
-                Vec3 dir = FinalizeImpulseDir(L.Dir);
-                L.Dir = dir;
+                Vec3 dir = L.Dir;
                 GameEntity ent = L.Ent;
                 Skeleton skel = L.Skel;
                 var visualsCurrent = agent?.AgentVisuals;
@@ -914,7 +1052,7 @@ namespace ExtremeRagdoll
                 if (skel != null && !IsRagdollActiveFast(skel))
                 {
                     WarmRagdoll(ent, skel);
-                    L.T = now + MathF.Max(0.02f, ER_Config.CorpseLaunchRetryDelay);
+                    L.T = now + ApplyDelayJitter(MathF.Max(0.02f, ER_Config.CorpseLaunchRetryDelay));
                     L.Warmed = true;
                     L.Pos = agent?.Position ?? L.Pos;
                     _launches[i] = L;
@@ -923,6 +1061,8 @@ namespace ExtremeRagdoll
                 bool agentMissing = agent == null || agent.Mission == null || agent.Mission != mission;
                 if (agentMissing)
                 {
+                    if (!ConsumeLaunchBudget())
+                        break;
                     RemoveLaunch();
                     if (ent != null || skel != null)
                     {
@@ -935,7 +1075,7 @@ namespace ExtremeRagdoll
                             nudged |= ok;
                             if (ok)
                                 MarkLaunched(agentIndex);   // ensure one-shot across retries
-                            else
+                            else if (ER_Config.DebugLogging)
                                 ER_Log.Info($"IMPULSE_APPLY_FAIL launch_noagent agent#{agentIndex}");
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -981,7 +1121,10 @@ namespace ExtremeRagdoll
                 Vec3 contactPoint = hit;
                 contactPoint.z += contactHeight;
                 contactPoint.z = MathF.Min(contactPoint.z, agent.Position.z + zClamp);
-                // direction finalized above before any impulse attempt
+                // direction already sanitized when the launch was queued
+
+                if (!ConsumeLaunchBudget())
+                    break;
 
                 if (!L.Warmed)
                 {
@@ -1077,7 +1220,7 @@ namespace ExtremeRagdoll
                                         ER_Log.Info($"corpse nudge Agent#{agentIndex} impMag={impMag2:F1} ok={ok2}");
                                     continue;
                                 }
-                                else
+                                else if (ER_Config.DebugLogging)
                                 {
                                     ER_Log.Info($"IMPULSE_APPLY_FAIL launch_visuals agent#{agentIndex}");
                                 }
@@ -1116,7 +1259,7 @@ namespace ExtremeRagdoll
                                     ER_Log.Info($"corpse nudge(fallback) Agent#{agentIndex} impMag={impMag:F1} ok={ok}");
                                 continue;
                             }
-                            else
+                            else if (ER_Config.DebugLogging)
                                 ER_Log.Info($"IMPULSE_APPLY_FAIL launch_fallback agent#{agentIndex}");
                             if (ER_Config.DebugLogging)
                                 ER_Log.Info($"corpse entity impulse (no agent) id#{agentIndex} impMag={impMag:F1} ok={ok}");
@@ -1135,126 +1278,7 @@ namespace ExtremeRagdoll
                     || (velAfter.z > L.V0.z + tookVertical)
                     || (moved > tookDisplacement);
 
-                if (!took)
-                {
-                    RemoveLaunch();
-                    // Fallback: directly impulse ragdoll physics if RegisterBlow had no effect
-                    try
-                    {
-                        var entLocal = visualsCurrent?.GetEntity();
-                        var skelLocal = visualsCurrent?.GetSkeleton();
-                        float impMag = ToPhysicsImpulse(mag);
-                        if ((entLocal != null || skelLocal != null) && impMag > 0f)
-                        {
-                            var impulse = dir * impMag;
-                            try { skelLocal?.ActivateRagdoll(); } catch { }
-                            try { skelLocal?.ForceUpdateBoneFrames(); } catch { }
-                            try
-                            {
-                                MatrixFrame fLocal;
-                                try { fLocal = entLocal?.GetGlobalFrame() ?? ent?.GetGlobalFrame() ?? default; }
-                                catch { fLocal = default; }
-                                skelLocal?.TickAnimationsAndForceUpdate(0.001f, fLocal, true);
-                            }
-                            catch { }
-                            bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint, agentIndex);
-                            nudged |= ok;
-                            if (ok)
-                                MarkLaunched(agentIndex);   // ensure one-shot across retries
-                            else
-                                ER_Log.Info($"IMPULSE_APPLY_FAIL launch_physics agent#{agentIndex}");
-                            if (ok && ER_Config.DebugLogging)
-                                ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
-                        }
-                    }
-                    catch { /* never throw here */ }
-
-                    if (nudged)
-                    {
-                        _launchFailLogged.Remove(agentIndex);
-                        DecOnce();
-                        continue;
-                    }
-
-                    if (ER_Config.DebugLogging && _launchFailLogged.Add(agentIndex))
-                    {
-                        float deltaZ = velAfter.z - L.V0.z;
-                        ER_Log.Info($"corpse launch miss Agent#{agentIndex} vBefore2={vBefore2:F4} vAfter2={vAfter2:F4} deltaZ={deltaZ:F4}");
-                    }
-
-                    if (L.Tries > 0)
-                    {
-                        float nextTime = now + ApplyDelayJitter(retryDelay);
-                        Vec3 retryPos = XYJitter(agent.Position);
-                        retryPos.z = MathF.Min(retryPos.z + zNudge, agent.Position.z + zClamp);
-
-                        if (!L.Boosted)
-                        {
-                            L.Mag *= 2.0f;
-                            L.Boosted = true;
-                        }
-                        else
-                        {
-                            float target = ER_Config.CorpseImpulseMaximum;
-                            if (target > 0f)
-                            {
-                                float cur = ToPhysicsImpulse(L.Mag);
-                                if (cur + 1e-3f < target)
-                                    L.Mag *= MathF.Max(1.25f, target / MathF.Max(1f, cur));
-                            }
-                        }
-                        if (clampMag && L.Mag > tickMaxSetting)
-                        {
-                            L.Mag = tickMaxSetting;
-                        }
-
-                        bool canQueue = true;
-                        int existingQueued = 0;
-                        if (agentIndex >= 0)
-                        {
-                            _queuedPerAgent.TryGetValue(agentIndex, out existingQueued);
-                        }
-                        if (AgentRemoved(agent) || agentMissing)
-                        {
-                            canQueue = false;
-                        }
-                        if (queueCap > 0 && existingQueued >= queueCap)
-                        {
-                            canQueue = false;
-                        }
-
-                        if (canQueue)
-                        {
-                            L.Tries--;
-                            L.T = nextTime;
-                            L.Pos = retryPos;
-                            L.AgentId = agentIndex;
-                            L.Warmed = false;
-                            L.Ent = ent;
-                            L.Skel = skel;
-                            RemoveLaunch();
-                            _launches.Add(L);
-                            IncQueue(agentIndex);
-                            if (ER_Config.DebugLogging && agentIndex >= 0 && (L.Tries % 3 == 0))
-                            {
-                                _queuedPerAgent.TryGetValue(agentIndex, out var newQueuedCount);
-                                ER_Log.Info($"corpse launch re-queued for Agent#{agentIndex} tries={L.Tries} queued={newQueuedCount}");
-                            }
-                        }
-                        else if (ER_Config.DebugLogging && agentIndex >= 0)
-                        {
-                            ER_Log.Info($"corpse launch queue full for Agent#{agentIndex} tries={L.Tries} queued={existingQueued} cap={queueCap}");
-                        }
-                    }
-                    else
-                    {
-                        _launchFailLogged.Remove(agentIndex);
-                    }
-                    DecOnce();
-                    if (nudged)
-                        MarkLaunched(agentIndex);
-                }
-                else
+                if (took)
                 {
                     RemoveLaunch();
                     _launchFailLogged.Remove(agentIndex);
@@ -1266,7 +1290,122 @@ namespace ExtremeRagdoll
                         _queuedPerAgent.TryGetValue(agentIndex, out var queued);
                         ER_Log.Info($"death shove applied to Agent#{agentIndex} took={took} mag={mag} tries={L.Tries} queued={queued}");
                     }
+                    continue;
                 }
+
+                RemoveLaunch();
+                // Fallback: directly impulse ragdoll physics if RegisterBlow had no effect
+                try
+                {
+                    var entLocal = visualsCurrent?.GetEntity();
+                    var skelLocal = visualsCurrent?.GetSkeleton();
+                    float impMag = ToPhysicsImpulse(mag);
+                    if ((entLocal != null || skelLocal != null) && impMag > 0f)
+                    {
+                        var impulse = dir * impMag;
+                        try { skelLocal?.ActivateRagdoll(); } catch { }
+                        try { skelLocal?.ForceUpdateBoneFrames(); } catch { }
+                        try
+                        {
+                            MatrixFrame fLocal;
+                            try { fLocal = entLocal?.GetGlobalFrame() ?? ent?.GetGlobalFrame() ?? default; }
+                            catch { fLocal = default; }
+                            skelLocal?.TickAnimationsAndForceUpdate(0.001f, fLocal, true);
+                        }
+                        catch { }
+                        bool ok = TryApplyImpulse(entLocal, skelLocal, impulse, contactPoint, agentIndex);
+                        nudged |= ok;
+                        if (ok)
+                            MarkLaunched(agentIndex);   // ensure one-shot across retries
+                        else if (ER_Config.DebugLogging)
+                            ER_Log.Info($"IMPULSE_APPLY_FAIL launch_physics agent#{agentIndex}");
+                        if (ok && ER_Config.DebugLogging)
+                            ER_Log.Info($"corpse physics impulse attempted Agent#{agentIndex} impMag={impMag:F1}");
+                    }
+                }
+                catch { /* never throw here */ }
+
+                if (nudged)
+                {
+                    _launchFailLogged.Remove(agentIndex);
+                    DecOnce();
+                    continue;
+                }
+
+                if (ER_Config.DebugLogging && _launchFailLogged.Add(agentIndex))
+                {
+                    float deltaZ = velAfter.z - L.V0.z;
+                    ER_Log.Info($"corpse launch miss Agent#{agentIndex} vBefore2={vBefore2:F4} vAfter2={vAfter2:F4} deltaZ={deltaZ:F4}");
+                }
+
+                if (L.Tries > 0)
+                {
+                    float nextTime = now + ApplyDelayJitter(retryDelay);
+                    Vec3 retryPos = XYJitter(agent.Position);
+                    retryPos.z = MathF.Min(retryPos.z + zNudge, agent.Position.z + zClamp);
+
+                    if (!L.Boosted)
+                    {
+                        L.Mag *= 2.0f;
+                        L.Boosted = true;
+                    }
+                    else
+                    {
+                        float target = ER_Config.CorpseImpulseMaximum;
+                        if (target > 0f)
+                        {
+                            float cur = ToPhysicsImpulse(L.Mag);
+                            if (cur + 1e-3f < target)
+                                L.Mag *= MathF.Max(1.25f, target / MathF.Max(1f, cur));
+                        }
+                    }
+                    if (clampMag && L.Mag > tickMaxSetting)
+                    {
+                        L.Mag = tickMaxSetting;
+                    }
+
+                    bool canQueue = true;
+                    int existingQueued = 0;
+                    if (agentIndex >= 0)
+                    {
+                        _queuedPerAgent.TryGetValue(agentIndex, out existingQueued);
+                    }
+                    if (AgentRemoved(agent) || agentMissing)
+                    {
+                        canQueue = false;
+                    }
+                    if (queueCap > 0 && existingQueued >= queueCap)
+                    {
+                        canQueue = false;
+                    }
+
+                    if (canQueue)
+                    {
+                        L.Tries--;
+                        L.T = nextTime;
+                        L.Pos = retryPos;
+                        L.AgentId = agentIndex;
+                        L.Warmed = false;
+                        L.Ent = ent;
+                        L.Skel = skel;
+                        _launches.Add(L);
+                        IncQueue(agentIndex);
+                        if (ER_Config.DebugLogging && agentIndex >= 0 && (L.Tries % 3 == 0))
+                        {
+                            _queuedPerAgent.TryGetValue(agentIndex, out var newQueuedCount);
+                            ER_Log.Info($"corpse launch re-queued for Agent#{agentIndex} tries={L.Tries} queued={newQueuedCount}");
+                        }
+                    }
+                    else if (ER_Config.DebugLogging && agentIndex >= 0)
+                    {
+                        ER_Log.Info($"corpse launch queue full for Agent#{agentIndex} tries={L.Tries} queued={existingQueued} cap={queueCap}");
+                    }
+                }
+                else
+                {
+                    _launchFailLogged.Remove(agentIndex);
+                }
+                DecOnce();
             }
             if (_recent.Count == 0) return;
 
@@ -1342,23 +1481,15 @@ namespace ExtremeRagdoll
         public override void OnAgentRemoved(Agent affected, Agent affector, AgentState state, KillingBlow killingBlow)
         {
             if (affected == null) return;
-            _launchFailLogged.Remove(affected.Index);
+            int agentIndex = affected.Index;
+            _launchFailLogged.Remove(agentIndex);
             if (state != AgentState.Killed) return;
             if (affected.Mission != null && affected.Mission != Mission) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
 
-            for (int i = _launches.Count - 1; i >= 0; i--)
-            {
-                var queued = _launches[i];
-                if (queued.AgentId == affected.Index || queued.A == affected)
-                {
-                    _launches.RemoveAt(i);
-                    DecQueue(affected.Index);
-                    _launchFailLogged.Remove(affected.Index);
-                }
-            }
+            PurgeQueuedLaunchesForAgent(affected, agentIndex);
 
-            if (_launchedOnce.Remove(affected.Index))
+            if (_launchedOnce.Remove(agentIndex))
                 return;
 
             // Kontaktpunkt: konservativ das Agent-Center verwenden (kein KillingBlow.GlobalPosition vorhanden)
@@ -1380,18 +1511,34 @@ namespace ExtremeRagdoll
                 var pos0 = affected.Position;
                 int postTriesSynth = ER_Config.CorpsePostDeathTries;
                 int pulse2 = Math.Max(0, (int)MathF.Round(postTriesSynth * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
-                EnqueueLaunch(affected, d, m,                         pos0, ER_Config.LaunchDelay1, retries: postTriesSynth);
-                EnqueueLaunch(affected, d, m * ER_Config.LaunchPulse2Scale, pos0, ER_Config.LaunchDelay2, retries: pulse2);
-                if (ER_Config.DebugLogging)
-                    ER_Log.Info($"OnAgentRemoved: synthesized corpse launch Agent#{affected.Index}");
+                bool queuedSynth = false;
+                queuedSynth |= TryEnqueueLaunch(affected, d, m,                         pos0, ER_Config.LaunchDelay1, retries: postTriesSynth);
+                queuedSynth |= TryEnqueueLaunch(affected, d, m * ER_Config.LaunchPulse2Scale, pos0, ER_Config.LaunchDelay2, retries: pulse2);
+                if (ER_Config.DebugLogging && queuedSynth)
+                    ER_Log.Info($"CorpseLaunch queued Agent#{affected.Index} mag={m} source=synth");
                 return;
             }
             ER_Amplify_RegisterBlowPatch.ForgetScheduled(affected.Index);
 
             float mag = p.mag;
             Vec3 dir = ER_Math.IsFinite(in p.dir) && p.dir.LengthSquared >= DirectionTinySqThreshold
-                ? FinalizeImpulseDir(p.dir)
-                : FinalizeImpulseDir(fallbackDir);
+                ? p.dir
+                : fallbackDir;
+            float upCap = ER_Config.CorpseLaunchMaxUpFraction;
+            if (!TryClampAndNormalizeUp(ref dir, upCap))
+            {
+                Vec3 fallbackSafe = fallbackDir;
+                if (TryClampAndNormalizeUp(ref fallbackSafe, upCap))
+                {
+                    dir = fallbackSafe;
+                }
+                else
+                {
+                    Vec3 defaultDir = new Vec3(0f, 1f, 0f);
+                    if (TryClampAndNormalizeUp(ref defaultDir, upCap))
+                        dir = defaultDir;
+                }
+            }
             if (ER_Math.IsFinite(in p.pos) && p.pos.LengthSquared > PositionTinySqThreshold)
                 hitPos = p.pos;
 
@@ -1409,17 +1556,35 @@ namespace ExtremeRagdoll
                     resolvedHit = ResolveHitPosition(hitPos, ent, affected.Position);
                     var contactImmediate = resolvedHit;
                     contactImmediate.z += ER_Config.CorpseLaunchContactHeight;
-                    // HARD SAFE: disable immediate impulse
-                    const bool ER_HARDSAFE = true;
-                    if (!ER_HARDSAFE)
+                    // Re-enable immediate impulse, aber nur wenn Ragdoll aktiv
+                    float imp = 0f;
+                    try
                     {
-                        float imp = 0f;
-                        try { if (IsRagdollActiveFast(skel)) imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale)); } catch { imp = 0f; }
+                        if (IsRagdollActiveFast(skel))
+                            imp = ToPhysicsImpulse(mag) * MathF.Max(0f, MathF.Min(1f, ER_Config.ImmediateImpulseScale));
+                    }
+                    catch
+                    {
+                        imp = 0f;
+                    }
+                    if (imp > 0f)
+                    {
+                        float hardCap = ER_Config.CorpseImpulseHardCap;
+                        if (hardCap > 0f)
+                            imp = MathF.Min(imp, hardCap);
                         if (imp > 0f)
                         {
-                            bool ok = TryApplyImpulse(ent, skel, dir * imp, contactImmediate, affected.Index);
-                            if (ok) MarkLaunched(affected.Index);
-                            else    ER_Log.Info($"IMPULSE_APPLY_FAIL immediate agent#{affected.Index}");
+                            Vec3 immediateDir = dir; // already validated upstream
+                            bool ok = TryApplyImpulse(ent, skel, immediateDir * imp, contactImmediate, affected.Index);
+                            if (ok)
+                            {
+                                MarkLaunched(agentIndex);
+                                RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
+                                PurgeQueuedLaunchesForAgent(affected, agentIndex);
+                                return;
+                            }
+                            if (ER_Config.DebugLogging)
+                                ER_Log.Info($"IMPULSE_APPLY_FAIL immediate agent#{agentIndex}");
                         }
                     }
                 }
@@ -1431,23 +1596,19 @@ namespace ExtremeRagdoll
             // Schedule with retries (safety net in case MakeDead timing was late)
             int postTries = ER_Config.CorpsePostDeathTries;
             int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
-            // enforce flat-ish dir for scheduled impulses
-            if (dir.z < 0f)
-                dir.z = 0f;
-            if (dir.z > CorpseLaunchMaxUpFrac)
-                dir.z = CorpseLaunchMaxUpFrac;
-            // HARD SAFE: do not schedule corpse launches
-            // EnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
-            // EnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
-            // disabled for validation
+            // dir flach halten, dann 2 Pulse schedulen
+            bool queued = false;
+            queued |= TryEnqueueLaunch(affected, dir, mag,                         hitPos, ER_Config.LaunchDelay1, retries: postTries);
+            queued |= TryEnqueueLaunch(affected, dir, mag * ER_Config.LaunchPulse2Scale, hitPos, ER_Config.LaunchDelay2, retries: pulse2Tries);
+            // kein dritter Puls
             float p3Scale = 0f;
             if (p3Scale > 0f)
-                EnqueueLaunch(affected, dir, mag * p3Scale, hitPos,
-                              ER_Config.LaunchDelay2 + 0.04f,
-                              retries: Math.Max(0, postTries / 2));
+                queued |= TryEnqueueLaunch(affected, dir, mag * p3Scale, hitPos,
+                                        ER_Config.LaunchDelay2 + 0.04f,
+                                        retries: Math.Max(0, postTries / 2));
             RecordBlast(affected.Position, ER_Config.DeathBlastRadius, mag);
-            if (ER_Config.DebugLogging)
-                ER_Log.Info($"OnAgentRemoved fallback: scheduled corpse launch Agent#{affected.Index} mag={mag}");
+            if (ER_Config.DebugLogging && queued)
+                ER_Log.Info($"CorpseLaunch queued Agent#{agentIndex} mag={mag}");
         }
 
         public override MissionBehaviorType BehaviorType => MissionBehaviorType.Other;
@@ -1503,13 +1664,13 @@ namespace ExtremeRagdoll
             if (ER_DeathBlastBehavior.Instance == null || a.Mission == null) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
             var dir = ER_DeathBlastBehavior.PrepDir(p.dir, 0.90f, 0.05f);
-            dir = ER_DeathBlastBehavior.FinalizeImpulseDir(dir);
             int postTries = ER_Config.CorpsePostDeathTries;
             int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
-            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag,                           p.pos, ER_Config.LaunchDelay1, retries: postTries);
-            ER_DeathBlastBehavior.Instance.EnqueueLaunch(a, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: pulse2Tries);
+            bool queued = false;
+            queued |= ER_DeathBlastBehavior.Instance.TryEnqueueLaunch(a, dir, p.mag,                           p.pos, ER_Config.LaunchDelay1, retries: postTries);
+            queued |= ER_DeathBlastBehavior.Instance.TryEnqueueLaunch(a, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: pulse2Tries);
             ER_DeathBlastBehavior.Instance.RecordBlast(a.Position, ER_Config.DeathBlastRadius, p.mag);
-            if (ER_Config.DebugLogging) ER_Log.Info($"{tag}: scheduled corpse launch Agent#{a.Index} mag={p.mag}");
+            if (ER_Config.DebugLogging && queued) ER_Log.Info($"CorpseLaunch queued Agent#{a.Index} mag={p.mag} source={tag}");
         }
     }
 }

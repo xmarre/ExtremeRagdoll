@@ -159,20 +159,20 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Vec3 ClampUpLocal(Vec3 v)
+        private static void ClampLocalUp(ref Vec3 v)
         {
-            if (!IsValidVec(v))
-                return new Vec3(0f, 0f, 0f);
-            float l2 = v.LengthSquared;
-            if (l2 <= 1e-9f || float.IsNaN(l2) || float.IsInfinity(l2))
-                return new Vec3(0f, 0f, 0f);
-            float len = MathF.Sqrt(l2);
-            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFraction);
-            if (v.z > zMax)
-                v.z = zMax;
+            if (!IsValidVec(in v))
+                return;
             if (v.z < 0f)
                 v.z = 0f;
-            return v;
+            float l2 = v.LengthSquared;
+            if (l2 <= 1e-9f || float.IsNaN(l2) || float.IsInfinity(l2))
+                return;
+            float cap = MathF.Sqrt(l2) * ER_Config.CorpseLaunchMaxUpFraction;
+            if (float.IsNaN(cap) || float.IsInfinity(cap))
+                return;
+            if (v.z > cap)
+                v.z = cap;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -473,7 +473,7 @@ namespace ExtremeRagdoll
                 }
                 return;
             }
-            LogAlways($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
+            Log($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -523,26 +523,43 @@ namespace ExtremeRagdoll
             MaybeReEnable();
             // show every exception for this attempt (disable throttling)
             _lastImpulseLog = float.NegativeInfinity;
-            // HARD FAILSAFE: clamp world-Z before any transform
+            // Belt-and-suspenders: clamp world-space impulse before any transforms
             var impW = worldImpulse;
-            if (!IsValidVec(impW) || impW.LengthSquared < ImpulseTinySqThreshold)
+            if (!IsValidVec(in impW))
             {
-                Log("IMPULSE_SKIP invalid/tiny impulse");
+                Log("IMPULSE_SKIP invalid impulse");
                 return false;
             }
-            float len = MathF.Sqrt(impW.LengthSquared);
-            float zMax = len * MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFraction);
-            if (impW.z > zMax)
-                impW.z = zMax;
+            float l2 = impW.LengthSquared;
+            if (l2 < ImpulseTinySqThreshold)
+            {
+                Log("IMPULSE_SKIP tiny impulse");
+                return false;
+            }
             if (impW.z < 0f)
                 impW.z = 0f;
+            float len = MathF.Sqrt(l2);
+            float zMax = len * ER_Config.CorpseLaunchMaxUpFraction;
+            if (!float.IsNaN(zMax) && !float.IsInfinity(zMax) && impW.z > zMax)
+            {
+                impW.z = zMax;
+                l2 = impW.LengthSquared;
+                if (l2 < ImpulseTinySqThreshold)
+                {
+                    Log("IMPULSE_SKIP tiny after clamp");
+                    return false;
+                }
+            }
 
-            if (!_bindLogged)
+            if (!_bindLogged && ER_Config.DebugLogging)
             {
                 _bindLogged = true;
                 ER_Log.Info($"IMP_BIND_NAMES ent3Inst={_ent3Inst?.Name ?? "null"} ent3={_ent3?.Name ?? "null"} ent2Inst={_ent2Inst?.Name ?? "null"} ent2={_ent2?.Name ?? "null"} sk2={_sk2?.Name ?? "null"} sk1={_sk1?.Name ?? "null"}");
             }
-            ER_Log.Info($"IMP_TRY haveEnt={(ent!=null)} haveSk={(skel!=null)} imp2={worldImpulse.LengthSquared:0} pos2={worldPos.LengthSquared:0}");
+            if (ER_Config.DebugLogging)
+            {
+                ER_Log.Info($"IMP_TRY haveEnt={(ent!=null)} haveSk={(skel!=null)} imp2={l2:0} pos2={worldPos.LengthSquared:0}");
+            }
 
             try { skel?.ActivateRagdoll(); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
@@ -679,17 +696,20 @@ namespace ExtremeRagdoll
                         okLocal = false;
                     if (okLocal)
                     {
-                        impL = ClampUpLocal(impL);
+                        ClampLocalUp(ref impL);
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            return false;
+                            okLocal = false;
+                    }
+                    if (okLocal)
+                    {
                         if (_dEnt3Inst != null)
                             _dEnt3Inst(ent, impL, posL, true);
                         else
                             _ent3Inst.Invoke(ent, new object[] { impL, posL, true });
-                        LogAlways("IMPULSE_USE inst ent3(true)");
+                        Log("IMPULSE_USE inst ent3(true)");
                         return true;
                     }
-                    else LogAlways("IMPULSE_SKIP inst ent3: local transform failed");
+                    else Log("IMPULSE_SKIP inst ent3: local transform failed");
                 }
                 catch (Exception ex)
                 {
@@ -707,17 +727,20 @@ namespace ExtremeRagdoll
                         okLocal = false;
                     if (okLocal)
                     {
-                        impL = ClampUpLocal(impL);
+                        ClampLocalUp(ref impL);
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            return false;
+                            okLocal = false;
+                    }
+                    if (okLocal)
+                    {
                         if (_dEnt3 != null)
                             _dEnt3(ent, impL, posL, true);
                         else
                             _ent3.Invoke(null, new object[] { ent, impL, posL, true });
-                        LogAlways("IMPULSE_USE ext ent3(true)");
+                        Log("IMPULSE_USE ext ent3(true)");
                         return true;
                     }
-                    else LogAlways("IMPULSE_SKIP ext ent3: local transform failed");
+                    else Log("IMPULSE_SKIP ext ent3: local transform failed");
                 }
                 catch (Exception ex)
                 {
@@ -736,17 +759,20 @@ namespace ExtremeRagdoll
                         ok = false;
                     if (ok)
                     {
-                        impL = ClampUpLocal(impL);
+                        ClampLocalUp(ref impL);
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            return false;
+                            ok = false;
+                    }
+                    if (ok)
+                    {
                         if (_dEnt2Inst != null)
                             _dEnt2Inst(ent, impL, posL);
                         else
                             _ent2Inst.Invoke(ent, new object[] { impL, posL });
-                        LogAlways("IMPULSE_USE inst ent2(local)");
+                        Log("IMPULSE_USE inst ent2(local)");
                         return true;
                     }
-                    LogAlways("IMPULSE_SKIP inst ent2: local transform failed");
+                    Log("IMPULSE_SKIP inst ent2: local transform failed");
                 }
                 catch (Exception ex)
                 {
@@ -764,17 +790,20 @@ namespace ExtremeRagdoll
                         ok = false;
                     if (ok)
                     {
-                        impL = ClampUpLocal(impL);
+                        ClampLocalUp(ref impL);
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            return false;
+                            ok = false;
+                    }
+                    if (ok)
+                    {
                         if (_dEnt2 != null)
                             _dEnt2(ent, impL, posL);
                         else
                             _ent2.Invoke(null, new object[] { ent, impL, posL });
-                        LogAlways("IMPULSE_USE ext ent2(local)");
+                        Log("IMPULSE_USE ext ent2(local)");
                         return true;
                     }
-                    LogAlways("IMPULSE_SKIP ext ent2: local transform failed");
+                    Log("IMPULSE_SKIP ext ent2: local transform failed");
                 }
                 catch (Exception ex)
                 {
@@ -802,9 +831,12 @@ namespace ExtremeRagdoll
                             okLocal = false;
                         if (okLocal)
                         {
-                            impL = ClampUpLocal(impL);
+                            ClampLocalUp(ref impL);
                             if (impL.LengthSquared < ImpulseTinySqThreshold)
-                                return false;
+                                okLocal = false;
+                        }
+                        if (okLocal)
+                        {
                             if (_dSk2 != null)
                                 _dSk2(skel, impL, posL);
                             else
@@ -825,18 +857,21 @@ namespace ExtremeRagdoll
                 // skel1(no-contact) DISABLED: causes vertical launches
             }
 
-            LogAlways($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
-            try
+            if (ER_Config.DebugLogging)
             {
-                if (hasEnt)
+                Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
+                try
                 {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    var mx = ent.GetPhysicsBoundingBoxMax();
-                    LogAlways($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                    if (hasEnt)
+                    {
+                        var mn = ent.GetPhysicsBoundingBoxMin();
+                        var mx = ent.GetPhysicsBoundingBoxMax();
+                        Log($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                    }
                 }
+                catch { }
+                Log("IMPULSE_END: no entity/skeleton path succeeded");
             }
-            catch { }
-            LogAlways("IMPULSE_END: no entity/skeleton path succeeded");
             return false;
         }
     }
