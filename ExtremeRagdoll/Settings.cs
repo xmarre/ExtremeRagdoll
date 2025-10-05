@@ -159,12 +159,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
             Order = 124, RequireRestart = false)]
-        public float CorpseImpulseHardCap { get; set; } = 60f;
+        public float CorpseImpulseHardCap { get; set; } = 30f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.06f; // still clamps rockets
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.02f; // stricter pre-ragdoll up clamp
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -204,8 +204,8 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        // Default to favoring entity fallbacks for more reliable missile impulses.
-        public bool ForceEntityImpulse { get; set; } = true;   // prefer entity routes when skeleton delivery fails
+        // Default to letting skeleton delivery handle most impulses.
+        public bool ForceEntityImpulse { get; set; } = false;  // entity routes only when skeleton rejects
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
@@ -225,7 +225,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 137, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.45f; // safer default wake-up nudge
+        public float ImmediateImpulseScale { get; set; } = 0.25f; // gentler wake-up nudge
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",

@@ -16,9 +16,9 @@ namespace ExtremeRagdoll
         public static float DeathBlastForceMultiplier => MathF.Max(0f, Settings.Instance?.DeathBlastForceMultiplier ?? 1f);
         public static bool  DebugLogging              => Settings.Instance?.DebugLogging ?? false;
         public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
-        public static bool  ForceEntityImpulse        => Settings.Instance?.ForceEntityImpulse ?? true;
+        public static bool  ForceEntityImpulse        => Settings.Instance?.ForceEntityImpulse ?? false;
         public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? false;
-        public static bool  AllowEnt3World            => Settings.Instance?.AllowEnt3World ?? false;
+        public static bool  AllowEnt3World            => Settings.Instance?.AllowEnt3World ?? true;
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.035f;
@@ -65,7 +65,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 60f;
+                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 30f;
                 if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
                     return 0f;
                 return cap;
@@ -128,7 +128,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.35f;
+                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.25f;
                 if (float.IsNaN(scale) || float.IsInfinity(scale))
                     return 0f;
                 if (scale < 0f) return 0f;
@@ -140,7 +140,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.06f;
+                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.02f;
                 if (frac < 0f) return 0f;
                 if (frac > 1f) return 1f;
                 return frac;

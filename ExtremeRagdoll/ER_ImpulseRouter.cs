@@ -177,6 +177,21 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ClampWorldUp(ref Vec3 w)
+        {
+            if (!ER_Math.IsFinite(in w))
+                return;
+            if (w.z < 0f)
+                w.z = 0f;
+            float len = w.Length;
+            if (len <= 1e-6f)
+                return;
+            float upMax = MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFraction) * len;
+            if (w.z > upMax)
+                w.z = upMax;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void Ensure()
         {
             if (Volatile.Read(ref _ensured))
@@ -629,6 +644,7 @@ namespace ExtremeRagdoll
             }
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
+            bool dynSure = dynOk && aabbOk;
             bool ragActive = false;
             try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
             catch { }
@@ -713,7 +729,7 @@ namespace ExtremeRagdoll
             // Do not skip entity routes just because ragdoll is active.
             // Skeleton routing already attempted; allow ent2/ent3 to fire if available.
             if (ER_Config.DebugLogging)
-                Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
+                Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} dynSure={dynSure} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
 
             // Synthesize a safe contact point if missing/invalid.
             if ((!haveContact || !ER_Math.IsFinite(in contact)) && hasEnt)
@@ -756,12 +772,16 @@ namespace ExtremeRagdoll
 
             // Prefer contact entity routes (world) after skeleton attempt.
             // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
-            if (ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
-                    if (_dEnt3Inst != null) _dEnt3Inst(ent, impW, contact, false);
-                    else                    _ent3Inst.Invoke(ent, new object[] { impW, contact, false });
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared <= 1e-8f)
+                        return false;
+                    if (_dEnt3Inst != null) _dEnt3Inst(ent, impWc, contact, false);
+                    else                    _ent3Inst.Invoke(ent, new object[] { impWc, contact, false });
                     Log("IMPULSE_USE ent3(world)");
                     return true;
                 }
@@ -772,14 +792,18 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared <= 1e-8f)
+                        return false;
                     if (_dEnt3 != null)
-                        _dEnt3(ent, impW, contact, false);
+                        _dEnt3(ent, impWc, contact, false);
                     else
-                        _ent3.Invoke(null, new object[] { ent, impW, contact, false });
+                        _ent3.Invoke(null, new object[] { ent, impWc, contact, false });
                     Log("IMPULSE_USE ext ent3(world)");
                     return true;
                 }
