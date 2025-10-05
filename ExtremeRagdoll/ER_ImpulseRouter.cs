@@ -44,7 +44,7 @@ namespace ExtremeRagdoll
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
-        private const float Ent2WarmupSeconds = 0.00f; // or 0.02f
+        private const float Ent2WarmupSeconds = 0.02f;
         private sealed class Rag
         {
             public float t;
@@ -1061,7 +1061,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if ((haveContact && hasEnt && !_ent2Unsafe) && (_dEnt2Inst != null || _ent2Inst != null))
+            if ((haveContact && hasEnt && dynOk && !_ent2Unsafe) && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -1162,7 +1162,7 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if ((haveContact && hasEnt && !_ent2Unsafe) && (_dEnt2 != null || _ent2 != null))
+            if ((haveContact && hasEnt && dynOk && !_ent2Unsafe) && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -1288,12 +1288,32 @@ SkipExtEnt2:
                 }
             }
 
-            // COM fallback DISABLED on this TW branch: ApplyForceToDynamicBody is AV-prone.
-            // Leave a breadcrumb when it would have fired so we can see frequency in logs.
-            if (hasEnt && LooksDynamic(ent) && (_dEnt1 != null || _ent1 != null))
+            bool skeletonRouteReady = allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null);
+            bool ent3WorldReady = ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe
+                                   && ((_dEnt3Inst != null || _ent3Inst != null) || (_dEnt3 != null || _ent3 != null));
+            bool ent2Ready = haveContact && hasEnt && dynOk && !_ent2Unsafe
+                              && ((_dEnt2Inst != null || _ent2Inst != null) || (_dEnt2 != null || _ent2 != null));
+            if (ER_Config.AllowEnt1WorldFallback && hasEnt && dynOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+                && (_dEnt1 != null || _ent1 != null))
             {
-                if (ER_Config.DebugLogging)
-                    Log("ENT1_DISABLED: skipping COM route on this branch");
+                try
+                {
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared > ImpulseTinySqThreshold)
+                    {
+                        WakeDynamicBody(ent);
+                        if (_dEnt1 != null) _dEnt1(ent, impWc);
+                        else               _ent1.Invoke(null, new object[] { ent, impWc });
+                        Log("IMPULSE_USE ext ent1(world) fallback");
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("ext ent1(world) fallback", ex);
+                    MarkUnsafe(1, ex);
+                }
             }
 
             if (ER_Config.DebugLogging)

@@ -250,5 +250,9 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow ent3(world) impulses", Order = 142, RequireRestart = false)]
         public bool AllowEnt3World { get; set; } = true; // enable world-route fallback while skeleton APIs remain unbound
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyBool("Allow ent1(world) fallback when ent2 unavailable", Order = 143, RequireRestart = false)]
+        public bool AllowEnt1WorldFallback { get; set; } = true;
     }
 }
