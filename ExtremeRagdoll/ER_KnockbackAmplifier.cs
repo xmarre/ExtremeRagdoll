@@ -65,7 +65,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 22f;
+                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 17f;
                 if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
                     return 0f;
                 return cap;
@@ -128,7 +128,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.25f;
+                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.30f;
                 if (float.IsNaN(scale) || float.IsInfinity(scale))
                     return 0f;
                 if (scale < 0f) return 0f;
@@ -140,7 +140,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                var f = Settings.Instance?.CorpseLaunchMinUpFraction ?? 0.06f;
+                var f = Settings.Instance?.CorpseLaunchMinUpFraction ?? 0.00f;
                 if (f < 0f) return 0f;
                 if (f > 1f) return 1f;
                 return f;
@@ -150,7 +150,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                var f = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.12f;
+                var f = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.08f;
                 if (f < 0f) return 0f;
                 if (f > 1f) return 1f;
                 return f;
