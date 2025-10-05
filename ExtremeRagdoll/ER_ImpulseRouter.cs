@@ -373,11 +373,11 @@ namespace ExtremeRagdoll
             }
 
             var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-            var skAsm = typeof(Skeleton).Assembly;
+            var skeletonAsm = typeof(Skeleton).Assembly; // avoid shadowing
             foreach (var t in new[]
             {
-                skAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions"),
-                skAsm.GetType("TaleWorlds.Engine.SkeletonExtensions"),
+                skeletonAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions"),
+                skeletonAsm.GetType("TaleWorlds.Engine.SkeletonExtensions"),
                 typeof(Skeleton)
             })
             {
