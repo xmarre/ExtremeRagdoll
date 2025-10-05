@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
@@ -633,7 +634,6 @@ namespace ExtremeRagdoll
             catch { }
             // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
             // Agent ragdolls often flip to dynamic a frame later; skipping here kills the launch.
-            bool dynSure = true;
             // Entity impulses require a contact point; COM route remains disabled.
             // Don't return; let skeleton routes handle no-contact cases.
             if (dynOk && !haveContact)
