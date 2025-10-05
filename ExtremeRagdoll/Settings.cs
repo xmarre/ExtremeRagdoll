@@ -225,7 +225,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 137, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.25f; // gentler wake-up nudge
+        public float ImmediateImpulseScale { get; set; } = 0.05f; // small wake-up nudge; avoid pre-ragdoll pushes
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",
