@@ -727,6 +727,37 @@ namespace ExtremeRagdoll
                 Log("IMPULSE_SKIP tiny impulse");
                 return false;
             }
+            var contact = worldPos;
+
+            // Ensure some outward (horizontal) push away from contact → entity COM
+            if (ent != null)
+            {
+                try
+                {
+                    var com = ent.GlobalPosition;
+                    Vec3 away = com - contact;   // push COM away from the hit/contact point
+                    away.z = 0f;
+                    float a2 = away.LengthSquared;
+                    float impLen = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                    if (a2 > 1e-9f && impLen > 1e-6f)
+                    {
+                        away /= MathF.Sqrt(a2);
+                        // if sideways is weak, top it up to ~50% of total impulse length
+                        float side2 = impW.x * impW.x + impW.y * impW.y;
+                        float targetSide = 0.5f * impLen;
+                        if (side2 < targetSide * targetSide)
+                        {
+                            float side = MathF.Sqrt(MathF.Max(side2, 1e-12f));
+                            float extra = targetSide - side;
+                            impW.x += away.x * extra;
+                            impW.y += away.y * extra;
+                            ClampWorldUp(ref impW); // keep within up-cone limits
+                        }
+                    }
+                }
+                catch { }
+            }
+            l2 = impW.LengthSquared;
 
             if (!_bindLogged)
             {
@@ -761,7 +792,6 @@ namespace ExtremeRagdoll
 
             try { ent?.ActivateRagdoll(); } catch { }
 
-            var contact = worldPos;
             LiftContactFloor(ent, ref contact);
             bool haveContact = TryResolveContact(ent, ref contact);
             bool hasEnt = ent != null;
@@ -1040,13 +1070,25 @@ namespace ExtremeRagdoll
                             posL.y *= s;
                         }
 
-                        // damp sideways impulse when hitpoint is close to the floor
-                        float side = MathF.Sqrt(impL.x * impL.x + impL.y * impL.y);
-                        if (side > 0f)
+                        // keep some lateral so it doesn't go straight up
+                        float side2 = impL.x * impL.x + impL.y * impL.y;
+                        if (side2 > 1e-12f)
                         {
-                            float damp = Clamp01((posL.z - 0.05f) / 0.25f);
-                            impL.x *= damp;
-                            impL.y *= damp;
+                            // at least 35% of sideways even very close to the floor,
+                            // blending to 100% by ~0.30m above the floor
+                            const float baseKeep = 0.35f;
+                            float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
+                            float keep = baseKeep + (1f - baseKeep) * lerp;
+                            impL.x *= keep;
+                            impL.y *= keep;
+                        }
+
+                        // add a tiny tangential spin (torque) to avoid freeze-y look
+                        if (ER_Math.IsFinite(in posL))
+                        {
+                            Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
+                            float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
+                            impL += tangential * spin;
                         }
 
                         // keep impulse inside the local up cone, then cap magnitude
@@ -1129,13 +1171,25 @@ SkipInstEnt2:
                             posL.y *= s;
                         }
 
-                        // damp sideways impulse when hitpoint is close to the floor
-                        float side = MathF.Sqrt(impL.x * impL.x + impL.y * impL.y);
-                        if (side > 0f)
+                        // keep some lateral so it doesn't go straight up
+                        float side2 = impL.x * impL.x + impL.y * impL.y;
+                        if (side2 > 1e-12f)
                         {
-                            float damp = Clamp01((posL.z - 0.05f) / 0.25f);
-                            impL.x *= damp;
-                            impL.y *= damp;
+                            // at least 35% of sideways even very close to the floor,
+                            // blending to 100% by ~0.30m above the floor
+                            const float baseKeep = 0.35f;
+                            float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
+                            float keep = baseKeep + (1f - baseKeep) * lerp;
+                            impL.x *= keep;
+                            impL.y *= keep;
+                        }
+
+                        // add a tiny tangential spin (torque) to avoid freeze-y look
+                        if (ER_Math.IsFinite(in posL))
+                        {
+                            Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
+                            float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
+                            impL += tangential * spin;
                         }
 
                         // keep impulse inside the local up cone, then cap magnitude
