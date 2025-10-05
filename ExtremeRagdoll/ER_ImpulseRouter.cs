@@ -710,11 +710,33 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // If ragdoll is already active, don't touch entity routes (they kick shields/weapons).
-            if (ragActive && allowSkeletonNow)
+            // Do not skip entity routes just because ragdoll is active.
+            // Skeleton routing already attempted; allow ent2/ent3 to fire if available.
+            if (ER_Config.DebugLogging)
+                Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
+
+            // Synthesize a safe contact point if missing/invalid.
+            if ((!haveContact || !ER_Math.IsFinite(in contact)) && hasEnt)
             {
-                Log("IMPULSE_END: ragdoll active — skipping entity routes");
-                return false;
+                try
+                {
+                    var c = ent.GlobalPosition;
+                    if (ER_Math.IsFinite(in c))
+                    {
+                        c.z += MathF.Max(0f, ER_Config.CorpseLaunchContactHeight);
+                        float jitter = ER_Config.CorpseLaunchXYJitter;
+                        if (jitter > 0f)
+                        {
+                            c.x += MBRandom.RandomFloatRanged(-jitter, jitter);
+                            c.y += MBRandom.RandomFloatRanged(-jitter, jitter);
+                        }
+                        contact = c;
+                        haveContact = true;
+                        if (ER_Config.DebugLogging)
+                            Log("IMP_CONTACT synth=center");
+                    }
+                }
+                catch { }
             }
 
             // Don't hard-stop on dyn/AABB; ent2 can still work with world->local fallback.
@@ -732,8 +754,9 @@ namespace ExtremeRagdoll
                     Log("IMPULSE_SKIP ent routes: missing entity");
             }
 
-            // Prefer contact entity routes (world) after skeleton attempt
-            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            // Prefer contact entity routes (world) after skeleton attempt.
+            // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
+            if (ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
@@ -749,7 +772,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynSure && dynOk && aabbOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -767,8 +790,8 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // ent2 is safe behind try/catch; don't over-gate on dyn/AABB
-            if (!ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            // ent2 is safe behind try/catch; don't over-gate on ragdoll/dyn/AABB
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -799,7 +822,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (!ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -834,7 +857,8 @@ namespace ExtremeRagdoll
             // Leave a breadcrumb when it would have fired so we can see frequency in logs.
             if (hasEnt && LooksDynamic(ent) && (_dEnt1 != null || _ent1 != null))
             {
-                Log("ENT1_DISABLED: skipping COM route on this branch");
+                if (ER_Config.DebugLogging)
+                    Log("ENT1_DISABLED: skipping COM route on this branch");
             }
 
             if (ER_Config.DebugLogging)
@@ -850,8 +874,9 @@ namespace ExtremeRagdoll
                     }
                 }
                 catch { }
-                Log("IMPULSE_END: no entity/skeleton path succeeded");
             }
+            if (ER_Config.DebugLogging)
+                Log("IMPULSE_END: no route accepted");
             return false;
         }
     }
