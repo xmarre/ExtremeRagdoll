@@ -44,7 +44,7 @@ namespace ExtremeRagdoll
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
-        private const float Ent2WarmupSeconds = 0.06f;
+        private const float Ent2WarmupSeconds = 0.00f; // or 0.02f
         private sealed class Rag
         {
             public float t;
@@ -395,6 +395,26 @@ namespace ExtremeRagdoll
                         _sk1 = mi;
                 }
             }
+            if (_sk1 == null && _sk2 == null)
+            {
+                try
+                {
+                    var asm = typeof(Skeleton).Assembly;
+                    foreach (var t in asm.GetTypes())
+                    {
+                        var n = t.FullName ?? string.Empty;
+                        if (!n.Contains("Skeleton", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
+                        {
+                            var ln = mi.Name.ToLowerInvariant();
+                            if (ln.Contains("impulse") || ln.Contains("force"))
+                                Log($"SKEL_CANDIDATE {t.FullName}.{mi}");
+                        }
+                    }
+                }
+                catch { }
+            }
             try
             {
                 if (_sk2 != null && !_sk2.GetParameters()[1].ParameterType.IsByRef)
@@ -738,36 +758,6 @@ namespace ExtremeRagdoll
             }
             var contact = worldPos;
 
-            // Ensure some outward (horizontal) push away from contact → entity COM
-            if (ent != null)
-            {
-                try
-                {
-                    var com = ent.GlobalPosition;
-                    Vec3 away = com - contact;   // push COM away from the hit/contact point
-                    away.z = 0f;
-                    float a2 = away.LengthSquared;
-                    float impLen = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
-                    if (a2 > 1e-9f && impLen > 1e-6f)
-                    {
-                        away /= MathF.Sqrt(a2);
-                        // if sideways is weak, top it up to ~50% of total impulse length
-                        float side2 = impW.x * impW.x + impW.y * impW.y;
-                        float targetSide = 0.5f * impLen;
-                        if (side2 < targetSide * targetSide)
-                        {
-                            float side = MathF.Sqrt(MathF.Max(side2, 1e-12f));
-                            float extra = targetSide - side;
-                            impW.x += away.x * extra;
-                            impW.y += away.y * extra;
-                            ClampWorldUp(ref impW); // keep within up-cone limits
-                        }
-                    }
-                }
-                catch { }
-            }
-            l2 = impW.LengthSquared;
-
             if (!_bindLogged)
             {
                 _bindLogged = true;
@@ -853,6 +843,38 @@ namespace ExtremeRagdoll
                 return false;
             }
 
+            // Recompute outward push after the final contact point is settled.
+            if (ent != null && haveContact)
+            {
+                try
+                {
+                    var com = ent.GlobalPosition;
+                    var away = com - contact;
+                    away.z = 0f;
+                    float a2 = away.LengthSquared;
+                    if (a2 > 1e-9f)
+                    {
+                        away /= MathF.Sqrt(a2);
+                        float impLen = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                        if (impLen > 1e-6f)
+                        {
+                            float side2 = impW.x * impW.x + impW.y * impW.y;
+                            float target = 0.5f * impLen;
+                            if (side2 < target * target)
+                            {
+                                float side = MathF.Sqrt(MathF.Max(side2, 1e-12f));
+                                float extra = target - side;
+                                impW.x += away.x * extra;
+                                impW.y += away.y * extra;
+                                ClampWorldUp(ref impW);
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+            l2 = impW.LengthSquared;
+
             bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
             bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
             bool skeletonAvailable = skel != null;
@@ -863,7 +885,7 @@ namespace ExtremeRagdoll
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
             }
-            bool requireRagdollForEnt2 = true; // force warmup even without skeleton APIs
+            bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
             bool dynSure = dynOk && aabbOk;
@@ -995,7 +1017,7 @@ namespace ExtremeRagdoll
 
             // Prefer contact entity routes (world) after skeleton attempt.
             // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
-            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
@@ -1003,6 +1025,7 @@ namespace ExtremeRagdoll
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared <= 1e-8f)
                         return false;
+                    WakeDynamicBody(ent);
                     if (_dEnt3Inst != null) _dEnt3Inst(ent, impWc, contact, false);
                     else                    _ent3Inst.Invoke(ent, new object[] { impWc, contact, false });
                     Log("IMPULSE_USE ent3(world)");
@@ -1015,7 +1038,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (!ragActive && ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -1023,6 +1046,7 @@ namespace ExtremeRagdoll
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared <= 1e-8f)
                         return false;
+                    WakeDynamicBody(ent);
                     if (_dEnt3 != null)
                         _dEnt3(ent, impWc, contact, false);
                     else
