@@ -161,7 +161,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                int value = Settings.Instance?.CorpsePostDeathTries ?? 2;
+                int value = Settings.Instance?.CorpsePostDeathTries ?? 6;
                 if (value < 0) return 0;
                 if (value > 100) return 100;
                 return value;
@@ -220,8 +220,14 @@ namespace ExtremeRagdoll
         internal static readonly Dictionary<int, PendingLaunch> _pending =
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
-        private static readonly Dictionary<int, float> _lastBigShoveLog = new Dictionary<int, float>();
         private static float _lastBigShoveTime;
+        private static readonly Dictionary<int, float> _lastImmediateImpulse = new Dictionary<int, float>();
+        // BigShove aggregation to avoid per-agent spam
+        private static float _bsAggUntil = 0f;
+        private static int   _bsAggCount = 0;
+        private static float _bsAggMin   = float.PositiveInfinity;
+        private static float _bsAggMax   = float.NegativeInfinity;
+        private static float _bsAggFloor = 0f;
         private static readonly HashSet<int> _bigShoveThisTick = new HashSet<int>();
         private static readonly FieldInfo MissileSpeedField = typeof(AttackCollisionData).GetField("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly PropertyInfo MissileSpeedProperty = typeof(AttackCollisionData).GetProperty("MissileSpeed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -340,10 +346,15 @@ namespace ExtremeRagdoll
         {
             _pending.Clear();
             _lastScheduled.Clear();
-            _lastBigShoveLog.Clear();
+            _lastImmediateImpulse.Clear();
             _bigShoveThisTick.Clear();
             _lastBigShoveTime = 0f;
             _lastAnyLog = 0f;
+            _bsAggUntil = 0f;
+            _bsAggCount = 0;
+            _bsAggMin   = float.PositiveInfinity;
+            _bsAggMax   = float.NegativeInfinity;
+            _bsAggFloor = 0f;
         }
 
         internal static bool TryTakePending(int agentId, out PendingLaunch pending)
@@ -361,7 +372,6 @@ namespace ExtremeRagdoll
         {
             _pending.Remove(agentId);
             _lastScheduled.Remove(agentId);
-            _lastBigShoveLog.Remove(agentId);
         }
 
         internal static bool TryMarkScheduled(int agentId, float now, float windowSec = -1f)
@@ -635,11 +645,21 @@ namespace ExtremeRagdoll
                         if (ER_Config.DebugLogging)
                         {
                             float nowLog = timeNow;
-                            if (!_lastBigShoveLog.TryGetValue(__instance.Index, out var last) || nowLog - last >= 0.5f)
+                            if (nowLog >= _bsAggUntil)
                             {
-                                _lastBigShoveLog[__instance.Index] = nowLog;
-                                ER_Log.Info($"[ER] BigShove {origBase:0}->{blow.BaseMagnitude:0}");
+                                if (_bsAggCount > 0)
+                                {
+                                    ER_Log.Info($"[ER] BigShove x{_bsAggCount} floor={_bsAggFloor:0} orig[min..max]={_bsAggMin:0}..{_bsAggMax:0}");
+                                }
+                                _bsAggUntil = nowLog + 0.25f;
+                                _bsAggCount = 0;
+                                _bsAggMin   = float.PositiveInfinity;
+                                _bsAggMax   = float.NegativeInfinity;
+                                _bsAggFloor = shoveFloor;
                             }
+                            _bsAggCount++;
+                            if (origBase < _bsAggMin) _bsAggMin = origBase;
+                            if (origBase > _bsAggMax) _bsAggMax = origBase;
                         }
                     }
                 }
@@ -660,6 +680,12 @@ namespace ExtremeRagdoll
             else
             {
                 blow.SwingDirection = blow.SwingDirection.NormalizedCopy();
+            }
+
+            if (ER_Config.DebugLogging && timeNow >= _bsAggUntil && _bsAggCount > 0)
+            {
+                ER_Log.Info($"[ER] BigShove x{_bsAggCount} floor={_bsAggFloor:0} orig[min..max]={_bsAggMin:0}..{_bsAggMax:0}");
+                _bsAggCount = 0;
             }
 
             if (!(blow.BaseMagnitude > 0f) || float.IsNaN(blow.BaseMagnitude) || float.IsInfinity(blow.BaseMagnitude))
@@ -698,6 +724,77 @@ namespace ExtremeRagdoll
                         pos  = contact,
                         time = recorded,
                     };
+                    // Immediate wake-up nudge (entity COM). Flat, tiny, safe.
+                    if (ER_Config.ImmediateImpulseScale > 0f)
+                    {
+                        try
+                        {
+                            var visuals = __instance.AgentVisuals;
+                            var entWake = visuals?.GetEntity();
+                            var skWake  = visuals?.GetSkeleton();
+                            if (entWake != null || skWake != null)
+                            {
+                                float dedupeWindow = MathF.Max(0.01f, ER_Config.CorpseLaunchScheduleWindow * 0.5f);
+                                float nowImmediate = timeNow;
+                                bool allowImmediate = true;
+                                if (_lastImmediateImpulse.TryGetValue(__instance.Index, out var lastImmediate) &&
+                                    nowImmediate - lastImmediate < dedupeWindow)
+                                {
+                                    allowImmediate = false;
+                                }
+
+                                if (allowImmediate)
+                                {
+                                    _lastImmediateImpulse[__instance.Index] = nowImmediate;
+
+                                    // keep it flat to avoid rockets
+                                    var flat = ER_DeathBlastBehavior.PrepDir(dir, 1f, 0f);
+                                    flat = ER_DeathBlastBehavior.FinalizeImpulseDir(flat, ER_Config.CorpseLaunchMaxUpFraction);
+                                    flat = new Vec3(flat.x, flat.y, 0f);
+                                    if (!ER_Math.IsFinite(in flat) || flat.LengthSquared < ER_Math.DirectionTinySq)
+                                    {
+                                        flat = new Vec3(0f, 1f, 0f);
+                                    }
+                                    else
+                                    {
+                                        flat = flat.NormalizedCopy();
+                                    }
+
+                                    float impMag = mag * 1.0e-3f * MathF.Max(0f, ER_Config.ImmediateImpulseScale);
+                                    float soft   = ER_Config.CorpseImpulseMaximum;
+                                    if (soft > 0f && impMag > soft) impMag = soft;
+                                    float hard   = ER_Config.CorpseImpulseHardCap;
+                                    if (hard > 0f && impMag > hard) impMag = hard;
+                                    if (impMag > 0f && !float.IsNaN(impMag) && !float.IsInfinity(impMag))
+                                    {
+                                        Vec3 c = contact;
+                                        if (!ER_Math.IsFinite(in c) || c.LengthSquared < 1e-6f)
+                                        {
+                                            try { c = __instance.Position; }
+                                            catch { c = new Vec3(0f, 0f, 0f); }
+                                            c.z += ER_Config.CorpseLaunchContactHeight;
+                                        }
+
+                                        bool ok = false;
+                                        if (skWake != null)
+                                            ok = ER_DeathBlastBehavior.TryImpulseDirect(null, skWake, flat * impMag, c, __instance.Index);
+                                        if (!ok && entWake != null)
+                                            ok = ER_DeathBlastBehavior.TryImpulseDirect(entWake, skWake, flat * impMag, c, __instance.Index);
+                                        if (ok && ER_Config.DebugLogging)
+                                        {
+                                            float nowLog = timeNow;
+                                            if (nowLog - _lastAnyLog > 0.25f)
+                                            {
+                                                _lastAnyLog = nowLog;
+                                                ER_Log.Info($"corpse immediate impulse Agent#{__instance.Index} impMag={impMag:0.0}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
                     var mission = __instance.Mission ?? Mission.Current;
                     mission?
                         .GetMissionBehavior<ER_DeathBlastBehavior>()

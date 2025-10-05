@@ -351,6 +351,15 @@ namespace ExtremeRagdoll
             };
         }
 
+        // Small wrapper so other patches can nudge immediately via the router.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static bool TryImpulseDirect(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos, int agentId = -1)
+        {
+            _ = agentId;
+            if ((ent == null && skel == null) || !ER_Math.IsFinite(in worldImpulse) || !ER_Math.IsFinite(in worldPos)) return false;
+            return ER_ImpulseRouter.TryImpulse(ent, skel, worldImpulse, worldPos);
+        }
+
         private static bool SkeletonAlreadyRagdolled(Skeleton skel)
         {
             if (skel == null)

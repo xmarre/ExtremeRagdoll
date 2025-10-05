@@ -39,12 +39,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #1 (s)", 0f, 0.25f, "0.00",
             Order = 100, RequireRestart = false)]
-        public float LaunchDelay1 { get; set; } = 0.035f;
+        public float LaunchDelay1 { get; set; } = 0.060f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Delay #2 (s)", 0f, 0.30f, "0.00",
             Order = 101, RequireRestart = false)]
-        public float LaunchDelay2 { get; set; } = 0.085f;
+        public float LaunchDelay2 { get; set; } = 0.120f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Second Pulse Scale", 0f, 2.0f, "0.00",
@@ -129,7 +129,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
             Order = 118, RequireRestart = false)]
-        public float CorpseLaunchContactHeight { get; set; } = 0.02f;
+        public float CorpseLaunchContactHeight { get; set; } = 0.04f; // avoid ground clipping
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Retry Delay (s)", 0f, 0.5f, "0.000",
@@ -149,7 +149,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
             Order = 122, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 0f;
+        public float CorpseImpulseMinimum { get; set; } = 6f;   // guarantees visible nudge
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
@@ -164,7 +164,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.02f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.06f; // still clamps rockets
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -174,7 +174,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Post-Death Launch Tries", 0, 100,
             Order = 127, RequireRestart = false)]
-        public int CorpsePostDeathTries { get; set; } = 2;
+        public int CorpsePostDeathTries { get; set; } = 6;    // raise reliability of post-death nudges
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Corpse Launches Per Tick", 0, 2048,
@@ -204,8 +204,8 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 133, RequireRestart = false)]
-        // Default to skeleton-first routing to avoid gear impulses before ragdoll.
-        public bool ForceEntityImpulse { get; set; } = false;  // allow skeleton-first path
+        // Default to favoring entity fallbacks for more reliable missile impulses.
+        public bool ForceEntityImpulse { get; set; } = true;   // prefer entity routes when skeleton delivery fails
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
@@ -225,7 +225,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 137, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.0f;
+        public float ImmediateImpulseScale { get; set; } = 0.45f; // safer default wake-up nudge
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",
@@ -244,6 +244,6 @@ namespace ExtremeRagdoll
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow ent3(world) impulses", Order = 141, RequireRestart = false)]
-        public bool AllowEnt3World { get; set; } = false; // default OFF to test
+        public bool AllowEnt3World { get; set; } = true;  // allow pre-ragdoll world impulses
     }
 }
