@@ -227,6 +227,21 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void LiftContactFloor(GameEntity ent, ref Vec3 c)
+        {
+            if (ent == null)
+                return;
+            try
+            {
+                var mn = ent.GetPhysicsBoundingBoxMin();
+                float zMin = mn.z + ER_Config.CorpseLaunchZNudge;
+                if (c.z < zMin)
+                    c.z = zMin;
+            }
+            catch { }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static float Now()
         {
             try
@@ -678,6 +693,7 @@ namespace ExtremeRagdoll
                         if (IsValidVec(fallback) && l2 >= ContactTinySqThreshold && !float.IsNaN(l2) && !float.IsInfinity(l2))
                         {
                             contact = fallback;
+                            LiftContactFloor(ent, ref contact);
                             return true;
                         }
                     }
@@ -746,6 +762,7 @@ namespace ExtremeRagdoll
             try { ent?.ActivateRagdoll(); } catch { }
 
             var contact = worldPos;
+            LiftContactFloor(ent, ref contact);
             bool haveContact = TryResolveContact(ent, ref contact);
             bool hasEnt = ent != null;
             // If no contact, try AABB center first (safer than origin), then origin.
@@ -763,6 +780,7 @@ namespace ExtremeRagdoll
                             var c = (mn + mx) * 0.5f;
                             c.z += ER_Config.CorpseLaunchContactHeight;
                             contact = c;
+                            LiftContactFloor(ent, ref contact);
                             haveContact = true;
                         }
                     }
@@ -781,6 +799,7 @@ namespace ExtremeRagdoll
                     {
                         o.z += ER_Config.CorpseLaunchContactHeight;
                         contact = o;
+                        LiftContactFloor(ent, ref contact);
                         haveContact = true;
                     }
                 }
@@ -805,6 +824,7 @@ namespace ExtremeRagdoll
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
             }
+            bool requireRagdollForEnt2 = true; // force warmup even without skeleton APIs
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
             bool dynSure = dynOk && aabbOk;
@@ -846,6 +866,7 @@ namespace ExtremeRagdoll
                             if (ER_Config.DebugLogging)
                                 Log("CONTACT_CLAMP: outside AABB*3 — snapping toward center");
                             contact = c;
+                            LiftContactFloor(ent, ref contact);
                             haveContact = true;
                         }
                     }
@@ -909,22 +930,11 @@ namespace ExtremeRagdoll
                             c.y += MBRandom.RandomFloatRanged(-jitter, jitter);
                         }
                         contact = c;
+                        LiftContactFloor(ent, ref contact);
                         haveContact = true;
                         if (ER_Config.DebugLogging)
                             Log("IMP_CONTACT synth=center");
                     }
-                }
-                catch { }
-            }
-
-            if (hasEnt && haveContact && ER_Math.IsFinite(in contact))
-            {
-                try
-                {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    float zMin = mn.z + MathF.Max(0f, ER_Config.CorpseLaunchZNudge);
-                    if (contact.z < zMin)
-                        contact.z = zMin;
                 }
                 catch { }
             }
@@ -988,18 +998,14 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // Use ent2(local) once ragdoll is active (ignore IsDynamicBody on this TW branch).
-            if (ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if ((haveContact && hasEnt && !_ent2Unsafe) && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
-                    if (!RagWarm(skel, Ent2WarmupSeconds))
+                    if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
                     {
                         if (ER_Config.DebugLogging)
-                        {
-                            float warm = RagWarmSeconds(skel);
-                            Log($"ENT2_DEFER: warm={warm:0.000}s");
-                        }
+                            Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
                         goto SkipInstEnt2;
                     }
 
@@ -1016,17 +1022,42 @@ namespace ExtremeRagdoll
                         ok = false;
                     if (ok)
                     {
-                        // Cap overall magnitude (safety against crazy locals on some bodies)
+                        // keep local contact above plane, kill lever arm when nearly on floor
+                        if (posL.z < 0.05f)
+                        {
+                            posL.x = 0f;
+                            posL.y = 0f;
+                            posL.z = 0.05f;
+                        }
+
+                        // limit XY lever arm so torque can't spike when near the ground
+                        float maxXY = MathF.Max(0.03f, posL.z * 0.6f);
+                        float r2 = posL.x * posL.x + posL.y * posL.y;
+                        if (r2 > maxXY * maxXY)
+                        {
+                            float s = maxXY / MathF.Sqrt(MathF.Max(r2, 1e-12f));
+                            posL.x *= s;
+                            posL.y *= s;
+                        }
+
+                        // damp sideways impulse when hitpoint is close to the floor
+                        float side = MathF.Sqrt(impL.x * impL.x + impL.y * impL.y);
+                        if (side > 0f)
+                        {
+                            float damp = Clamp01((posL.z - 0.05f) / 0.25f);
+                            impL.x *= damp;
+                            impL.y *= damp;
+                        }
+
+                        // keep impulse inside the local up cone, then cap magnitude
+                        ClampLocalUp(ref impL);
                         float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                         if (maxMag > 0f)
                         {
                             float magSq = impL.LengthSquared;
                             float maxMagSq = maxMag * maxMag;
                             if (magSq > maxMagSq)
-                            {
-                                float scale = maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f));
-                                impL *= scale;
-                            }
+                                impL *= (maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f)));
                         }
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
                             ok = false;
@@ -1035,8 +1066,8 @@ namespace ExtremeRagdoll
                     {
                         if (ER_Config.DebugLogging)
                         {
-                            float warm = RagWarmSeconds(skel);
-                            Log($"ENT2_FIRE: warm={warm:0.000}s");
+                            Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
+                            Log($"ENT2_FIRE(inst) warm={RagWarmSeconds(skel):0.000}s");
                         }
                         WakeDynamicBody(ent);
                         if (_dEnt2Inst != null)
@@ -1056,17 +1087,14 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if (ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if ((haveContact && hasEnt && !_ent2Unsafe) && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
-                    if (!RagWarm(skel, Ent2WarmupSeconds))
+                    if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
                     {
                         if (ER_Config.DebugLogging)
-                        {
-                            float warm = RagWarmSeconds(skel);
-                            Log($"ENT2_DEFER: warm={warm:0.000}s");
-                        }
+                            Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
                         goto SkipExtEnt2;
                     }
 
@@ -1083,16 +1111,42 @@ SkipInstEnt2:
                         ok = false;
                     if (ok)
                     {
+                        // keep local contact above plane, kill lever arm when nearly on floor
+                        if (posL.z < 0.05f)
+                        {
+                            posL.x = 0f;
+                            posL.y = 0f;
+                            posL.z = 0.05f;
+                        }
+
+                        // limit XY lever arm so torque can't spike when near the ground
+                        float maxXY = MathF.Max(0.03f, posL.z * 0.6f);
+                        float r2 = posL.x * posL.x + posL.y * posL.y;
+                        if (r2 > maxXY * maxXY)
+                        {
+                            float s = maxXY / MathF.Sqrt(MathF.Max(r2, 1e-12f));
+                            posL.x *= s;
+                            posL.y *= s;
+                        }
+
+                        // damp sideways impulse when hitpoint is close to the floor
+                        float side = MathF.Sqrt(impL.x * impL.x + impL.y * impL.y);
+                        if (side > 0f)
+                        {
+                            float damp = Clamp01((posL.z - 0.05f) / 0.25f);
+                            impL.x *= damp;
+                            impL.y *= damp;
+                        }
+
+                        // keep impulse inside the local up cone, then cap magnitude
+                        ClampLocalUp(ref impL);
                         float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                         if (maxMag > 0f)
                         {
                             float magSq = impL.LengthSquared;
                             float maxMagSq = maxMag * maxMag;
                             if (magSq > maxMagSq)
-                            {
-                                float scale = maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f));
-                                impL *= scale;
-                            }
+                                impL *= (maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f)));
                         }
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
                             ok = false;
@@ -1101,8 +1155,8 @@ SkipInstEnt2:
                     {
                         if (ER_Config.DebugLogging)
                         {
-                            float warm = RagWarmSeconds(skel);
-                            Log($"ENT2_FIRE: warm={warm:0.000}s");
+                            Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
+                            Log($"ENT2_FIRE(ext) warm={RagWarmSeconds(skel):0.000}s");
                         }
                         WakeDynamicBody(ent);
                         if (_dEnt2 != null)
@@ -1120,6 +1174,30 @@ SkipExtEnt2:
                 {
                     LogFailure("ext ent2", ex);
                     MarkUnsafe(2, ex);
+                }
+            }
+
+            if (!skApis && haveContact && hasEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            {
+                try
+                {
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared > ImpulseTinySqThreshold)
+                    {
+                        WakeDynamicBody(ent);
+                        if (_dEnt3 != null)
+                            _dEnt3(ent, impWc, contact, false);
+                        else
+                            _ent3.Invoke(null, new object[] { ent, impWc, contact, false });
+                        Log("IMPULSE_USE ext ent3(world) fallback");
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("ext ent3(world) fallback", ex);
+                    MarkUnsafe(3, ex);
                 }
             }
 
