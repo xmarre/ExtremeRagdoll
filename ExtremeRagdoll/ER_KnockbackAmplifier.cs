@@ -372,6 +372,7 @@ namespace ExtremeRagdoll
         {
             _pending.Remove(agentId);
             _lastScheduled.Remove(agentId);
+            _lastImmediateImpulse.Remove(agentId);
         }
 
         internal static bool TryMarkScheduled(int agentId, float now, float windowSec = -1f)
