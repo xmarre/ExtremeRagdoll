@@ -1,4 +1,4 @@
-using System;
+using System; // für Environment.TickCount64
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -237,14 +237,8 @@ namespace ExtremeRagdoll
             }
             catch { }
 
-            try
-            {
-                return TimeApplication.CurrentTime;
-            }
-            catch
-            {
-                return 0f;
-            }
+            // Versionsunabhängiger Fallback (ungefähr Sekunden seit Start)
+            return (float)(Environment.TickCount64 / 1000.0);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
