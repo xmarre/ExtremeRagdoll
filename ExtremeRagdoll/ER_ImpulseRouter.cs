@@ -837,8 +837,13 @@ namespace ExtremeRagdoll
                         float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                         if (maxMag > 0f)
                         {
-                            float len = impL.Length;
-                            if (len > maxMag) impL *= (maxMag / MathF.Max(len, 1e-6f));
+                            float magSq = impL.LengthSquared;
+                            float maxMagSq = maxMag * maxMag;
+                            if (magSq > maxMagSq)
+                            {
+                                float scale = maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f));
+                                impL *= scale;
+                            }
                         }
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
                             ok = false;
@@ -873,8 +878,13 @@ namespace ExtremeRagdoll
                         float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                         if (maxMag > 0f)
                         {
-                            float len = impL.Length;
-                            if (len > maxMag) impL *= (maxMag / MathF.Max(len, 1e-6f));
+                            float magSq = impL.LengthSquared;
+                            float maxMagSq = maxMag * maxMag;
+                            if (magSq > maxMagSq)
+                            {
+                                float scale = maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f));
+                                impL *= scale;
+                            }
                         }
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
                             ok = false;
