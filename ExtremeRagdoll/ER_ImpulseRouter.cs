@@ -227,7 +227,25 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static float Now() => MBCommon.GetTime(MBCommon.TimeType.Mission);
+        private static float Now()
+        {
+            try
+            {
+                var mission = Mission.Current;
+                if (mission != null)
+                    return mission.CurrentTime;
+            }
+            catch { }
+
+            try
+            {
+                return TimeApplication.CurrentTime;
+            }
+            catch
+            {
+                return 0f;
+            }
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void MarkRagStart(Skeleton sk)
@@ -356,7 +374,8 @@ namespace ExtremeRagdoll
                     foreach (var t in skAssembly.GetTypes())
                     {
                         var fullName = t.FullName;
-                        if (fullName == null || !fullName.Contains("Skeleton", StringComparison.OrdinalIgnoreCase))
+                        if (string.IsNullOrEmpty(fullName) ||
+                            fullName.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) < 0)
                             continue;
 
                         foreach (var mi in t.GetMethods(flags))
