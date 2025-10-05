@@ -249,6 +249,6 @@ namespace ExtremeRagdoll
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow ent3(world) impulses", Order = 142, RequireRestart = false)]
-        public bool AllowEnt3World { get; set; } = false; // disable pre-ragdoll world impulses by default
+        public bool AllowEnt3World { get; set; } = true; // enable world-route fallback while skeleton APIs remain unbound
     }
 }
