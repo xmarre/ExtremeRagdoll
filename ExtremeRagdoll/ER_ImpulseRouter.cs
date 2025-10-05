@@ -25,6 +25,7 @@ namespace ExtremeRagdoll
         private static MethodInfo _ent3, _ent2, _ent1;
         private static MethodInfo _ent3Inst, _ent2Inst, _ent1Inst;
         private static MethodInfo _sk2, _sk1;
+        private static MethodInfo _wake;
         private static Action<GameEntity, Vec3, Vec3, bool> _dEnt3;
         private static Action<GameEntity, Vec3, Vec3> _dEnt2;
         private static Action<GameEntity, Vec3> _dEnt1;
@@ -33,6 +34,7 @@ namespace ExtremeRagdoll
         private static Action<GameEntity, Vec3> _dEnt1Inst;
         private static Action<Skeleton, Vec3, Vec3> _dSk2;
         private static Action<Skeleton, Vec3> _dSk1;
+        private static Action<GameEntity> _dWake;
         private static Func<GameEntity, bool> _isDyn;
         private static float _lastImpulseLog = float.NegativeInfinity; // keep
         private static float _lastNoiseLog = float.NegativeInfinity;
@@ -42,6 +44,13 @@ namespace ExtremeRagdoll
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
+        private const float Ent2WarmupSeconds = 0.06f;
+        private sealed class Rag
+        {
+            public float t;
+        }
+
+        private static readonly ConditionalWeakTable<Skeleton, Rag> _rag = new ConditionalWeakTable<Skeleton, Rag>();
 
         internal static void ResetUnsafeState()
         {
@@ -160,20 +169,45 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ClampLocalUp(ref Vec3 v)
+        private static void WakeDynamicBody(GameEntity ent)
+        {
+            if (ent == null)
+                return;
+            try
+            {
+                if (_dWake != null)
+                    _dWake(ent);
+                else
+                    _wake?.Invoke(null, new object[] { ent });
+            }
+            catch { }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float Clamp01(float f) => float.IsNaN(f) || float.IsInfinity(f) ? 0f : (f < 0f ? 0f : (f > 1f ? 1f : f));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ClampUpCone(ref Vec3 v, float minFrac, float maxFrac)
         {
             if (!IsValidVec(in v))
                 return;
             if (v.z < 0f)
                 v.z = 0f;
+
             float l2 = v.LengthSquared;
-            if (l2 <= 1e-9f || float.IsNaN(l2) || float.IsInfinity(l2))
+            if (l2 <= 1e-9f)
                 return;
-            float cap = MathF.Sqrt(l2) * ER_Config.CorpseLaunchMaxUpFraction;
-            if (float.IsNaN(cap) || float.IsInfinity(cap))
-                return;
-            if (v.z > cap)
-                v.z = cap;
+
+            float len = MathF.Sqrt(l2);
+            float minZ = Clamp01(minFrac) * len;
+            float maxZ = Clamp01(maxFrac) * len;
+            if (maxZ > 0f && minZ > maxZ)
+                minZ = maxZ;
+
+            if (v.z < minZ)
+                v.z = minZ;
+            if (v.z > maxZ)
+                v.z = maxZ;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -181,14 +215,65 @@ namespace ExtremeRagdoll
         {
             if (!ER_Math.IsFinite(in w))
                 return;
-            if (w.z < 0f)
-                w.z = 0f;
-            float len = w.Length;
-            if (len <= 1e-6f)
+            ClampUpCone(ref w, ER_Config.CorpseLaunchMinUpFraction, ER_Config.CorpseLaunchMaxUpFraction);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ClampLocalUp(ref Vec3 v)
+        {
+            if (!IsValidVec(in v))
                 return;
-            float upMax = MathF.Max(0f, ER_Config.CorpseLaunchMaxUpFraction) * len;
-            if (w.z > upMax)
-                w.z = upMax;
+            ClampUpCone(ref v, ER_Config.CorpseLaunchMinUpFraction, ER_Config.CorpseLaunchMaxUpFraction);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float Now() => MBCommon.GetTime(MBCommon.TimeType.Mission);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void MarkRagStart(Skeleton sk)
+        {
+            if (sk == null)
+                return;
+            try
+            {
+                _rag.Remove(sk);
+                _rag.Add(sk, new Rag { t = Now() });
+            }
+            catch { }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool RagWarm(Skeleton sk, float minSeconds)
+        {
+            if (sk == null)
+                return false;
+            try
+            {
+                if (!_rag.TryGetValue(sk, out var rag) || rag == null)
+                    return false;
+                return (Now() - rag.t) >= minSeconds;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float RagWarmSeconds(Skeleton sk)
+        {
+            if (sk == null)
+                return 0f;
+            try
+            {
+                if (_rag.TryGetValue(sk, out var rag) && rag != null)
+                {
+                    float delta = Now() - rag.t;
+                    return delta >= 0f ? delta : 0f;
+                }
+            }
+            catch { }
+            return 0f;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -230,6 +315,59 @@ namespace ExtremeRagdoll
                     try { _dEnt1 = (Action<GameEntity, Vec3>)_ent1.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
                     catch { _dEnt1 = null; }
                 }
+
+                _wake = ext.GetMethod("WakeUpDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(GameEntity) }, null);
+                if (_wake != null)
+                {
+                    try { _dWake = (Action<GameEntity>)_wake.CreateDelegate(typeof(Action<GameEntity>)); }
+                    catch { _dWake = null; }
+                }
+            }
+
+            var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+            var skAssembly = typeof(GameEntity).Assembly;
+            var skType = skAssembly.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions")
+                       ?? skAssembly.GetType("TaleWorlds.Engine.SkeletonExtensions");
+
+            if (skType != null)
+            {
+                _sk2 = skType.GetMethod("ApplyLocalImpulse", flags, null,
+                             new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null);
+                if (_sk2 != null)
+                {
+                    try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
+                    catch { _dSk2 = null; }
+                }
+
+                _sk1 = skType.GetMethod("ApplyImpulse", flags, null,
+                             new[] { typeof(Skeleton), typeof(Vec3) }, null);
+                if (_sk1 != null)
+                {
+                    try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
+                    catch { _dSk1 = null; }
+                }
+            }
+
+            if (_sk1 == null && _sk2 == null)
+            {
+                try
+                {
+                    foreach (var t in skAssembly.GetTypes())
+                    {
+                        var fullName = t.FullName;
+                        if (fullName == null || !fullName.Contains("Skeleton", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        foreach (var mi in t.GetMethods(flags))
+                        {
+                            var name = mi.Name.ToLowerInvariant();
+                            if (name.Contains("impulse") || name.Contains("force"))
+                                Log($"SKEL_CANDIDATE {t.FullName}.{mi}");
+                        }
+                    }
+                }
+                catch { }
             }
 
             var ge = typeof(GameEntity);
@@ -262,11 +400,14 @@ namespace ExtremeRagdoll
             }
 
             var sk = typeof(Skeleton);
-            _sk2 = sk.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                 ?? sk.GetMethod("AddForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                 ?? sk.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                 ?? sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                 ?? sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null);
+            if (_sk2 == null)
+            {
+                _sk2 = sk.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                     ?? sk.GetMethod("AddForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                     ?? sk.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                     ?? sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                     ?? sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null);
+            }
             if (_sk2 == null)
             {
                 foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
@@ -283,14 +424,17 @@ namespace ExtremeRagdoll
                     }
                 }
             }
-            if (_sk2 != null)
+            if (_sk2 != null && _dSk2 == null)
             {
                 try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
                 catch { _dSk2 = null; }
             }
-            _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
-                 ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
-                 ?? sk.GetMethod("AddImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null);
+            if (_sk1 == null)
+            {
+                _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
+                     ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
+                     ?? sk.GetMethod("AddImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null);
+            }
             if (_sk1 == null)
             {
                 foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
@@ -307,7 +451,7 @@ namespace ExtremeRagdoll
                     }
                 }
             }
-            if (_sk1 != null)
+            if (_sk1 != null && _dSk1 == null)
             {
                 try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
                 catch { _dSk1 = null; }
@@ -546,37 +690,33 @@ namespace ExtremeRagdoll
                 Log("IMPULSE_SKIP invalid impulse");
                 return false;
             }
+            ClampWorldUp(ref impW);
             float l2 = impW.LengthSquared;
             if (l2 < ImpulseTinySqThreshold)
             {
                 Log("IMPULSE_SKIP tiny impulse");
                 return false;
             }
-            if (impW.z < 0f)
-                impW.z = 0f;
-            float len = MathF.Sqrt(l2);
-            float zMax = len * ER_Config.CorpseLaunchMaxUpFraction;
-            if (!float.IsNaN(zMax) && !float.IsInfinity(zMax) && impW.z > zMax)
-            {
-                impW.z = zMax;
-                l2 = impW.LengthSquared;
-                if (l2 < ImpulseTinySqThreshold)
-                {
-                    Log("IMPULSE_SKIP tiny after clamp");
-                    return false;
-                }
-            }
 
-            if (!_bindLogged && ER_Config.DebugLogging)
+            if (!_bindLogged)
             {
                 _bindLogged = true;
-                ER_Log.Info($"IMP_BIND_NAMES ent3Inst={_ent3Inst?.Name ?? "null"} ent3={_ent3?.Name ?? "null"} ent2Inst={_ent2Inst?.Name ?? "null"} ent2={_ent2?.Name ?? "null"} sk2={_sk2?.Name ?? "null"} sk1={_sk1?.Name ?? "null"}");
+                Log($"SK_BIND sk2={( _sk2?.DeclaringType?.FullName + "." + _sk2?.Name) ?? "null"} sk1={( _sk1?.DeclaringType?.FullName + "." + _sk1?.Name) ?? "null"}");
+                if (ER_Config.DebugLogging)
+                {
+                    ER_Log.Info($"IMP_BIND_NAMES ent3Inst={_ent3Inst?.Name ?? "null"} ent3={_ent3?.Name ?? "null"} ent2Inst={_ent2Inst?.Name ?? "null"} ent2={_ent2?.Name ?? "null"} sk2={_sk2?.Name ?? "null"} sk1={_sk1?.Name ?? "null"}");
+                }
             }
             if (ER_Config.DebugLogging)
             {
                 ER_Log.Info($"IMP_TRY haveEnt={(ent!=null)} haveSk={(skel!=null)} imp2={l2:0} pos2={worldPos.LengthSquared:0}");
             }
 
+            bool wasRag = false;
+            try { wasRag = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
+            catch { }
+            if (!wasRag)
+                MarkRagStart(skel);
             try { skel?.ActivateRagdoll(); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
 
@@ -740,14 +880,6 @@ namespace ExtremeRagdoll
                     if (ER_Math.IsFinite(in c))
                     {
                         c.z += MathF.Max(0f, ER_Config.CorpseLaunchContactHeight);
-                        // Keep contact above ground/AABB floor to avoid downward spikes.
-                        try
-                        {
-                            var mn = ent.GetPhysicsBoundingBoxMin();
-                            if (c.z < mn.z + 0.02f)
-                                c.z = mn.z + 0.02f;
-                        }
-                        catch { }
                         float jitter = ER_Config.CorpseLaunchXYJitter;
                         if (jitter > 0f)
                         {
@@ -759,6 +891,18 @@ namespace ExtremeRagdoll
                         if (ER_Config.DebugLogging)
                             Log("IMP_CONTACT synth=center");
                     }
+                }
+                catch { }
+            }
+
+            if (hasEnt && haveContact && ER_Math.IsFinite(in contact))
+            {
+                try
+                {
+                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    float zMin = mn.z + MathF.Max(0f, ER_Config.CorpseLaunchZNudge);
+                    if (contact.z < zMin)
+                        contact.z = zMin;
                 }
                 catch { }
             }
@@ -827,12 +971,29 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var ok = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
+                    if (!RagWarm(skel, Ent2WarmupSeconds))
+                    {
+                        if (ER_Config.DebugLogging)
+                        {
+                            float warm = RagWarmSeconds(skel);
+                            Log($"ENT2_DEFER: warm={warm:0.000}s");
+                        }
+                        goto SkipInstEnt2;
+                    }
+
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared <= ImpulseTinySqThreshold)
+                    {
+                        Log("IMPULSE_SKIP ent2: tiny after world clamp");
+                        goto SkipInstEnt2;
+                    }
+
+                    var ok = TryWorldToLocalSafe(ent, impWc, contact, out var impL, out var posL);
                     if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         ok = false;
                     if (ok)
                     {
-                        ClampLocalUp(ref impL);
                         // Cap overall magnitude (safety against crazy locals on some bodies)
                         float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                         if (maxMag > 0f)
@@ -850,6 +1011,12 @@ namespace ExtremeRagdoll
                     }
                     if (ok)
                     {
+                        if (ER_Config.DebugLogging)
+                        {
+                            float warm = RagWarmSeconds(skel);
+                            Log($"ENT2_FIRE: warm={warm:0.000}s");
+                        }
+                        WakeDynamicBody(ent);
                         if (_dEnt2Inst != null)
                             _dEnt2Inst(ent, impL, posL);
                         else
@@ -858,6 +1025,8 @@ namespace ExtremeRagdoll
                         return true;
                     }
                     Log("IMPULSE_SKIP inst ent2: prechecks/local failed");
+SkipInstEnt2:
+                    ;
                 }
                 catch (Exception ex)
                 {
@@ -869,12 +1038,29 @@ namespace ExtremeRagdoll
             {
                 try
                 {
-                    var ok = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
+                    if (!RagWarm(skel, Ent2WarmupSeconds))
+                    {
+                        if (ER_Config.DebugLogging)
+                        {
+                            float warm = RagWarmSeconds(skel);
+                            Log($"ENT2_DEFER: warm={warm:0.000}s");
+                        }
+                        goto SkipExtEnt2;
+                    }
+
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared <= ImpulseTinySqThreshold)
+                    {
+                        Log("IMPULSE_SKIP ent2: tiny after world clamp");
+                        goto SkipExtEnt2;
+                    }
+
+                    var ok = TryWorldToLocalSafe(ent, impWc, contact, out var impL, out var posL);
                     if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
                         ok = false;
                     if (ok)
                     {
-                        ClampLocalUp(ref impL);
                         float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                         if (maxMag > 0f)
                         {
@@ -891,6 +1077,12 @@ namespace ExtremeRagdoll
                     }
                     if (ok)
                     {
+                        if (ER_Config.DebugLogging)
+                        {
+                            float warm = RagWarmSeconds(skel);
+                            Log($"ENT2_FIRE: warm={warm:0.000}s");
+                        }
+                        WakeDynamicBody(ent);
                         if (_dEnt2 != null)
                             _dEnt2(ent, impL, posL);
                         else
@@ -899,6 +1091,8 @@ namespace ExtremeRagdoll
                         return true;
                     }
                     Log("IMPULSE_SKIP ext ent2: prechecks/local failed");
+SkipExtEnt2:
+                    ;
                 }
                 catch (Exception ex)
                 {

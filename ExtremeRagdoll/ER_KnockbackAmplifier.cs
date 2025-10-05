@@ -18,7 +18,7 @@ namespace ExtremeRagdoll
         public static bool  RespectEngineBlowFlags    => Settings.Instance?.RespectEngineBlowFlags ?? false;
         public static bool  ForceEntityImpulse        => Settings.Instance?.ForceEntityImpulse ?? false;
         public static bool  AllowSkeletonFallbackForInvalidEntity => Settings.Instance?.AllowSkeletonFallbackForInvalidEntity ?? false;
-        public static bool  AllowEnt3World            => Settings.Instance?.AllowEnt3World ?? true;
+        public static bool  AllowEnt3World            => Settings.Instance?.AllowEnt3World ?? false;
         public static float MinMissileSpeedForPush    => MathF.Max(0f, Settings.Instance?.MinMissileSpeedForPush ?? 5f);
         public static bool  BlockedMissilesCanPush    => Settings.Instance?.BlockedMissilesCanPush ?? false;
         public static float LaunchDelay1              => Settings.Instance?.LaunchDelay1 ?? 0.035f;
@@ -65,7 +65,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 30f;
+                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 22f;
                 if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
                     return 0f;
                 return cap;
@@ -121,7 +121,7 @@ namespace ExtremeRagdoll
                 return value;
             }
         }
-        public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.05f);
+        public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.15f);
         public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.05f);
         public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
         public static float ImmediateImpulseScale
@@ -136,14 +136,24 @@ namespace ExtremeRagdoll
                 return scale;
             }
         }
+        public static float CorpseLaunchMinUpFraction
+        {
+            get
+            {
+                var f = Settings.Instance?.CorpseLaunchMinUpFraction ?? 0.06f;
+                if (f < 0f) return 0f;
+                if (f > 1f) return 1f;
+                return f;
+            }
+        }
         public static float CorpseLaunchMaxUpFraction
         {
             get
             {
-                float frac = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.02f;
-                if (frac < 0f) return 0f;
-                if (frac > 1f) return 1f;
-                return frac;
+                var f = Settings.Instance?.CorpseLaunchMaxUpFraction ?? 0.12f;
+                if (f < 0f) return 0f;
+                if (f > 1f) return 1f;
+                return f;
             }
         }
         public static int   CorpseLaunchQueueCap                => Math.Max(0, Settings.Instance?.CorpseLaunchQueueCap ?? 3);
