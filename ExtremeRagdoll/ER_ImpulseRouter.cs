@@ -1,4 +1,4 @@
-using System; // für Environment.TickCount64
+using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -238,7 +238,8 @@ namespace ExtremeRagdoll
             catch { }
 
             // Versionsunabhängiger Fallback (ungefähr Sekunden seit Start)
-            return (float)(Environment.TickCount64 / 1000.0);
+            uint ms = unchecked((uint)Environment.TickCount);
+            return ms * 0.001f;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
