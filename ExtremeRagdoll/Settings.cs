@@ -159,17 +159,17 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
             Order = 124, RequireRestart = false)]
-        public float CorpseImpulseHardCap { get; set; } = 22f;
+        public float CorpseImpulseHardCap { get; set; } = 17f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Min Up Fraction", 0f, 1.0f, "0.00",
             Order = 125, RequireRestart = false)]
-        public float CorpseLaunchMinUpFraction { get; set; } = 0.06f;
+        public float CorpseLaunchMinUpFraction { get; set; } = 0.00f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
             Order = 126, RequireRestart = false)]
-        public float CorpseLaunchMaxUpFraction { get; set; } = 0.12f;
+        public float CorpseLaunchMaxUpFraction { get; set; } = 0.08f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
@@ -230,7 +230,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 138, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.15f; // small wake-up nudge; avoid pre-ragdoll pushes
+        public float ImmediateImpulseScale { get; set; } = 0.30f; // stronger wake-up nudge to keep ragdolls dynamic
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",

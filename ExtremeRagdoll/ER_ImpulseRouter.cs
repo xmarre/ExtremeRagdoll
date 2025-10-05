@@ -63,6 +63,25 @@ namespace ExtremeRagdoll
             _lastNoiseLog = float.NegativeInfinity;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool SigMatches(MethodInfo mi, params Type[] want)
+        {
+            var ps = mi?.GetParameters();
+            if (ps == null || ps.Length != want.Length)
+                return false;
+            for (int i = 0; i < want.Length; i++)
+            {
+                var pt = ps[i].ParameterType;
+                var w = want[i];
+                if (pt == w)
+                    continue;
+                if (pt.IsByRef && pt.GetElementType() == w)
+                    continue;
+                return false;
+            }
+            return true;
+        }
+
         private static bool LooksDynamic(GameEntity ent)
         {
             // Prefer engine check if available
@@ -353,51 +372,41 @@ namespace ExtremeRagdoll
                 }
             }
 
-            var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-            var skAssembly = typeof(GameEntity).Assembly;
-            var skType = skAssembly.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions")
-                       ?? skAssembly.GetType("TaleWorlds.Engine.SkeletonExtensions");
-
-            if (skType != null)
+            var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var skAsm = typeof(Skeleton).Assembly;
+            foreach (var t in new[]
             {
-                _sk2 = skType.GetMethod("ApplyLocalImpulse", flags, null,
-                             new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null);
-                if (_sk2 != null)
+                skAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions"),
+                skAsm.GetType("TaleWorlds.Engine.SkeletonExtensions"),
+                typeof(Skeleton)
+            })
+            {
+                if (t == null)
+                    continue;
+                foreach (var mi in t.GetMethods(flags))
                 {
-                    try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
-                    catch { _dSk2 = null; }
-                }
-
-                _sk1 = skType.GetMethod("ApplyImpulse", flags, null,
-                             new[] { typeof(Skeleton), typeof(Vec3) }, null);
-                if (_sk1 != null)
-                {
-                    try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
-                    catch { _dSk1 = null; }
+                    var name = mi.Name.ToLowerInvariant();
+                    bool looks = name.Contains("impulse") || name.Contains("force");
+                    if (!looks)
+                        continue;
+                    if (_sk2 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3), typeof(Vec3)))
+                        _sk2 = mi;
+                    if (_sk1 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3)))
+                        _sk1 = mi;
                 }
             }
-
-            if (_sk1 == null && _sk2 == null)
+            try
             {
-                try
-                {
-                    foreach (var t in skAssembly.GetTypes())
-                    {
-                        var fullName = t.FullName;
-                        if (string.IsNullOrEmpty(fullName) ||
-                            fullName.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) < 0)
-                            continue;
-
-                        foreach (var mi in t.GetMethods(flags))
-                        {
-                            var name = mi.Name.ToLowerInvariant();
-                            if (name.Contains("impulse") || name.Contains("force"))
-                                Log($"SKEL_CANDIDATE {t.FullName}.{mi}");
-                        }
-                    }
-                }
-                catch { }
+                if (_sk2 != null && !_sk2.GetParameters()[1].ParameterType.IsByRef)
+                    _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
             }
+            catch { _dSk2 = null; }
+            try
+            {
+                if (_sk1 != null && !_sk1.GetParameters()[0].ParameterType.IsByRef)
+                    _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+            }
+            catch { _dSk1 = null; }
 
             var ge = typeof(GameEntity);
 
@@ -727,6 +736,37 @@ namespace ExtremeRagdoll
                 Log("IMPULSE_SKIP tiny impulse");
                 return false;
             }
+            var contact = worldPos;
+
+            // Ensure some outward (horizontal) push away from contact → entity COM
+            if (ent != null)
+            {
+                try
+                {
+                    var com = ent.GlobalPosition;
+                    Vec3 away = com - contact;   // push COM away from the hit/contact point
+                    away.z = 0f;
+                    float a2 = away.LengthSquared;
+                    float impLen = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                    if (a2 > 1e-9f && impLen > 1e-6f)
+                    {
+                        away /= MathF.Sqrt(a2);
+                        // if sideways is weak, top it up to ~50% of total impulse length
+                        float side2 = impW.x * impW.x + impW.y * impW.y;
+                        float targetSide = 0.5f * impLen;
+                        if (side2 < targetSide * targetSide)
+                        {
+                            float side = MathF.Sqrt(MathF.Max(side2, 1e-12f));
+                            float extra = targetSide - side;
+                            impW.x += away.x * extra;
+                            impW.y += away.y * extra;
+                            ClampWorldUp(ref impW); // keep within up-cone limits
+                        }
+                    }
+                }
+                catch { }
+            }
+            l2 = impW.LengthSquared;
 
             if (!_bindLogged)
             {
@@ -761,7 +801,6 @@ namespace ExtremeRagdoll
 
             try { ent?.ActivateRagdoll(); } catch { }
 
-            var contact = worldPos;
             LiftContactFloor(ent, ref contact);
             bool haveContact = TryResolveContact(ent, ref contact);
             bool hasEnt = ent != null;
@@ -1040,13 +1079,25 @@ namespace ExtremeRagdoll
                             posL.y *= s;
                         }
 
-                        // damp sideways impulse when hitpoint is close to the floor
-                        float side = MathF.Sqrt(impL.x * impL.x + impL.y * impL.y);
-                        if (side > 0f)
+                        // keep some lateral so it doesn't go straight up
+                        float side2 = impL.x * impL.x + impL.y * impL.y;
+                        if (side2 > 1e-12f)
                         {
-                            float damp = Clamp01((posL.z - 0.05f) / 0.25f);
-                            impL.x *= damp;
-                            impL.y *= damp;
+                            // at least 35% of sideways even very close to the floor,
+                            // blending to 100% by ~0.30m above the floor
+                            const float baseKeep = 0.35f;
+                            float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
+                            float keep = baseKeep + (1f - baseKeep) * lerp;
+                            impL.x *= keep;
+                            impL.y *= keep;
+                        }
+
+                        // add a tiny tangential spin (torque) to avoid freeze-y look
+                        if (ER_Math.IsFinite(in posL))
+                        {
+                            Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
+                            float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
+                            impL += tangential * spin;
                         }
 
                         // keep impulse inside the local up cone, then cap magnitude
@@ -1129,13 +1180,25 @@ SkipInstEnt2:
                             posL.y *= s;
                         }
 
-                        // damp sideways impulse when hitpoint is close to the floor
-                        float side = MathF.Sqrt(impL.x * impL.x + impL.y * impL.y);
-                        if (side > 0f)
+                        // keep some lateral so it doesn't go straight up
+                        float side2 = impL.x * impL.x + impL.y * impL.y;
+                        if (side2 > 1e-12f)
                         {
-                            float damp = Clamp01((posL.z - 0.05f) / 0.25f);
-                            impL.x *= damp;
-                            impL.y *= damp;
+                            // at least 35% of sideways even very close to the floor,
+                            // blending to 100% by ~0.30m above the floor
+                            const float baseKeep = 0.35f;
+                            float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
+                            float keep = baseKeep + (1f - baseKeep) * lerp;
+                            impL.x *= keep;
+                            impL.y *= keep;
+                        }
+
+                        // add a tiny tangential spin (torque) to avoid freeze-y look
+                        if (ER_Math.IsFinite(in posL))
+                        {
+                            Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
+                            float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
+                            impL += tangential * spin;
                         }
 
                         // keep impulse inside the local up cone, then cap magnitude
