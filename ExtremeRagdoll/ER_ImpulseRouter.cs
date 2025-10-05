@@ -729,9 +729,18 @@ namespace ExtremeRagdoll
             bool wasRag = false;
             try { wasRag = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
             catch { }
+            bool ragActive = wasRag;
             if (!wasRag)
                 MarkRagStart(skel);
-            try { skel?.ActivateRagdoll(); } catch { }
+            try
+            {
+                skel?.ActivateRagdoll();
+                ragActive = (ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive || skel != null);
+            }
+            catch
+            {
+                ragActive = ragActive || skel != null;
+            }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
 
             try { ent?.ActivateRagdoll(); } catch { }
@@ -799,9 +808,8 @@ namespace ExtremeRagdoll
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
             bool dynSure = dynOk && aabbOk;
-            bool ragActive = false;
-            try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
-            catch { }
+            try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
+            catch { ragActive = ragActive || skel != null; }
             // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
             // Agent ragdolls often flip to dynamic a frame later; skipping here kills the launch.
             // Entity impulses require a contact point; COM route remains disabled.
