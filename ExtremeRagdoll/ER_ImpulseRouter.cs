@@ -740,6 +740,14 @@ namespace ExtremeRagdoll
                     if (ER_Math.IsFinite(in c))
                     {
                         c.z += MathF.Max(0f, ER_Config.CorpseLaunchContactHeight);
+                        // Keep contact above ground/AABB floor to avoid downward spikes.
+                        try
+                        {
+                            var mn = ent.GetPhysicsBoundingBoxMin();
+                            if (c.z < mn.z + 0.02f)
+                                c.z = mn.z + 0.02f;
+                        }
+                        catch { }
                         float jitter = ER_Config.CorpseLaunchXYJitter;
                         if (jitter > 0f)
                         {
@@ -814,8 +822,9 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // ent2 is safe behind try/catch; don't over-gate on ragdoll/dyn/AABB
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            // Only use ent2(local) AFTER ragdoll is active and entity is surely dynamic with sane AABB.
+            // This avoids pre-ragdoll AVs and sky-yeets on TW builds without skel/ent3.
+            if (ragActive && dynSure && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -837,7 +846,7 @@ namespace ExtremeRagdoll
                         Log("IMPULSE_USE inst ent2(local)");
                         return true;
                     }
-                    Log("IMPULSE_SKIP inst ent2: local transform failed");
+                    Log("IMPULSE_SKIP inst ent2: prechecks/local failed");
                 }
                 catch (Exception ex)
                 {
@@ -845,8 +854,14 @@ namespace ExtremeRagdoll
                     MarkUnsafe(2, ex);
                 }
             }
+            else
+            {
+                if (ER_Config.DebugLogging && hasEnt && haveContact && !ragActive)
+                    Log($"ENT2_DEFER: waiting ragdoll (dynSure={dynSure})");
+                // fall through to other routes / retries
+            }
 
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (ragActive && dynSure && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -868,7 +883,7 @@ namespace ExtremeRagdoll
                         Log("IMPULSE_USE ext ent2(local)");
                         return true;
                     }
-                    Log("IMPULSE_SKIP ext ent2: local transform failed");
+                    Log("IMPULSE_SKIP ext ent2: prechecks/local failed");
                 }
                 catch (Exception ex)
                 {
