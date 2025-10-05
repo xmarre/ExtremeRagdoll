@@ -822,9 +822,8 @@ namespace ExtremeRagdoll
                 }
             }
 
-            // Only use ent2(local) AFTER ragdoll is active and entity is surely dynamic with sane AABB.
-            // This avoids pre-ragdoll AVs and sky-yeets on TW builds without skel/ent3.
-            if (ragActive && dynSure && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            // Use ent2(local) once ragdoll is active (ignore IsDynamicBody on this TW branch).
+            if (ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -834,6 +833,13 @@ namespace ExtremeRagdoll
                     if (ok)
                     {
                         ClampLocalUp(ref impL);
+                        // Cap overall magnitude (safety against crazy locals on some bodies)
+                        float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
+                        if (maxMag > 0f)
+                        {
+                            float len = impL.Length;
+                            if (len > maxMag) impL *= (maxMag / MathF.Max(len, 1e-6f));
+                        }
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
                             ok = false;
                     }
@@ -854,14 +860,7 @@ namespace ExtremeRagdoll
                     MarkUnsafe(2, ex);
                 }
             }
-            else
-            {
-                if (ER_Config.DebugLogging && hasEnt && haveContact && !ragActive)
-                    Log($"ENT2_DEFER: waiting ragdoll (dynSure={dynSure})");
-                // fall through to other routes / retries
-            }
-
-            if (ragActive && dynSure && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (ragActive && haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -871,6 +870,12 @@ namespace ExtremeRagdoll
                     if (ok)
                     {
                         ClampLocalUp(ref impL);
+                        float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
+                        if (maxMag > 0f)
+                        {
+                            float len = impL.Length;
+                            if (len > maxMag) impL *= (maxMag / MathF.Max(len, 1e-6f));
+                        }
                         if (impL.LengthSquared < ImpulseTinySqThreshold)
                             ok = false;
                     }
