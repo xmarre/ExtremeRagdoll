@@ -403,7 +403,7 @@ namespace ExtremeRagdoll
                     foreach (var t in asm.GetTypes())
                     {
                         var n = t.FullName ?? string.Empty;
-                        if (!n.Contains("Skeleton", StringComparison.OrdinalIgnoreCase))
+                        if (string.IsNullOrEmpty(n) || n.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) < 0)
                             continue;
                         foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
                         {
