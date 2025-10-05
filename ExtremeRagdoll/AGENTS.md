@@ -1,139 +1,135 @@
 # AGENTS.md — Repository Agent Guide (ExtremeRagdoll)
 
-> **Scope:** Guidance for a code-editing agent working on this Bannerlord mod repository.  
+> Scope: guidance for a code‑editing agent working on this Bannerlord mod. Static edits only. Do not run the game.
 
 ---
 
 ## 1) What this repo is
 
-This is a C# mod for Mount & Blade II: Bannerlord focused on amplified ragdolls/knockback. Core code lives under `ExtremeRagdoll/` and patches engine methods via **Harmony**.
+A C# mod for Mount & Blade II: Bannerlord that amplifies ragdoll/knockback reactions. Core sources sit under `ExtremeRagdoll/` and patch engine methods via **Harmony**.
 
 ### Key classes (quick map)
 
-- `ER_DeathBlastBehavior` (`ER_DeathBlast.cs`)
-  - Applies post-hit impulses and queued corpse launches.
-  - Maintains caches for reflection-based physics calls.
-  - Tracks recent blasts/kicks/launches and per-tick processing caps.
-  - Adds helpers:
-    - `ClampVertical(Vec3)`: clamps Z component to `[0, MaxUpFraction]` then renormalizes.
-    - `PrepDir(Vec3, planarScale, upBias)`: normalizes input, applies up-bias, clamps via `ClampVertical`.
-    - `ToPhysicsImpulse(float)`: converts damage/blow magnitudes to physics impulse with min/max clamps.
-  - Queues:
-    - **PreLaunch**: attempts before full ragdoll warmup.
-    - **Launch**: retries after death until “took” conditions are met.
-    - **Kick**: non-lethal nudges via `RegisterBlow` (no damage side-effects).
+- **`ER_DeathBlastBehavior`** (`ER_DeathBlast.cs`)  
+  MissionBehavior that queues corpse launches and non‑lethal kicks, drives warm‑up, and applies AoE pushes:
+  - Queues: `PreLaunch` (pre‑death warm), `Launch` (post‑death retries), `Kick` (alive agents).
+  - Dedup + caps: per‑agent queue cap, per‑tick caps, schedule dedupe (dir/pos/mag).
+  - Death scheduling: takes pending launches from `Agent.MakeDead` / `Agent.Die` and schedules two pulses (Pulse1 + optional Pulse2 via `LaunchPulse2Scale`).
+  - AoE: records “death blasts” and applies radial non‑lethal knocks to nearby living agents.
+  - Helpers: `PrepDir`, `ClampVertical`, `FinalizeImpulseDir`, jitter/nudge/clamps, `MarkLaunched`, `RecordBlast`.
 
-- `ER_Amplify_RegisterBlowPatch` (`ER_KnockbackAmplifier.cs`)
-  - Harmony postfix on `Agent.RegisterBlow(...)`.
-  - Computes a robust, clamped direction (`PrepDir`) and derives a **pending launch** for lethal blows.
-  - Optional: respects engine blow flags if `RespectEngineBlowFlags` is enabled; otherwise sets knockback flags and direction.
+- **`ER_Amplify_RegisterBlowPatch`** (`ER_KnockbackAmplifier.cs`)  
+  Harmony patch on `Agent.RegisterBlow(...)` that computes a safe impulse, sets knockback flags when allowed, and:
+  - On **lethal** hits: stores a `PendingLaunch` for the dying agent and fires a small immediate impulse to wake ragdoll safely.
+  - On **non‑lethal** hits: enqueues a timed kick in the behavior.
 
-- `Settings` / `ER_Config` (`Settings.cs`, `ER_KnockbackAmplifier.cs`)
-  - Strongly-typed accessors that sanitize ranges and expose **tuning**.
-  - New/important knobs:
-    - Scalar thresholds: `CorpseLaunchVelocityScaleThreshold`, `CorpseLaunchVelocityOffset`, `CorpseLaunchVerticalDelta`, `CorpseLaunchDisplacement`.
-    - Magnitude/impulse: `MaxCorpseLaunchMagnitude`, `CorpseImpulseMinimum`, `CorpseImpulseMaximum`.
-    - Direction clamp: `CorpseLaunchMaxUpFraction` (used by `ClampVertical`).
-    - Retry/cadence: `CorpsePrelaunchTries`, `CorpsePostDeathTries`, `CorpseLaunchRetryDelay`, `CorpseLaunchRetryJitter`, `CorpseLaunchScheduleWindow`.
-    - Per‑tick caps: `CorpseLaunchesPerTick`, `KicksPerTick`, `AoEAgentsPerTick`.
-    - Misc: `DeathBlastTtl`, `CorpseLaunchXYJitter`, `CorpseLaunchZNudge`, `CorpseLaunchZClampAbove`.
-    - Behavior: `RespectEngineBlowFlags`, `DebugLogging`.
+- **`ER_ImpulseRouter`** + **`ER_ImpulsePrefs`** (`ER_ImpulseRouter.cs`)  
+  Reflection‑bound delivery to engine impulse APIs. Picks entity‑space by default, falls back to skeleton if allowed; rejects invalid contacts/impulses; throttles noisy routes; guards non‑dynamic bodies. Resets state per mission.
+
+- **`ER_RagdollPrep`** (`ER_RagdollPrep.cs`)  
+  Minimal ragdoll activation and bone‑frame priming used during warm‑up and pre‑launch.
+
+- **`ER_TOR_Adapter`** (`ER_TOR_Adapter.cs`)  
+  At menu/game/mission start, flips `HasShockWave=true` on TOR `TriggeredEffectTemplate` entries that are damaging AOEs and affect hostiles, enabling shockwave handling without XML edits.
+
+- **`SubModule`** (`SubModule.cs`)  
+  Entrypoint. Forces debug logging at main menu when MCM is present, applies Harmony patches, injects `ER_DeathBlastBehavior`, and runs the TOR adapter once per session.
+
+- **`Settings` + `ER_Config`** (`Settings.cs`, `ER_KnockbackAmplifier.cs`)  
+  All tuning lives in MCM‑backed settings surfaced through readonly `ER_Config` accessors with range‑sanitizing.
+
+- **`ER_Log`** (`ER_Log.cs`)  
+  Lightweight file logger. Writes to Documents\Mount and Blade II Bannerlord\Logs\ExtremeRagdoll\`er_log.txt` with 5MB rotation and 3 backups.
+
+- **`ER_Math`** (`ER_Math.cs`)  
+  Tiny numeric guards and constants for zero/NaN/Inf handling.
 
 ---
 
-## 2) How **you** should operate (agent constraints)
+## 2) How to operate (agent constraints)
 
-- ✅ Perform **static** code analysis and edits only.
-- ✅ You may adjust C# sources, comments, and markdown docs.
-- ✅ You may suggest unit-testable refactors (even if tests aren’t present).
-- ✅ You may add small internal helpers where they reduce duplication (e.g., more uses of `PrepDir`).
-- ❌ **Never** attempt to run Bannerlord or require it to be installed.
-- ❌ Don’t assume engine DLLs are present at edit time. If a build step needs external references, just keep changes compile‑plausible and explain missing refs in PR notes.
-
-**Preferred change style**
-- Keep diffs **minimal and surgical**.
-- Preserve existing public API surface and runtime behavior unless the task says otherwise.
-- Keep logging guarded by `ER_Config.DebugLogging`.
-- Maintain exception safety around reflection and physics calls (no-throw outer catches are intentional).
+- Perform **static** code edits only.
+- Do not assume engine DLLs are present; keep changes compile‑plausible.
+- Preserve public surface and runtime semantics unless a task says otherwise.
+- Keep logging behind `ER_Config.DebugLogging` and never throw from logging.
+- Prefer small, surgical diffs.
 
 ---
 
 ## 3) Hotspots & invariants
 
-- Direction handling must go through `PrepDir` / `ClampVertical` before use.
-- All impulse magnitudes go through `ToPhysicsImpulse` then clamped by config min/max.
-- **No vertical “rocket” launches**: Z is clamped to `[0, CorpseLaunchMaxUpFraction]`.
-- Respect per-tick caps to avoid O(N) spikes: `CorpseLaunchesPerTick`, `KicksPerTick`, `AoEAgentsPerTick`.
-- When a corpse launch **takes**, call `MarkLaunched` so we don’t double-impulse the same agent.
-- Always null/NaN/Infinity-guard vectors and magnitudes; prefer early returns.
-- Reflection paths are intentionally defensive: cache lookups, allow partial failures, avoid throwing.
+- Always normalize + clamp directions via `PrepDir` → `ClampVertical` before use. Avoid “rocket” Z: cap to `CorpseLaunchMaxUpFraction`.
+- Clamp and sanitize magnitudes through config (`MaxCorpseLaunchMagnitude`, `CorpseImpulse*`, hard caps) before applying.
+- Respect per‑tick caps: `CorpseLaunchesPerTick`, `KicksPerTick`, `AoEAgentsPerTick`.
+- After a launch “takes”, call `MarkLaunched` and decrement the per‑agent queue.
+- Reflection paths must be catch‑all safe; cache delegates and tolerate partial failure.
+- Router chooses entity‑space unless disallowed, with skeleton fallback only when safe and configured.
+- Scheduling must dedupe by direction/position/magnitude window to avoid spam.
 
 ---
 
-## 4) Common tasks you can safely do
+## 4) Common edits that are safe
 
-- **Bug fixes**: e.g., missed NaN guard, forgotten `MarkLaunched`, wrong clamp order, forgotten queue decrement.
-- **Refactors**: replace ad‑hoc direction math with `PrepDir`; remove duplicate normalization/clamp snippets.
-- **Config wiring**: expose new tuning as properties in `Settings` + `ER_Config` with sane bounds.
-- **Docs**: update README/CHANGELOG comments explaining new settings and defaults.
-- **Performance**: reduce allocations in per-tick loops; widen scratch buffers; limit logging in hot paths.
-
-When in doubt, prefer readability + guardrails over micro-optimizations.
+- Bug fixes: guard NaN/Inf, wrong clamp order, missing `MarkLaunched`, missed queue decrement.
+- Refactors: replace ad‑hoc impulse math with `PrepDir`/`ClampVertical`/`FinalizeImpulseDir`; share helper methods.
+- Config wiring: add MCM setting + `ER_Config` accessor with explicit bounds and defaults.
+- Perf: trim per‑tick allocations; throttle logs in hot paths; reuse structs where possible.
+- Docs: update this file and README/changes when settings or behavior change.
 
 ---
 
-## 5) Testing strategy
+## 5) Runtime touchpoints
 
-- Treat this repository as a library:
-  - Ensure **compiles-in-theory** changes (no new external deps, no API breaks).
-  - Add lightweight guards (null/NaN checks) and unit-testable pure helpers (e.g., small methods for math/clamp) where feasible.
-- Provide PR notes that describe:
-  - Functional intent and safety checks.
-  - Any behavior-affecting config defaults you touched.
-  - How you validated logic (reasoned test cases, small examples).
+- Death scheduling: `Agent.MakeDead` + `Agent.Die` postfixes queue pulses into the behavior (Pulse2 scale optional).
+- Immediate wake‑up: small impulse on lethal blows to flip ragdoll dynamic before queued pulses land.
+- AoE from deaths: behavior stores recent blasts and applies distance‑scaled non‑lethal pushes each tick.
+- TOR adaptation: one‑time reflection pass toggles `HasShockWave` on qualifying templates when TOR is present.
 
 ---
 
-## 6) Code style & conventions
+## 6) Settings quick reference (selected)
 
-- Use `MathF`, early returns, and `try { } catch { }` **only** where we must not throw (reflection/engine calls).
-- Prefer `var` for obvious types; explicit types for public members and tuple fields.
-- Keep English logs; prefix with context (`corpse launch`, `kick`, `miss`, etc.).
-- Preserve `#region`/file organization if present; otherwise group helpers → queues → ticks → patches.
+General:
+- `KnockbackMultiplier`, `ExtraForceMultiplier`, `DeathBlastRadius`, `DeathBlastForceMultiplier`
 
----
+Cadence & retries:
+- `LaunchDelay1`, `LaunchDelay2`, `LaunchPulse2Scale`
+- `CorpsePrelaunchTries`, `CorpsePostDeathTries`
+- `CorpseLaunchRetryDelay`, `CorpseLaunchRetryJitter`, `CorpseLaunchScheduleWindow`
+- `CorpseLaunchQueueCap`
 
-## 7) Safe knowledge of settings (quick reference)
+Safety & clamps:
+- `CorpseLaunchMaxUpFraction`
+- `CorpseImpulseMinimum`, `CorpseImpulseMaximum`, `CorpseImpulseHardCap`
+- `MaxCorpseLaunchMagnitude`, `MaxAoEForce`, `MaxBlowBaseMagnitude`, `MaxNonLethalKnockback`
+- `CorpseLaunchVelocityScaleThreshold`, `CorpseLaunchVelocityOffset`, `CorpseLaunchVerticalDelta`, `CorpseLaunchDisplacement`
 
-```
-CorpseLaunchMaxUpFraction    [0..1]    // vertical clamp for directions
-CorpseImpulseMinimum         >= 0      // min physics impulse after scaling
-CorpseImpulseMaximum         >= 0      // max physics impulse after scaling (0=unbounded)
-CorpsePrelaunchTries         0..100
-CorpsePostDeathTries         0..100
-CorpseLaunchesPerTick        0..2048   // 0 disables cap (not recommended)
-KicksPerTick                 0..2048
-AoEAgentsPerTick             0..4096
-CorpseLaunchRetryDelay       >= 0
-CorpseLaunchRetryJitter      >= 0
-CorpseLaunchScheduleWindow   >= 0
-DeathBlastTtl                >= 0
-RespectEngineBlowFlags       bool
-DebugLogging                 bool
-```
+Contact/position shaping:
+- `CorpseLaunchXYJitter`, `CorpseLaunchZNudge`, `CorpseLaunchZClampAbove`, `CorpseLaunchContactHeight`
+- `ScheduleDirDuplicateSqThreshold`, `SchedulePosDuplicateSqThreshold`, `ScheduleMagDuplicateFraction`
 
----
+Tick limits:
+- `CorpseLaunchesPerTick`, `KicksPerTick`, `AoEAgentsPerTick`
 
-## 8) PR/commit hygiene
-
-- **Commit message:** short imperative subject + one bullet list describing *why*, *what*, *risk*.
-- **Do not** bump versions or change packaging paths unless explicitly asked.
-- If you touch public config defaults, call it out in the PR description.
+Routing & engine behavior:
+- `ForceEntityImpulse`, `AllowSkeletonFallbackForInvalidEntity`, `AllowEnt3World`
+- `RespectEngineBlowFlags`, `MaxAabbExtent`, `ImmediateImpulseScale`
+- `MinMissileSpeedForPush`, `BlockedMissilesCanPush`
+- `WarmupBlowBaseMagnitude`, `HorseRamKnockDownThreshold`
+- `DebugLogging`, `DeathBlastTtl`
 
 ---
 
-## 9) Things you must not change without explicit instruction
+## 7) Code style
 
-- External public API used by other mods (if any).
-- Harmony patch targets/signatures.
-- Runtime behaviors that players rely on (e.g., launch cadence) beyond bug fixes or guardrails.
+- Early returns. `MathF` for float math. No‑throw outer catches around reflection/engine calls.
+- `var` for obvious types. Explicit types for public members and tuple fields.
+- English logs, with clear context prefixes.
+
+---
+
+## 8) Do not change without explicit instruction
+
+- Harmony patch targets/signatures and order attributes.
+- External/public APIs used by other mods.
+- Player‑visible cadence defaults beyond bug‑fixing guardrails.
