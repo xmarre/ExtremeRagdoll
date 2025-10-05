@@ -63,6 +63,25 @@ namespace ExtremeRagdoll
             _lastNoiseLog = float.NegativeInfinity;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool SigMatches(MethodInfo mi, params Type[] want)
+        {
+            var ps = mi?.GetParameters();
+            if (ps == null || ps.Length != want.Length)
+                return false;
+            for (int i = 0; i < want.Length; i++)
+            {
+                var pt = ps[i].ParameterType;
+                var w = want[i];
+                if (pt == w)
+                    continue;
+                if (pt.IsByRef && pt.GetElementType() == w)
+                    continue;
+                return false;
+            }
+            return true;
+        }
+
         private static bool LooksDynamic(GameEntity ent)
         {
             // Prefer engine check if available
@@ -353,51 +372,41 @@ namespace ExtremeRagdoll
                 }
             }
 
-            var flags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-            var skAssembly = typeof(GameEntity).Assembly;
-            var skType = skAssembly.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions")
-                       ?? skAssembly.GetType("TaleWorlds.Engine.SkeletonExtensions");
-
-            if (skType != null)
+            var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var skAsm = typeof(Skeleton).Assembly;
+            foreach (var t in new[]
             {
-                _sk2 = skType.GetMethod("ApplyLocalImpulse", flags, null,
-                             new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null);
-                if (_sk2 != null)
+                skAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions"),
+                skAsm.GetType("TaleWorlds.Engine.SkeletonExtensions"),
+                typeof(Skeleton)
+            })
+            {
+                if (t == null)
+                    continue;
+                foreach (var mi in t.GetMethods(flags))
                 {
-                    try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
-                    catch { _dSk2 = null; }
-                }
-
-                _sk1 = skType.GetMethod("ApplyImpulse", flags, null,
-                             new[] { typeof(Skeleton), typeof(Vec3) }, null);
-                if (_sk1 != null)
-                {
-                    try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
-                    catch { _dSk1 = null; }
+                    var name = mi.Name.ToLowerInvariant();
+                    bool looks = name.Contains("impulse") || name.Contains("force");
+                    if (!looks)
+                        continue;
+                    if (_sk2 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3), typeof(Vec3)))
+                        _sk2 = mi;
+                    if (_sk1 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3)))
+                        _sk1 = mi;
                 }
             }
-
-            if (_sk1 == null && _sk2 == null)
+            try
             {
-                try
-                {
-                    foreach (var t in skAssembly.GetTypes())
-                    {
-                        var fullName = t.FullName;
-                        if (string.IsNullOrEmpty(fullName) ||
-                            fullName.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) < 0)
-                            continue;
-
-                        foreach (var mi in t.GetMethods(flags))
-                        {
-                            var name = mi.Name.ToLowerInvariant();
-                            if (name.Contains("impulse") || name.Contains("force"))
-                                Log($"SKEL_CANDIDATE {t.FullName}.{mi}");
-                        }
-                    }
-                }
-                catch { }
+                if (_sk2 != null && !_sk2.GetParameters()[1].ParameterType.IsByRef)
+                    _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
             }
+            catch { _dSk2 = null; }
+            try
+            {
+                if (_sk1 != null && !_sk1.GetParameters()[0].ParameterType.IsByRef)
+                    _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+            }
+            catch { _dSk1 = null; }
 
             var ge = typeof(GameEntity);
 
