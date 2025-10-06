@@ -835,6 +835,37 @@ namespace ExtremeRagdoll
                 catch { }
             }
 
+            // If we still don't have a contact but we do have an entity, synth one.
+            if (!haveContact && ent != null)
+            {
+                try
+                {
+                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    var mx = ent.GetPhysicsBoundingBoxMax();
+                    var c = (mn + mx) * 0.5f;
+                    if (ER_Math.IsFinite(in c))
+                    {
+                        c.z = MathF.Max(c.z, mx.z - 0.05f);
+                        contact = c;
+                        haveContact = true;
+                        if (ER_Config.DebugLogging)
+                            Log("IMP_CONTACT synth=aabb");
+                    }
+                }
+                catch { }
+                if (!haveContact)
+                {
+                    var c = ent.GlobalPosition;
+                    if (ER_Math.IsFinite(in c))
+                    {
+                        contact = c;
+                        haveContact = true;
+                        if (ER_Config.DebugLogging)
+                            Log("IMP_CONTACT synth=com");
+                    }
+                }
+            }
+
             // Do NOT early-return here: ent1 (COM) and skel1 don't need contact.
             // Only skip if we have neither an entity nor a skeleton to target.
             if (!haveContact && skel == null && ent == null)
@@ -872,13 +903,10 @@ namespace ExtremeRagdoll
             bool skeletonAvailable = skel != null;
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
             bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
-            bool extEnt2Blocked = false;
             if (!skApis)
             {
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
-                extEnt2Blocked = true; // block only external ent2 on this branch
-                Log("IMPULSE_NOTE: blocking ext ent2 (no sk APIs)");
             }
             bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
             bool dynOk = hasEnt && LooksDynamic(ent);
@@ -1012,26 +1040,13 @@ namespace ExtremeRagdoll
 
             // Prefer contact entity routes (world) after skeleton attempt.
             // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
-            // Wake body if engine still reports non-dynamic before ent3/ent2 routes.
-            if (!dynOk && hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null) && ER_Config.ImmediateImpulseScale > 0f)
+            if (!dynOk && hasEnt)
             {
-                try
-                {
-                    var kick = impW * ER_Config.ImmediateImpulseScale; // e.g. 0.30
-                    if (kick.LengthSquared > ImpulseTinySqThreshold)
-                    {
-                        WakeDynamicBody(ent);
-                        if (_dEnt1 != null) _dEnt1(ent, kick);
-                        else               _ent1.Invoke(null, new object[] { ent, kick });
-                        Log("IMPULSE_USE ext ent1(wake)");
-                    }
-                    // IMPORTANT: refresh dynOk after waking so downstream routes see the updated state
-                    try { dynOk = LooksDynamic(ent); }
-                    catch { }
-                    if (ER_Config.DebugLogging)
-                        Log($"POST_WAKE dynOk={dynOk} ragActive={ragActive}");
-                }
-                catch (Exception ex) { LogFailure("ent1(wake)", ex); MarkUnsafe(1, ex); }
+                WakeDynamicBody(ent);
+                try { dynOk = LooksDynamic(ent); }
+                catch { }
+                if (ER_Config.DebugLogging)
+                    Log($"POST_WAKE dynOk={dynOk} ragActive={ragActive}");
             }
 
             if (hasEnt && haveContact)
@@ -1226,7 +1241,7 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if (haveContact && hasEnt && !_ent2Unsafe && !extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -1358,10 +1373,10 @@ SkipExtEnt2:
             bool ent2Ready = haveContact && hasEnt && !_ent2Unsafe
                               && (
                                    (_dEnt2Inst != null || _ent2Inst != null)
-                                   || (!extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
+                                   || (_dEnt2 != null || _ent2 != null)
                                  );
             Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
-            if (ER_Config.AllowEnt1WorldFallback && hasEnt && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+            if (ER_Config.AllowEnt1WorldFallback && hasEnt && dynOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
                 && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
                 try
@@ -1370,7 +1385,7 @@ SkipExtEnt2:
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared > ImpulseTinySqThreshold)
                     {
-                        WakeDynamicBody(ent);
+                        // Body should already be dynamic here; avoid forcing ent1 on non-dynamic.
                         if (_dEnt1 != null) _dEnt1(ent, impWc);
                         else               _ent1.Invoke(null, new object[] { ent, impWc });
                         Log("IMPULSE_USE ext ent1(world) fallback");
