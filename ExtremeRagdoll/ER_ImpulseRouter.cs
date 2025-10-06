@@ -34,6 +34,9 @@ namespace ExtremeRagdoll
         private static Action<GameEntity, Vec3> _dEnt1Inst;
         private static Action<Skeleton, Vec3, Vec3> _dSk2;
         private static Action<Skeleton, Vec3> _dSk1;
+        private static readonly string[] _skVerbTokens =
+            { "impulse", "force", "velocity", "vel", "accel", "push", "kick" }; // broadened
+        private static float _lastNoSkNote = float.NegativeInfinity;
         private static Action<GameEntity> _dWake;
         private static Func<GameEntity, bool> _isDyn;
         private static float _lastImpulseLog = float.NegativeInfinity; // keep
@@ -61,6 +64,47 @@ namespace ExtremeRagdoll
                 _avCount[i] = 0;
             }
             _lastNoiseLog = float.NegativeInfinity;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsVec3(Type t)
+        {
+            if (t == typeof(Vec3))
+                return true;
+            if (t.IsByRef && t.GetElementType() == typeof(Vec3))
+                return true;
+            return false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsSkType(Type t)
+        {
+            if (t == null)
+                return false;
+            // Accept concrete Skeleton, its inheritors, and ISkeleton-style interfaces/wrappers.
+            if (t == typeof(Skeleton) || t.IsAssignableFrom(typeof(Skeleton)))
+                return true;
+            var n = t.FullName ?? t.Name ?? string.Empty;
+            if (n.IndexOf("ISkeleton", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (t.IsInterface && n.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            return false;
+        }
+
+        private static void SetSkNames()
+        {
+            _sk1Name = FormatSkName(_sk1);
+            _sk2Name = FormatSkName(_sk2);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static string FormatSkName(MethodInfo mi)
+        {
+            if (mi == null)
+                return "<null>";
+            var typeName = mi.DeclaringType?.Name ?? "<null>";
+            return typeName + "." + (mi.Name ?? "<null>");
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -411,8 +455,10 @@ namespace ExtremeRagdoll
                     continue;
                 foreach (var mi in t.GetMethods(flags))
                 {
-                    var name = mi.Name.ToLowerInvariant();
-                    bool looks = name.Contains("impulse") || name.Contains("force");
+                    var name = mi.Name;
+                    bool looks = false;
+                    for (int ti = 0; ti < _skVerbTokens.Length && !looks; ti++)
+                        looks = name.IndexOf(_skVerbTokens[ti], StringComparison.OrdinalIgnoreCase) >= 0;
                     if (!looks)
                         continue;
                     if (_sk2 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3), typeof(Vec3)))
@@ -421,36 +467,83 @@ namespace ExtremeRagdoll
                         _sk1 = mi;
                 }
             }
-            if (_sk1 == null && _sk2 == null)
+            if (_sk1 == null || _sk2 == null)
             {
                 try
                 {
                     var asm = typeof(Skeleton).Assembly;
                     foreach (var t in asm.GetTypes())
                     {
-                        var n = t.FullName ?? string.Empty;
-                        if (string.IsNullOrEmpty(n) || n.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) < 0)
-                            continue;
                         foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
                         {
-                            var ln = mi.Name.ToLowerInvariant();
-                            if (ln.Contains("impulse") || ln.Contains("force"))
-                                Log($"SKEL_CANDIDATE {t.FullName}.{mi}");
+                            var name = mi.Name;
+                            bool looks = false;
+                            for (int ti = 0; ti < _skVerbTokens.Length && !looks; ti++)
+                                looks = name.IndexOf(_skVerbTokens[ti], StringComparison.OrdinalIgnoreCase) >= 0;
+                            if (!looks)
+                                continue;
+                            var ps = mi.GetParameters();
+
+                            if (mi.IsStatic)
+                            {
+                                if (ps.Length == 3 && IsSkType(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && _sk2 == null)
+                                    _sk2 = mi;
+                                else if (ps.Length == 2 && IsSkType(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk1 == null)
+                                    _sk1 = mi;
+                            }
+                            else if (IsSkType(mi.DeclaringType))
+                            {
+                                if (ps.Length == 2 && IsVec3(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk2 == null)
+                                    _sk2 = mi;
+                                else if (ps.Length == 1 && IsVec3(ps[0].ParameterType) && _sk1 == null)
+                                    _sk1 = mi;
+                            }
+                            if (_sk1 != null && _sk2 != null)
+                                break;
+                            if (ER_Config.DebugLogging)
+                            {
+                                try
+                                {
+                                    int pc = ps?.Length ?? -1;
+                                    if (pc >= 1 && pc <= 4)
+                                        ER_Log.Info($"SKEL_CANDIDATE {t.FullName}.{mi} | static={mi.IsStatic} params={pc}");
+                                }
+                                catch { }
+                            }
                         }
+                        if (_sk1 != null && _sk2 != null)
+                            break;
                     }
                 }
                 catch { }
             }
+            SetSkNames();
             try
             {
-                if (_sk2 != null && !_sk2.GetParameters()[1].ParameterType.IsByRef)
-                    _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
+                if (_sk2 != null)
+                {
+                    var ps = _sk2.GetParameters();
+                    if (ps.Length > 1 && !ps[1].ParameterType.IsByRef)
+                    {
+                        var holder = _sk2.IsStatic ? ps[0].ParameterType : _sk2.DeclaringType;
+                        if (holder == typeof(Skeleton))
+                            _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
+                    }
+                }
             }
             catch { _dSk2 = null; }
             try
             {
-                if (_sk1 != null && !_sk1.GetParameters()[0].ParameterType.IsByRef)
-                    _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+                if (_sk1 != null)
+                {
+                    var ps = _sk1.GetParameters();
+                    if (ps.Length > 0 && !ps[0].ParameterType.IsByRef)
+                    {
+                        var holder = _sk1.IsStatic ? ps[0].ParameterType : _sk1.DeclaringType;
+                        if (holder == typeof(Skeleton))
+                            _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+                    }
+                }
             }
             catch { _dSk1 = null; }
 
@@ -510,7 +603,16 @@ namespace ExtremeRagdoll
             }
             if (_sk2 != null && _dSk2 == null)
             {
-                try { _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>)); }
+                try
+                {
+                    var ps = _sk2.GetParameters();
+                    if (ps.Length > 1 && !ps[1].ParameterType.IsByRef)
+                    {
+                        var holder = _sk2.IsStatic ? ps[0].ParameterType : _sk2.DeclaringType;
+                        if (holder == typeof(Skeleton))
+                            _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
+                    }
+                }
                 catch { _dSk2 = null; }
             }
             if (_sk1 == null)
@@ -537,7 +639,16 @@ namespace ExtremeRagdoll
             }
             if (_sk1 != null && _dSk1 == null)
             {
-                try { _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>)); }
+                try
+                {
+                    var ps = _sk1.GetParameters();
+                    if (ps.Length > 0 && !ps[0].ParameterType.IsByRef)
+                    {
+                        var holder = _sk1.IsStatic ? ps[0].ParameterType : _sk1.DeclaringType;
+                        if (holder == typeof(Skeleton))
+                            _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+                    }
+                }
                 catch { _dSk1 = null; }
             }
 
@@ -641,10 +752,10 @@ namespace ExtremeRagdoll
                 catch { }
             }
 
+            SetSkNames();
             if (ER_Config.DebugLogging)
             {
                 _ent3Name = _ent3?.Name; _ent2Name = _ent2?.Name; _ent1Name = _ent1?.Name;
-                _sk2Name = _sk2?.Name; _sk1Name = _sk1?.Name;
                 ER_Log.Info($"IMP_BIND ent3:{_ent3!=null}|{_dEnt3!=null} inst:{_ent3Inst!=null}|{_dEnt3Inst!=null} " +
                             $"ent2:{_ent2!=null}|{_dEnt2!=null} inst:{_ent2Inst!=null}|{_dEnt2Inst!=null} " +
                             $"ent1:{_ent1!=null}|{_dEnt1!=null} inst:{_ent1Inst!=null}|{_dEnt1Inst!=null} " +
@@ -995,8 +1106,14 @@ namespace ExtremeRagdoll
             if (!skApis)
             {
                 allowSkeletonNow = false;
-                Log("IMPULSE_NOTE: no skeleton API bound");
-                Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
+                // throttle noise
+                float now = GetNow();
+                if (now - _lastNoSkNote > 1.5f)
+                {
+                    _lastNoSkNote = now;
+                    Log("IMPULSE_NOTE: no skeleton API bound");
+                    Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
+                }
             }
             bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
             bool aabbOk = hasEnt && AabbSane(ent);
@@ -1100,6 +1217,44 @@ namespace ExtremeRagdoll
                 {
                     LogFailure("skel2(local)", ex);
                     MarkUnsafe(5, ex);
+                }
+            }
+
+            if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
+            {
+                try
+                {
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared >= ImpulseTinySqThreshold)
+                    {
+                        if (_dSk1 != null)
+                        {
+                            _dSk1(skel, impWc);
+                        }
+                        else
+                        {
+                            var pars = _sk1.GetParameters();
+                            if (_sk1.IsStatic)
+                            {
+                                if (pars.Length == 2)
+                                    _sk1.Invoke(null, new object[] { skel, impWc });
+                                else
+                                    _sk1.Invoke(null, new object[] { impWc });
+                            }
+                            else
+                            {
+                                _sk1.Invoke(skel, new object[] { impWc });
+                            }
+                        }
+                        Log("IMPULSE_USE skel1(world)");
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("skel1(world)", ex);
+                    MarkUnsafe(4, ex);
                 }
             }
 
