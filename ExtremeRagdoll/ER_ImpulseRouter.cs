@@ -1126,11 +1126,12 @@ namespace ExtremeRagdoll
                 }
 
                 Volatile.Write(ref _ensured, true);
-            }
+            } // end lock
+        } // end Ensure
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private static void MaybeReEnable()
-            {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void MaybeReEnable()
+        {
                 float now = TimeNow();
                 if (_ent1Unsafe && _disableUntil[1] <= now) _ent1Unsafe = false;
                 if (_ent2Unsafe && _disableUntil[2] <= now) _ent2Unsafe = false;
@@ -2007,8 +2008,7 @@ namespace ExtremeRagdoll
                     Log("IMPULSE_END: no entity/skeleton path succeeded");
                 return false;
             }
-    }
-    }
+        }
 
     internal static class ER_Space
     {
