@@ -903,18 +903,27 @@ namespace ExtremeRagdoll
             bool skeletonAvailable = skel != null;
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
             bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
-            bool extEnt2Blocked = false;
-            if (!skApis)
+            bool extEnt2Blocked = !skApis;
+            bool extEnt2Available = !extEnt2Blocked && (_dEnt2 != null || _ent2 != null);
+            if (extEnt2Blocked)
             {
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
-                extEnt2Blocked = true;
                 Log("IMPULSE_NOTE: blocking ext ent2 (no sk APIs)");
             }
             bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
             bool dynOk = hasEnt && LooksDynamic(ent);
             bool aabbOk = hasEnt && AabbSane(ent);
             bool dynSure = dynOk && aabbOk;
+            if (!dynOk && hasEnt)
+            {
+                WakeDynamicBody(ent);
+                try { dynOk = LooksDynamic(ent); }
+                catch { }
+                if (ER_Config.DebugLogging)
+                    Log($"POST_WAKE dynOk={dynOk} ragActive={ragActive}");
+                dynSure = dynOk && aabbOk;
+            }
             try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
             catch { ragActive = ragActive || skel != null; }
             // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
@@ -1043,15 +1052,6 @@ namespace ExtremeRagdoll
 
             // Prefer contact entity routes (world) after skeleton attempt.
             // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
-            if (!dynOk && hasEnt)
-            {
-                WakeDynamicBody(ent);
-                try { dynOk = LooksDynamic(ent); }
-                catch { }
-                if (ER_Config.DebugLogging)
-                    Log($"POST_WAKE dynOk={dynOk} ragActive={ragActive}");
-            }
-
             if (hasEnt && haveContact)
             {
                 try
@@ -1220,7 +1220,7 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if (haveContact && hasEnt && !_ent2Unsafe && !extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && extEnt2Available)
             {
                 try
                 {
@@ -1352,10 +1352,10 @@ SkipExtEnt2:
             bool ent2Ready = haveContact && hasEnt && !_ent2Unsafe
                               && (
                                    (_dEnt2Inst != null || _ent2Inst != null)
-                                   || (!extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
+                                   || extEnt2Available
                                  );
             Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
-            if (ER_Config.AllowEnt1WorldFallback && hasEnt && dynOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+            if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
                 && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
                 try
@@ -1364,7 +1364,7 @@ SkipExtEnt2:
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared > ImpulseTinySqThreshold)
                     {
-                        // Body should already be dynamic here; avoid forcing ent1 on non-dynamic.
+                        WakeDynamicBody(ent);
                         if (_dEnt1 != null) _dEnt1(ent, impWc);
                         else               _ent1.Invoke(null, new object[] { ent, impWc });
                         Log("IMPULSE_USE ext ent1(world) fallback");
@@ -1393,7 +1393,7 @@ SkipExtEnt2:
                 catch { }
             }
             if (ER_Config.DebugLogging)
-                Log("IMPULSE_END: no route accepted");
+                Log("IMPULSE_END: no entity/skeleton path succeeded");
             return false;
         }
     }
