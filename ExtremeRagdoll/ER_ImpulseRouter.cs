@@ -34,8 +34,6 @@ namespace ExtremeRagdoll
         private static Action<GameEntity, Vec3> _dEnt1Inst;
         private static Action<Skeleton, Vec3, Vec3> _dSk2;
         private static Action<Skeleton, Vec3> _dSk1;
-        private static readonly string[] _skVerbTokens =
-            { "impulse", "force", "velocity", "vel", "accel", "push", "kick" }; // broadened
         private static float _lastNoSkNote = float.NegativeInfinity;
         private static Action<GameEntity> _dWake;
         private static Func<GameEntity, bool> _isDyn;
@@ -43,11 +41,12 @@ namespace ExtremeRagdoll
         private static float _lastNoiseLog = float.NegativeInfinity;
         private static string _ent1Name, _ent2Name, _ent3Name, _sk1Name, _sk2Name; // debug
         private static bool _bindLogged;
+        private static int _skCandLogCount;
         private static float _lastAvLog = float.NegativeInfinity;
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
-        private const float Ent2WarmupSeconds = 0.02f;
+        private const float Ent2WarmupSeconds = 0.0f;
         private sealed class Rag
         {
             public float t;
@@ -396,6 +395,8 @@ namespace ExtremeRagdoll
             if (Volatile.Read(ref _ensured))
                 return;
 
+            _skCandLogCount = 0;
+
             var entityAsm = typeof(GameEntity).Assembly;
             var ext = entityAsm.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
             var m = typeof(GameEntity).GetMethod("IsDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -455,12 +456,6 @@ namespace ExtremeRagdoll
                     continue;
                 foreach (var mi in t.GetMethods(flags))
                 {
-                    var name = mi.Name;
-                    bool looks = false;
-                    for (int ti = 0; ti < _skVerbTokens.Length && !looks; ti++)
-                        looks = name.IndexOf(_skVerbTokens[ti], StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (!looks)
-                        continue;
                     if (_sk2 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3), typeof(Vec3)))
                         _sk2 = mi;
                     if (_sk1 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3)))
@@ -476,14 +471,9 @@ namespace ExtremeRagdoll
                     {
                         foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
                         {
-                            var name = mi.Name;
-                            bool looks = false;
-                            for (int ti = 0; ti < _skVerbTokens.Length && !looks; ti++)
-                                looks = name.IndexOf(_skVerbTokens[ti], StringComparison.OrdinalIgnoreCase) >= 0;
-                            if (!looks)
-                                continue;
                             var ps = mi.GetParameters();
 
+                            // static extension: (ISkeleton/Skeleton, Vec3[, Vec3])
                             if (mi.IsStatic)
                             {
                                 if (ps.Length == 3 && IsSkType(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && _sk2 == null)
@@ -491,6 +481,7 @@ namespace ExtremeRagdoll
                                 else if (ps.Length == 2 && IsSkType(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk1 == null)
                                     _sk1 = mi;
                             }
+                            // instance on Skeleton-like type: (Vec3[, Vec3])
                             else if (IsSkType(mi.DeclaringType))
                             {
                                 if (ps.Length == 2 && IsVec3(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk2 == null)
@@ -500,13 +491,16 @@ namespace ExtremeRagdoll
                             }
                             if (_sk1 != null && _sk2 != null)
                                 break;
-                            if (ER_Config.DebugLogging)
+                            if (ER_Config.DebugLogging && _skCandLogCount < 12)
                             {
                                 try
                                 {
                                     int pc = ps?.Length ?? -1;
                                     if (pc >= 1 && pc <= 4)
+                                    {
                                         ER_Log.Info($"SKEL_CANDIDATE {t.FullName}.{mi} | static={mi.IsStatic} params={pc}");
+                                        _skCandLogCount++;
+                                    }
                                 }
                                 catch { }
                             }
