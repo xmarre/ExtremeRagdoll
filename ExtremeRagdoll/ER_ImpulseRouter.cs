@@ -24,7 +24,7 @@ namespace ExtremeRagdoll
         private const float ContactTinySqThreshold = ER_Math.ContactTinySq;
         private const float ImpulseTinySqThreshold = ER_Math.ImpulseTinySq;
         private static bool _ensured;
-        private static readonly object _ensureLock = new();
+        private static readonly object _ensureLock = new object();
         private static bool _ent1Unsafe, _ent2Unsafe, _ent3Unsafe, _sk1Unsafe, _sk2Unsafe;
         private static MethodInfo _ent3, _ent2, _ent1;
         private static MethodInfo _ent3Inst, _ent2Inst, _ent1Inst;
@@ -58,8 +58,8 @@ namespace ExtremeRagdoll
         }
 
         private static readonly ConditionalWeakTable<Skeleton, Rag> _rag = new ConditionalWeakTable<Skeleton, Rag>();
-        private static readonly ConcurrentDictionary<Type, MethodInfo> _boneCountCache = new();
-        private static readonly ConcurrentDictionary<Type, MethodInfo> _boneNameCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _boneCountCache = new ConcurrentDictionary<Type, MethodInfo>();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _boneNameCache = new ConcurrentDictionary<Type, MethodInfo>();
         private static readonly MethodInfo _boneMethodSentinel = typeof(ER_ImpulseRouter).GetMethod(nameof(CacheSentinel), BindingFlags.Static | BindingFlags.NonPublic)
                                                            ?? throw new InvalidOperationException("Missing cache sentinel");
 
@@ -224,7 +224,7 @@ namespace ExtremeRagdoll
             try
             {
                 var t = s.GetType();
-                var getCount = _boneCountCache.GetOrAdd(t, static type =>
+                var getCount = _boneCountCache.GetOrAdd(t, type =>
                 {
                     try
                     {
@@ -238,7 +238,7 @@ namespace ExtremeRagdoll
                 if (ReferenceEquals(getCount, _boneMethodSentinel))
                     getCount = null;
 
-                var getName = _boneNameCache.GetOrAdd(t, static type =>
+                var getName = _boneNameCache.GetOrAdd(t, type =>
                 {
                     try
                     {
@@ -724,50 +724,50 @@ namespace ExtremeRagdoll
                                         // bone-indexed static (Sk, <Vec3/IntLike> x2/1, <Vec3/IntLike> x2/1)
                                         else if (_dSk2 == null && ps.Length == 4 && NoByRef(ps[1], ps[2], ps[3]))
                                         {
-                                            var m = mi;
+                                            var miLocal = mi;
                                             if (!AcceptsSkeletonArg(ps[0].ParameterType))
                                                 goto AfterStaticWrap;
                                             // Sk, int, V3, V3
                                             if (IsIntLike(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && IsVec3(ps[3].ParameterType))
                                             {
                                                 var boneT = ps[1].ParameterType;
-                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(null, new object[] { s, BoxBoneArg(boneT, DefaultBoneIndex(s)), a, b }); } catch { } };
-                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { miLocal.Invoke(null, new object[] { s, BoxBoneArg(boneT, DefaultBoneIndex(s)), a, b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                             // Sk, V3, int, V3
                                             else if (IsVec3(ps[1].ParameterType) && IsIntLike(ps[2].ParameterType) && IsVec3(ps[3].ParameterType))
                                             {
                                                 var boneT = ps[2].ParameterType;
-                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(null, new object[] { s, a, BoxBoneArg(boneT, DefaultBoneIndex(s)), b }); } catch { } };
-                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { miLocal.Invoke(null, new object[] { s, a, BoxBoneArg(boneT, DefaultBoneIndex(s)), b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                             // Sk, V3, V3, int
                                             else if (IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && IsIntLike(ps[3].ParameterType))
                                             {
                                                 var boneT = ps[3].ParameterType;
-                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(null, new object[] { s, a, b, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
-                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { miLocal.Invoke(null, new object[] { s, a, b, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                         AfterStaticWrap: ;
                                         }
                                         else if (_dSk1 == null && ps.Length == 3 && NoByRef(ps[1], ps[2]))
                                         {
-                                            var m = mi;
+                                            var miLocal = mi;
                                             if (!AcceptsSkeletonArg(ps[0].ParameterType))
                                                 goto AfterStaticWrap1;
                                             // Sk, int, V3
                                             if (IsIntLike(ps[1].ParameterType) && IsVec3(ps[2].ParameterType))
                                             {
                                                 var boneT = ps[1].ParameterType;
-                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(null, new object[] { s, BoxBoneArg(boneT, DefaultBoneIndex(s)), a }); } catch { } };
-                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { miLocal.Invoke(null, new object[] { s, BoxBoneArg(boneT, DefaultBoneIndex(s)), a }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                             // Sk, V3, int
                                             else if (IsVec3(ps[1].ParameterType) && IsIntLike(ps[2].ParameterType))
                                             {
                                                 var boneT = ps[2].ParameterType;
-                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(null, new object[] { s, a, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
-                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { miLocal.Invoke(null, new object[] { s, a, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                         AfterStaticWrap1: ;
                                         }
@@ -782,45 +782,45 @@ namespace ExtremeRagdoll
                                         // bone-indexed instance (int/V3 permutations)
                                         else if (_dSk2 == null && ps.Length == 3 && NoByRef(ps[0], ps[1], ps[2]))
                                         {
-                                            var m = mi;
+                                            var miLocal = mi;
                                             // int, V3, V3
                                             if (IsIntLike(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType))
                                             {
                                                 var boneT = ps[0].ParameterType;
-                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(s, new object[] { BoxBoneArg(boneT, DefaultBoneIndex(s)), a, b }); } catch { } };
-                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { miLocal.Invoke(s, new object[] { BoxBoneArg(boneT, DefaultBoneIndex(s)), a, b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                             // V3, int, V3
                                             else if (IsVec3(ps[0].ParameterType) && IsIntLike(ps[1].ParameterType) && IsVec3(ps[2].ParameterType))
                                             {
                                                 var boneT = ps[1].ParameterType;
-                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(s, new object[] { a, BoxBoneArg(boneT, DefaultBoneIndex(s)), b }); } catch { } };
-                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { miLocal.Invoke(s, new object[] { a, BoxBoneArg(boneT, DefaultBoneIndex(s)), b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                             // V3, V3, int
                                             else if (IsVec3(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsIntLike(ps[2].ParameterType))
                                             {
                                                 var boneT = ps[2].ParameterType;
-                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(s, new object[] { a, b, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
-                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { miLocal.Invoke(s, new object[] { a, b, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                         }
                                         else if (_dSk1 == null && ps.Length == 2 && NoByRef(ps[0], ps[1]))
                                         {
-                                            var m = mi;
+                                            var miLocal = mi;
                                             // int, V3
                                             if (IsIntLike(ps[0].ParameterType) && IsVec3(ps[1].ParameterType))
                                             {
                                                 var boneT = ps[0].ParameterType;
-                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(s, new object[] { BoxBoneArg(boneT, DefaultBoneIndex(s)), a }); } catch { } };
-                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { miLocal.Invoke(s, new object[] { BoxBoneArg(boneT, DefaultBoneIndex(s)), a }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                             // V3, int
                                             else if (IsVec3(ps[0].ParameterType) && IsIntLike(ps[1].ParameterType))
                                             {
                                                 var boneT = ps[1].ParameterType;
-                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(s, new object[] { a, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
-                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { miLocal.Invoke(s, new object[] { a, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (miLocal.DeclaringType?.Name ?? "<null>") + "." + (miLocal.Name ?? "<null>");
                                             }
                                         }
                                     }
