@@ -142,117 +142,127 @@ namespace ExtremeRagdoll
         public float CorpseLaunchRetryJitter { get; set; } = 0.005f;
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyInteger("Corpse Launch Queue Cap", 0, 20,
+        [SettingPropertyInteger("Corpse Launch Retry Attempts", 0, 20,
             Order = 121, RequireRestart = false)]
+        public int CorpseLaunchRetryMaxTries { get; set; } = 4;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Corpse Launch Queue Cap", 0, 20,
+            Order = 122, RequireRestart = false)]
         public int CorpseLaunchQueueCap { get; set; } = 3;
 
         [SettingPropertyGroup("Advanced")]
+        [SettingPropertyInteger("Corpse Retry Queue Limit", 0, 4096,
+            Order = 123, RequireRestart = false)]
+        public int CorpseLaunchRetryQueueLimit { get; set; } = 256;
+
+        [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
-            Order = 122, RequireRestart = false)]
+            Order = 124, RequireRestart = false)]
         public float CorpseImpulseMinimum { get; set; } = 6f;   // guarantees visible nudge
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
-            Order = 123, RequireRestart = false)]
+            Order = 125, RequireRestart = false)]
         public float CorpseImpulseMaximum { get; set; } = 0f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
-            Order = 124, RequireRestart = false)]
+            Order = 126, RequireRestart = false)]
         public float CorpseImpulseHardCap { get; set; } = 17f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Min Up Fraction", 0f, 1.0f, "0.00",
-            Order = 125, RequireRestart = false)]
+            Order = 127, RequireRestart = false)]
         public float CorpseLaunchMinUpFraction { get; set; } = 0.00f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Max Up Fraction", 0f, 1.0f, "0.00",
-            Order = 126, RequireRestart = false)]
+            Order = 128, RequireRestart = false)]
         public float CorpseLaunchMaxUpFraction { get; set; } = 0.08f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Prelaunch Tries", 0, 100,
-            Order = 127, RequireRestart = false)]
+            Order = 129, RequireRestart = false)]
         public int CorpsePrelaunchTries { get; set; } = 12;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Corpse Post-Death Launch Tries", 0, 100,
-            Order = 128, RequireRestart = false)]
+            Order = 130, RequireRestart = false)]
         public int CorpsePostDeathTries { get; set; } = 6;    // raise reliability of post-death nudges
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Corpse Launches Per Tick", 0, 2048,
-            Order = 129, RequireRestart = false)]
+            Order = 131, RequireRestart = false)]
         public int CorpseLaunchesPerTick { get; set; } = 128;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max AoE Agents Per Tick", 0, 4096,
-            Order = 130, RequireRestart = false)]
+            Order = 132, RequireRestart = false)]
         public int AoEAgentsPerTick { get; set; } = 256;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyInteger("Max Kick Impulses Per Tick", 0, 2048,
-            Order = 131, RequireRestart = false)]
+            Order = 133, RequireRestart = false)]
         public int KicksPerTick { get; set; } = 128;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Schedule Window (s)", 0f, 0.5f, "0.00",
-            Order = 132, RequireRestart = false)]
+            Order = 134, RequireRestart = false)]
         public float CorpseLaunchScheduleWindow { get; set; } = 0.08f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Death Blast Memory (s)", 0f, 5f, "0.00",
-            Order = 133, RequireRestart = false)]
+            Order = 135, RequireRestart = false)]
         public float DeathBlastTtl { get; set; } = 0.75f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
-            Order = 134, RequireRestart = false)]
+            Order = 136, RequireRestart = false)]
         // Default to letting skeleton delivery handle most impulses.
         public bool ForceEntityImpulse { get; set; } = false;  // entity routes only when skeleton rejects
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
-            Order = 135, RequireRestart = false)]
+            Order = 137, RequireRestart = false)]
         public bool AllowSkeletonFallbackForInvalidEntity { get; set; } = true;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Respect Engine Blow Flags",
-            Order = 136, RequireRestart = false)]
+            Order = 138, RequireRestart = false)]
         public bool RespectEngineBlowFlags { get; set; } = false;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Max Entity AABB Extent (m)", 1f, 5000f, "0.0",
-            Order = 137, RequireRestart = false)]
+            Order = 139, RequireRestart = false)]
         public float MaxAabbExtent { get; set; } = 1024f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
-            Order = 138, RequireRestart = false)]
+            Order = 140, RequireRestart = false)]
         public float ImmediateImpulseScale { get; set; } = 0.30f; // stronger wake-up nudge to keep ragdolls dynamic
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",
-            Order = 139, RequireRestart = false)]
+            Order = 141, RequireRestart = false)]
         public float ScheduleDirDuplicateSqThreshold { get; set; } = 0.001f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Position Duplicate Threshold", 0f, 1f, "0.000",
-            Order = 140, RequireRestart = false)]
+            Order = 142, RequireRestart = false)]
         public float SchedulePosDuplicateSqThreshold { get; set; } = 0.01f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Magnitude Duplicate Fraction", 0f, 1f, "0.00",
-            Order = 141, RequireRestart = false)]
+            Order = 143, RequireRestart = false)]
         public float ScheduleMagDuplicateFraction { get; set; } = 0.05f;
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyBool("Allow ent3(world) impulses", Order = 142, RequireRestart = false)]
+        [SettingPropertyBool("Allow ent3(world) impulses", Order = 144, RequireRestart = false)]
         public bool AllowEnt3World { get; set; } = true; // enable world-route fallback while skeleton APIs remain unbound
 
         [SettingPropertyGroup("Advanced")]
-        [SettingPropertyBool("Allow ent1(world) fallback when ent2 unavailable", Order = 143, RequireRestart = false)]
+        [SettingPropertyBool("Allow ent1(world) fallback when ent2 unavailable", Order = 145, RequireRestart = false)]
         public bool AllowEnt1WorldFallback { get; set; } = true;
     }
 }

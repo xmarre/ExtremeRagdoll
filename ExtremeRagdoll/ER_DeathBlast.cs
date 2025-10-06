@@ -355,9 +355,46 @@ namespace ExtremeRagdoll
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static bool TryImpulseDirect(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos, int agentId = -1)
         {
-            _ = agentId;
-            if ((ent == null && skel == null) || !ER_Math.IsFinite(in worldImpulse) || !ER_Math.IsFinite(in worldPos)) return false;
-            return ER_ImpulseRouter.TryImpulse(ent, skel, worldImpulse, worldPos);
+            if ((ent == null && skel == null) || !ER_Math.IsFinite(in worldImpulse) || !ER_Math.IsFinite(in worldPos))
+                return false;
+
+            bool ok = ER_ImpulseRouter.TryImpulse(ent, skel, worldImpulse, worldPos);
+            if (!ok && agentId >= 0)
+            {
+                var behavior = Instance;
+                if (behavior != null)
+                {
+                    var mission = behavior.Mission ?? Mission.Current;
+                    var agent = ResolveAgent(agentId, mission);
+                    if (agent != null && !AgentRemoved(agent))
+                    {
+                        GameEntity entCheck = ent;
+                        Skeleton skCheck = skel;
+                        if (entCheck == null)
+                        {
+                            try { entCheck = agent.AgentVisuals?.GetEntity(); } catch { entCheck = null; }
+                        }
+                        if (skCheck == null)
+                        {
+                            try { skCheck = agent.AgentVisuals?.GetSkeleton(); } catch { skCheck = null; }
+                        }
+
+                        bool rag = false;
+                        bool dyn = false;
+                        try { rag = skCheck != null && IsRagdollActiveFast(skCheck); } catch { rag = false; }
+                        try { dyn = entCheck != null && ER_ImpulseRouter.LooksDynamic(entCheck); } catch { dyn = false; }
+
+                        if (rag && !dyn)
+                        {
+                            float now = behavior.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
+                            float delay = ApplyDelayJitter(ER_Config.CorpseLaunchRetryDelay);
+                            behavior.EnqueueCorpseLaunch(agent, worldPos, worldImpulse, 0, now + delay);
+                        }
+                    }
+                }
+            }
+
+            return ok;
         }
 
         private static bool SkeletonAlreadyRagdolled(Skeleton skel)
@@ -424,6 +461,18 @@ namespace ExtremeRagdoll
             }
             return imp;
         }
+
+        private struct CorpseLaunch
+        {
+            public Agent A;
+            public Vec3 Pos;
+            public Vec3 Imp;
+            public int Tries;
+            public float NextAt;
+        }
+        private static int CorpseRetryQueueLimit => Math.Max(0, ER_Config.CorpseLaunchRetryQueueLimit);
+        private readonly Queue<CorpseLaunch> _corpseQueue = new Queue<CorpseLaunch>();
+        private readonly Dictionary<int, CorpseLaunch> _corpseQueuePending = new Dictionary<int, CorpseLaunch>();
 
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
@@ -495,6 +544,25 @@ namespace ExtremeRagdoll
             try { if (a.Mission == null) return true; } catch { return true; }
             try { if (!a.IsActive()) return true; } catch { /* ältere Builds: IsActive fehlt */ }
             return false;
+        }
+
+        private static Agent ResolveAgent(int agentId, Mission mission)
+        {
+            if (agentId < 0 || mission == null)
+                return null;
+            try
+            {
+                foreach (var agent in mission.Agents)
+                {
+                    if (agent != null && agent.Index == agentId)
+                        return agent;
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+            return null;
         }
         private static PropertyInfo _ragdollProp;
         private static bool RagdollActive(Agent a, bool warmed)
@@ -568,6 +636,179 @@ namespace ExtremeRagdoll
             return value < 0f ? 0f : value;
         }
 
+        private void EnqueueCorpseLaunch(Agent agent, in Vec3 pos, in Vec3 impulse, int tries = 0, float nextAt = 0f)
+        {
+            if (agent == null)
+                return;
+            if (!ER_Math.IsFinite(in pos) || !ER_Math.IsFinite(in impulse))
+                return;
+            int queueLimit = CorpseRetryQueueLimit;
+            if (queueLimit > 0 && _corpseQueue.Count >= queueLimit)
+            {
+                if (ER_Config.DebugLogging)
+                    ER_Log.Info($"CORPSE_RETRY_DROP: queue full (limit={queueLimit})");
+                return;
+            }
+
+            int agentId;
+            try { agentId = agent.Index; }
+            catch { agentId = -1; }
+
+            if (float.IsNaN(nextAt) || float.IsInfinity(nextAt))
+                nextAt = 0f;
+
+            var entry = new CorpseLaunch
+            {
+                A      = agent,
+                Pos    = pos,
+                Imp    = impulse,
+                Tries  = tries,
+                NextAt = nextAt
+            };
+
+            bool replacing = false;
+            if (agentId >= 0)
+            {
+                if (_corpseQueuePending.TryGetValue(agentId, out var existing))
+                {
+                    bool replace = false;
+                    if (entry.Tries > existing.Tries)
+                        replace = true;
+                    else if (entry.Tries == existing.Tries && entry.NextAt < existing.NextAt)
+                        replace = true;
+                    else if (entry.Tries < existing.Tries)
+                        return;
+
+                    if (!replace)
+                        return;
+
+                    replacing = true;
+                }
+                else
+                {
+                    int queueCap = ER_Config.CorpseLaunchQueueCap;
+                    if (queueCap > 0)
+                    {
+                        _queuedPerAgent.TryGetValue(agentId, out var queued);
+                        if (queued >= queueCap)
+                            return;
+                    }
+                }
+            }
+
+            if (agentId >= 0)
+            {
+                if (!replacing)
+                    IncQueue(agentId);
+                _corpseQueuePending[agentId] = entry;
+            }
+
+            _corpseQueue.Enqueue(entry);
+        }
+
+        private void TickCorpseQueue(float now)
+        {
+            if (_corpseQueue.Count == 0)
+                return;
+
+            var processedAgents = new HashSet<int>();
+
+            int count = _corpseQueue.Count;
+            for (int i = 0; i < count && _corpseQueue.Count > 0; i++)
+            {
+                var entry = _corpseQueue.Dequeue();
+                var agent = entry.A;
+                int agentId;
+                try { agentId = agent?.Index ?? -1; }
+                catch { agentId = -1; }
+
+                if (agent == null || AgentRemoved(agent))
+                {
+                    if (agentId >= 0)
+                    {
+                        _corpseQueuePending.Remove(agentId);
+                        DecQueue(agentId);
+                    }
+                    continue;
+                }
+
+                if (agentId >= 0 && _corpseQueuePending.TryGetValue(agentId, out var pending) &&
+                    (!ReferenceEquals(pending.A, agent) || pending.Tries != entry.Tries || pending.NextAt != entry.NextAt))
+                {
+                    // Stale entry; a newer schedule replaced this one.
+                    continue;
+                }
+
+                if (agentId >= 0 && processedAgents.Contains(agentId))
+                    continue;
+                if (agentId >= 0)
+                    processedAgents.Add(agentId);
+
+                if (entry.NextAt > now)
+                {
+                    _corpseQueue.Enqueue(entry);
+                    continue;
+                }
+
+                GameEntity ent = null;
+                Skeleton skel = null;
+                try { ent = agent.AgentVisuals?.GetEntity(); } catch { }
+                try { skel = agent.AgentVisuals?.GetSkeleton(); } catch { }
+                if (ent == null && skel == null)
+                {
+                    if (agentId >= 0)
+                    {
+                        entry.NextAt = now + ApplyDelayJitter(ER_Config.CorpseLaunchRetryDelay);
+                        _corpseQueuePending[agentId] = entry;
+                    }
+                    _corpseQueue.Enqueue(entry);
+                    continue;
+                }
+
+                bool ok = false;
+                try
+                {
+                    ok = ER_ImpulseRouter.TryImpulse(ent, skel, entry.Imp, entry.Pos);
+                }
+                catch
+                {
+                    ok = false;
+                }
+
+                if (ok)
+                {
+                    if (agentId >= 0)
+                    {
+                        _corpseQueuePending.Remove(agentId);
+                        DecQueue(agentId);
+                    }
+                    continue;
+                }
+
+                bool rag = false;
+                bool dyn = false;
+                try { rag = IsRagdollActiveFast(skel); } catch { rag = false; }
+                try { dyn = ent != null && ER_ImpulseRouter.LooksDynamic(ent); } catch { dyn = false; }
+
+                int maxRetries = Math.Max(0, ER_Config.CorpseLaunchRetryMaxTries);
+                if (rag && !dyn && entry.Tries < maxRetries)
+                {
+                    float delay = ApplyDelayJitter(ER_Config.CorpseLaunchRetryDelay);
+                    EnqueueCorpseLaunch(agent, entry.Pos, entry.Imp, entry.Tries + 1, now + delay);
+                    if (ER_Config.DebugLogging)
+                        ER_Log.Info($"DEFER corpse: rag={rag} dyn={dyn} tries={entry.Tries + 1}");
+                }
+                else
+                {
+                    if (agentId >= 0)
+                    {
+                        _corpseQueuePending.Remove(agentId);
+                        DecQueue(agentId);
+                    }
+                }
+            }
+        }
+
         public static ER_DeathBlastBehavior Instance;
 
         public override void OnBehaviorInitialize()
@@ -580,6 +821,8 @@ namespace ExtremeRagdoll
             _launchFailLogged.Clear();
             _launchedOnce.Clear();
             _queuedPerAgent.Clear();
+            _corpseQueue.Clear();
+            _corpseQueuePending.Clear();
             ER_Amplify_RegisterBlowPatch.ClearPending();
             ER_ImpulseRouter.ResetUnsafeState();
             _missionRouterResetDone = false;
@@ -596,6 +839,8 @@ namespace ExtremeRagdoll
             _launchFailLogged.Clear();
             _launchedOnce.Clear();
             _queuedPerAgent.Clear();
+            _corpseQueue.Clear();
+            _corpseQueuePending.Clear();
             ER_Amplify_RegisterBlowPatch.ClearPending();
         }
 
@@ -789,6 +1034,7 @@ namespace ExtremeRagdoll
             }
             if (IsPausedFast()) return;
             float now = mission.CurrentTime;
+            TickCorpseQueue(now);
             // Gentle ramp after UI resume
             if (_lastTickT == 0f) _lastTickT = now;
             bool recentlyResumed = (now - _lastTickT) < 1.0f;
