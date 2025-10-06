@@ -75,7 +75,16 @@ namespace ExtremeRagdoll
                 var w = want[i];
                 if (pt == w)
                     continue;
-                if (pt.IsByRef && pt.GetElementType() == w)
+                if (pt.IsByRef)
+                {
+                    var e = pt.GetElementType();
+                    if (e == w)
+                        continue;
+                    if (e != null && e.IsAssignableFrom(w))
+                        continue;
+                    return false;
+                }
+                if (pt.IsAssignableFrom(w))
                     continue;
                 return false;
             }
@@ -392,6 +401,9 @@ namespace ExtremeRagdoll
             {
                 skeletonAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions"),
                 skeletonAsm.GetType("TaleWorlds.Engine.SkeletonExtensions"),
+                skeletonAsm.GetType("TaleWorlds.Engine.ISkeletonExtensions"),
+                skeletonAsm.GetType("TaleWorlds.Engine.ManagedExtensions.SkeletonExtensions"),
+                skeletonAsm.GetType("TaleWorlds.Engine.ManagedExtensions.ISkeletonExtensions"),
                 typeof(Skeleton)
             })
             {
@@ -554,7 +566,27 @@ namespace ExtremeRagdoll
                      ?? skExt.GetMethod("ApplyImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null));
                     if (_sk2 != null && _dSk2 == null)
-                        _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { _sk2.Invoke(null, new object[] { s, a, b }); } catch { } };
+                    {
+                        var sk2ParamCount = _sk2.GetParameters().Length;
+                        _dSk2 = (Skeleton s, Vec3 a, Vec3 b) =>
+                        {
+                            try
+                            {
+                                if (_sk2.IsStatic)
+                                {
+                                    if (sk2ParamCount == 3)
+                                        _sk2.Invoke(null, new object[] { s, a, b });
+                                    else
+                                        _sk2.Invoke(null, new object[] { a, b });
+                                }
+                                else
+                                {
+                                    _sk2.Invoke(s, new object[] { a, b });
+                                }
+                            }
+                            catch { }
+                        };
+                    }
 
                     // (Skeleton, Vec3)
                     _sk1 = _sk1 ?? (
@@ -565,7 +597,27 @@ namespace ExtremeRagdoll
                      ?? skExt.GetMethod("AddImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
                                         new[] { typeof(Skeleton), typeof(Vec3) }, null));
                     if (_sk1 != null && _dSk1 == null)
-                        _dSk1 = (Skeleton s, Vec3 a) => { try { _sk1.Invoke(null, new object[] { s, a }); } catch { } };
+                    {
+                        var sk1ParamCount = _sk1.GetParameters().Length;
+                        _dSk1 = (Skeleton s, Vec3 a) =>
+                        {
+                            try
+                            {
+                                if (_sk1.IsStatic)
+                                {
+                                    if (sk1ParamCount == 2)
+                                        _sk1.Invoke(null, new object[] { s, a });
+                                    else
+                                        _sk1.Invoke(null, new object[] { a });
+                                }
+                                else
+                                {
+                                    _sk1.Invoke(s, new object[] { a });
+                                }
+                            }
+                            catch { }
+                        };
+                    }
                 }
             }
 
@@ -1021,8 +1073,25 @@ namespace ExtremeRagdoll
                     }
                     if (okLocal)
                     {
-                        if (_dSk2 != null) _dSk2(skel, impL, posL);
-                        else               _sk2.Invoke(skel, new object[] { impL, posL });
+                        if (_dSk2 != null)
+                        {
+                            _dSk2(skel, impL, posL);
+                        }
+                        else
+                        {
+                            var pars = _sk2.GetParameters();
+                            if (_sk2.IsStatic)
+                            {
+                                if (pars.Length == 3)
+                                    _sk2.Invoke(null, new object[] { skel, impL, posL });
+                                else
+                                    _sk2.Invoke(null, new object[] { impL, posL });
+                            }
+                            else
+                            {
+                                _sk2.Invoke(skel, new object[] { impL, posL });
+                            }
+                        }
                         Log("IMPULSE_USE skel2(local)");
                         return true;
                     }
