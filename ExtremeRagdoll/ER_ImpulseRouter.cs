@@ -843,32 +843,24 @@ namespace ExtremeRagdoll
                 return false;
             }
 
-            // Recompute outward push after the final contact point is settled.
-            if (ent != null && haveContact)
+            // Explosion-style shaping: ensure strong lateral push away from hit → COM
+            if (ent != null && haveContact && ER_Math.IsFinite(in impW))
             {
                 try
                 {
                     var com = ent.GlobalPosition;
-                    var away = com - contact;
+                    var away = com - contact;    // push COM away from contact
                     away.z = 0f;
                     float a2 = away.LengthSquared;
-                    if (a2 > 1e-9f)
+                    if (a2 > 1e-10f)
                     {
-                        away /= MathF.Sqrt(a2);
-                        float impLen = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
-                        if (impLen > 1e-6f)
-                        {
-                            float side2 = impW.x * impW.x + impW.y * impW.y;
-                            float target = 0.5f * impLen;
-                            if (side2 < target * target)
-                            {
-                                float side = MathF.Sqrt(MathF.Max(side2, 1e-12f));
-                                float extra = target - side;
-                                impW.x += away.x * extra;
-                                impW.y += away.y * extra;
-                                ClampWorldUp(ref impW);
-                            }
-                        }
+                        away *= 1f / MathF.Sqrt(a2);
+                        float mag  = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                        float side = MathF.Sqrt(MathF.Max(impW.x * impW.x + impW.y * impW.y, 1e-12f));
+                        float want = 0.6f * mag;                 // >= 60% of total as sideways
+                        float extra = want - side;
+                        if (extra > 0f) { impW.x += away.x * extra; impW.y += away.y * extra; }
+                        ClampWorldUp(ref impW);                   // respect up cone
                     }
                 }
                 catch { }
@@ -880,10 +872,13 @@ namespace ExtremeRagdoll
             bool skeletonAvailable = skel != null;
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
             bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
+            bool extEnt2Blocked = false;
             if (!skApis)
             {
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
+                extEnt2Blocked = true; // block only external ent2 on this branch
+                Log("IMPULSE_NOTE: blocking ext ent2 (no sk APIs)");
             }
             bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
             bool dynOk = hasEnt && LooksDynamic(ent);
@@ -1017,6 +1012,75 @@ namespace ExtremeRagdoll
 
             // Prefer contact entity routes (world) after skeleton attempt.
             // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
+            // Wake body if engine still reports non-dynamic before ent3/ent2 routes.
+            if (!dynOk && hasEnt && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null) && ER_Config.ImmediateImpulseScale > 0f)
+            {
+                try
+                {
+                    var kick = impW * ER_Config.ImmediateImpulseScale; // e.g. 0.30
+                    if (kick.LengthSquared > ImpulseTinySqThreshold)
+                    {
+                        WakeDynamicBody(ent);
+                        if (_dEnt1 != null) _dEnt1(ent, kick);
+                        else               _ent1.Invoke(null, new object[] { ent, kick });
+                        Log("IMPULSE_USE ext ent1(wake)");
+                    }
+                    // IMPORTANT: refresh dynOk after waking so downstream routes see the updated state
+                    try { dynOk = LooksDynamic(ent); }
+                    catch { }
+                    if (ER_Config.DebugLogging)
+                        Log($"POST_WAKE dynOk={dynOk} ragActive={ragActive}");
+                }
+                catch (Exception ex) { LogFailure("ent1(wake)", ex); MarkUnsafe(1, ex); }
+            }
+
+            if (hasEnt && haveContact)
+            {
+                try
+                {
+                    var com = ent.GlobalPosition;
+                    var lateral = com - contact;
+                    lateral.z = 0f;
+                    float L2 = lateral.x * lateral.x + lateral.y * lateral.y;
+                    if (L2 > 1e-10f)
+                    {
+                        float L = MathF.Sqrt(L2);
+                        var tangent = new Vec3(-lateral.y / L, lateral.x / L, 0f);
+                        float spin = 0.05f * MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                        impW += tangent * spin;
+                        ClampWorldUp(ref impW);
+                    }
+                }
+                catch { }
+            }
+
+            if (ER_Config.DebugLogging)
+                Log($"ENT3_CHECK haveContact={haveContact} dynOk={dynOk} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
+
+            if (!skApis && hasEnt && ER_Config.AllowEnt1WorldFallback
+                && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null)
+                && (_dEnt3Inst == null && _ent3Inst == null) && (_dEnt3 == null && _ent3 == null))
+            {
+                try
+                {
+                    var impWc = impW;
+                    ClampWorldUp(ref impWc);
+                    if (impWc.LengthSquared > ImpulseTinySqThreshold)
+                    {
+                        WakeDynamicBody(ent);
+                        if (_dEnt1 != null) _dEnt1(ent, impWc);
+                        else               _ent1.Invoke(null, new object[] { ent, impWc });
+                        Log("IMPULSE_USE ext ent1(world) short-circuit (no sk APIs, no ent3)");
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogFailure("ext ent1(world) short-circuit", ex);
+                    MarkUnsafe(1, ex);
+                }
+            }
+
             if (ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
@@ -1061,7 +1125,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if ((haveContact && hasEnt && dynOk && !_ent2Unsafe) && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
             {
                 try
                 {
@@ -1162,7 +1226,7 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if ((haveContact && hasEnt && dynOk && !_ent2Unsafe) && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && !extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -1291,10 +1355,14 @@ SkipExtEnt2:
             bool skeletonRouteReady = allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null);
             bool ent3WorldReady = ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe
                                    && ((_dEnt3Inst != null || _ent3Inst != null) || (_dEnt3 != null || _ent3 != null));
-            bool ent2Ready = haveContact && hasEnt && dynOk && !_ent2Unsafe
-                              && ((_dEnt2Inst != null || _ent2Inst != null) || (_dEnt2 != null || _ent2 != null));
-            if (ER_Config.AllowEnt1WorldFallback && hasEnt && dynOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
-                && (_dEnt1 != null || _ent1 != null))
+            bool ent2Ready = haveContact && hasEnt && !_ent2Unsafe
+                              && (
+                                   (_dEnt2Inst != null || _ent2Inst != null)
+                                   || (!extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
+                                 );
+            Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
+            if (ER_Config.AllowEnt1WorldFallback && hasEnt && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+                && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
                 try
                 {
