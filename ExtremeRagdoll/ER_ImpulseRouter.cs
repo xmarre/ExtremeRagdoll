@@ -903,10 +903,13 @@ namespace ExtremeRagdoll
             bool skeletonAvailable = skel != null;
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
             bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
+            bool extEnt2Blocked = false;
             if (!skApis)
             {
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
+                extEnt2Blocked = true;
+                Log("IMPULSE_NOTE: blocking ext ent2 (no sk APIs)");
             }
             bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
             bool dynOk = hasEnt && LooksDynamic(ent);
@@ -1217,7 +1220,7 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2 != null || _ent2 != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && !extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
             {
                 try
                 {
@@ -1349,7 +1352,7 @@ SkipExtEnt2:
             bool ent2Ready = haveContact && hasEnt && !_ent2Unsafe
                               && (
                                    (_dEnt2Inst != null || _ent2Inst != null)
-                                   || (_dEnt2 != null || _ent2 != null)
+                                   || (!extEnt2Blocked && (_dEnt2 != null || _ent2 != null))
                                  );
             Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
             if (ER_Config.AllowEnt1WorldFallback && hasEnt && dynOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
