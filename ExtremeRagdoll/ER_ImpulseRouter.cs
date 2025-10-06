@@ -1072,30 +1072,6 @@ namespace ExtremeRagdoll
             if (ER_Config.DebugLogging)
                 Log($"ENT3_CHECK haveContact={haveContact} dynOk={dynOk} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
 
-            if (!skApis && hasEnt && ER_Config.AllowEnt1WorldFallback
-                && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null)
-                && (_dEnt3Inst == null && _ent3Inst == null) && (_dEnt3 == null && _ent3 == null))
-            {
-                try
-                {
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared > ImpulseTinySqThreshold)
-                    {
-                        WakeDynamicBody(ent);
-                        if (_dEnt1 != null) _dEnt1(ent, impWc);
-                        else               _ent1.Invoke(null, new object[] { ent, impWc });
-                        Log("IMPULSE_USE ext ent1(world) short-circuit (no sk APIs, no ent3)");
-                        return true;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("ext ent1(world) short-circuit", ex);
-                    MarkUnsafe(1, ex);
-                }
-            }
-
             if (ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
