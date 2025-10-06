@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -21,6 +24,7 @@ namespace ExtremeRagdoll
         private const float ContactTinySqThreshold = ER_Math.ContactTinySq;
         private const float ImpulseTinySqThreshold = ER_Math.ImpulseTinySq;
         private static bool _ensured;
+        private static readonly object _ensureLock = new();
         private static bool _ent1Unsafe, _ent2Unsafe, _ent3Unsafe, _sk1Unsafe, _sk2Unsafe;
         private static MethodInfo _ent3, _ent2, _ent1;
         private static MethodInfo _ent3Inst, _ent2Inst, _ent1Inst;
@@ -50,9 +54,14 @@ namespace ExtremeRagdoll
         private sealed class Rag
         {
             public float t;
+            public int root = -1;
         }
 
         private static readonly ConditionalWeakTable<Skeleton, Rag> _rag = new ConditionalWeakTable<Skeleton, Rag>();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _boneCountCache = new();
+        private static readonly ConcurrentDictionary<Type, MethodInfo> _boneNameCache = new();
+        private static readonly MethodInfo _boneMethodSentinel = typeof(ER_ImpulseRouter).GetMethod(nameof(CacheSentinel), BindingFlags.Static | BindingFlags.NonPublic)
+                                                           ?? throw new InvalidOperationException("Missing cache sentinel");
 
         internal static void ResetUnsafeState()
         {
@@ -63,6 +72,9 @@ namespace ExtremeRagdoll
                 _avCount[i] = 0;
             }
             _lastNoiseLog = float.NegativeInfinity;
+            _skCandLogCount = 0;
+            _bindLogged = false;
+            _sk1Name = _sk2Name = _ent1Name = _ent2Name = _ent3Name = null;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -76,25 +88,211 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsSkType(Type t)
+        private static bool IsIntLike(Type t)
         {
             if (t == null)
                 return false;
-            // Accept concrete Skeleton, its inheritors, and ISkeleton-style interfaces/wrappers.
-            if (t == typeof(Skeleton) || t.IsAssignableFrom(typeof(Skeleton)))
-                return true;
-            var n = t.FullName ?? t.Name ?? string.Empty;
-            if (n.IndexOf("ISkeleton", StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-            if (t.IsInterface && n.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-            return false;
+            if (t.IsByRef)
+                return IsIntLike(t.GetElementType());
+            return t == typeof(int) || t == typeof(uint)
+                   || t == typeof(short) || t == typeof(ushort)
+                   || t == typeof(sbyte) || t == typeof(byte);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool AcceptsSkeletonArg(Type t)
+        {
+            if (t == null)
+                return false;
+            if (t.IsByRef)
+                t = t.GetElementType();
+            if (t == null)
+                return false;
+            if (t == typeof(object) || t == typeof(ValueType))
+                return false;
+            return t.IsAssignableFrom(typeof(Skeleton));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool DeclTypeAcceptsSkeleton(Type t)
+        {
+            if (t == null)
+                return false;
+            if (t == typeof(object) || t == typeof(ValueType))
+                return false;
+            return t.IsAssignableFrom(typeof(Skeleton));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool NoByRef(params ParameterInfo[] ps)
+        {
+            for (int i = 0; i < ps.Length; i++)
+            {
+                if (ps[i].ParameterType.IsByRef)
+                    return false;
+            }
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void CacheSentinel()
+        {
+        }
+
+        private static IEnumerable<Assembly> EnumerateAssemblies()
+        {
+            Assembly[] all;
+            try
+            {
+                all = AppDomain.CurrentDomain.GetAssemblies();
+            }
+            catch
+            {
+                yield break;
+            }
+
+            var preferred = new List<Assembly>();
+            var others = new List<Assembly>();
+
+            foreach (var asm in all)
+            {
+                if (asm == null || asm.IsDynamic)
+                    continue;
+
+                var name = asm.FullName ?? asm.GetName().Name ?? string.Empty;
+                if (name.StartsWith("TaleWorlds.", StringComparison.Ordinal) ||
+                    name.IndexOf("ExtremeRagdoll", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    preferred.Add(asm);
+                }
+                else
+                {
+                    others.Add(asm);
+                }
+            }
+
+            foreach (var asm in preferred)
+                yield return asm;
+
+            foreach (var asm in others)
+                yield return asm;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Type TryGetType(Assembly asm, string name)
+        {
+            if (asm == null || string.IsNullOrEmpty(name))
+                return null;
+            try
+            {
+                return asm.GetType(name, false);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static object BoxBoneArg(Type t, int idx)
+        {
+            if (t == typeof(int))
+                return idx;
+            if (t == typeof(uint))
+                return (uint)Math.Max(0, idx);
+            if (t == typeof(short))
+                return (short)(idx < 0 ? 0 : (idx > short.MaxValue ? short.MaxValue : idx));
+            if (t == typeof(ushort))
+                return (ushort)(idx < 0 ? 0 : (idx > ushort.MaxValue ? ushort.MaxValue : idx));
+            if (t == typeof(sbyte))
+                return (sbyte)(idx < 0 ? 0 : (idx > sbyte.MaxValue ? sbyte.MaxValue : idx));
+            if (t == typeof(byte))
+                return (byte)(idx < 0 ? 0 : (idx > byte.MaxValue ? byte.MaxValue : idx));
+            return idx;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int DefaultBoneIndex(Skeleton s)
+        {
+            if (s == null)
+                return 0;
+            if (!_rag.TryGetValue(s, out var rag))
+                rag = _rag.GetValue(s, _ => new Rag());
+            if (rag.root >= 0)
+                return rag.root;
+            rag.root = 0;
+            try
+            {
+                var t = s.GetType();
+                var getCount = _boneCountCache.GetOrAdd(t, static type =>
+                {
+                    try
+                    {
+                        return type.GetMethod("GetBoneCount", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance) ?? _boneMethodSentinel;
+                    }
+                    catch
+                    {
+                        return _boneMethodSentinel;
+                    }
+                });
+                if (ReferenceEquals(getCount, _boneMethodSentinel))
+                    getCount = null;
+
+                var getName = _boneNameCache.GetOrAdd(t, static type =>
+                {
+                    try
+                    {
+                        return type.GetMethod("GetBoneName", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new[] { typeof(int) }, null) ?? _boneMethodSentinel;
+                    }
+                    catch
+                    {
+                        return _boneMethodSentinel;
+                    }
+                });
+                if (ReferenceEquals(getName, _boneMethodSentinel))
+                    getName = null;
+
+                if (getCount != null && getName != null)
+                {
+                    var nObj = getCount.Invoke(s, null);
+                    if (nObj is int n && n > 0)
+                    {
+                        var prefs = new[] { "pelvis", "hips", "root", "spine", "spine_0" };
+                        for (int i = 0; i < n; i++)
+                        {
+                            var nameObj = getName.Invoke(s, new object[] { i });
+                            var name = nameObj as string ?? string.Empty;
+                            foreach (var p in prefs)
+                            {
+                                if (name.IndexOf(p, StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    rag.root = i;
+                                    return rag.root;
+                                }
+                            }
+                        }
+                        rag.root = 0;
+                        return rag.root;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return rag.root;
         }
 
         private static void SetSkNames()
         {
-            _sk1Name = FormatSkName(_sk1);
-            _sk2Name = FormatSkName(_sk2);
+            if (_sk1 != null)
+                _sk1Name = FormatSkName(_sk1);
+            else if (string.IsNullOrEmpty(_sk1Name))
+                _sk1Name = "<null>";
+
+            if (_sk2 != null)
+                _sk2Name = FormatSkName(_sk2);
+            else if (string.IsNullOrEmpty(_sk2Name))
+                _sk2Name = "<null>";
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -116,6 +314,15 @@ namespace ExtremeRagdoll
             {
                 var pt = ps[i].ParameterType;
                 var w = want[i];
+                if (w == typeof(Skeleton))
+                {
+                    if (pt.IsByRef)
+                        return false;
+                    if (pt.ContainsGenericParameters || pt.IsGenericParameter)
+                        return false;
+                    if (!AcceptsSkeletonArg(pt))
+                        return false;
+                }
                 if (pt == w)
                     continue;
                 if (pt.IsByRef)
@@ -254,6 +461,12 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float TimeNow()
+        {
+            return Mission.Current?.CurrentTime ?? unchecked((uint)Environment.TickCount) * 0.001f;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WakeDynamicBody(GameEntity ent)
         {
             if (ent == null)
@@ -327,30 +540,15 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static float Now()
-        {
-            try
-            {
-                var mission = Mission.Current;
-                if (mission != null)
-                    return mission.CurrentTime;
-            }
-            catch { }
-
-            // Versionsunabhängiger Fallback (ungefähr Sekunden seit Start)
-            uint ms = unchecked((uint)Environment.TickCount);
-            return ms * 0.001f;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void MarkRagStart(Skeleton sk)
         {
             if (sk == null)
                 return;
             try
             {
-                _rag.Remove(sk);
-                _rag.Add(sk, new Rag { t = Now() });
+                var rag = _rag.GetValue(sk, _ => new Rag());
+                rag.t = TimeNow();
+                rag.root = -1;
             }
             catch { }
         }
@@ -364,7 +562,7 @@ namespace ExtremeRagdoll
             {
                 if (!_rag.TryGetValue(sk, out var rag) || rag == null)
                     return false;
-                return (Now() - rag.t) >= minSeconds;
+                return (TimeNow() - rag.t) >= minSeconds;
             }
             catch
             {
@@ -381,7 +579,7 @@ namespace ExtremeRagdoll
             {
                 if (_rag.TryGetValue(sk, out var rag) && rag != null)
                 {
-                    float delta = Now() - rag.t;
+                    float delta = TimeNow() - rag.t;
                     return delta >= 0f ? delta : 0f;
                 }
             }
@@ -395,1256 +593,1421 @@ namespace ExtremeRagdoll
             if (Volatile.Read(ref _ensured))
                 return;
 
-            _skCandLogCount = 0;
-
-            var entityAsm = typeof(GameEntity).Assembly;
-            var ext = entityAsm.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
-            var m = typeof(GameEntity).GetMethod("IsDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (m != null)
+            lock (_ensureLock)
             {
-                try { _isDyn = (Func<GameEntity, bool>)m.CreateDelegate(typeof(Func<GameEntity, bool>)); }
-                catch { _isDyn = null; }
-            }
-            if (ext != null)
-            {
-                _ent3 = ext.GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                      new[] { typeof(GameEntity), typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
-                if (_ent3 != null)
-                {
-                    try { _dEnt3 = (Action<GameEntity, Vec3, Vec3, bool>)_ent3.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3, bool>)); }
-                    catch { _dEnt3 = null; }
-                }
+                if (Volatile.Read(ref _ensured))
+                    return;
+                _skCandLogCount = 0;
 
-                _ent2 = ext.GetMethod("ApplyLocalImpulseToDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                      new[] { typeof(GameEntity), typeof(Vec3), typeof(Vec3) }, null);
-                if (_ent2 != null)
+                var entityAsm = typeof(GameEntity).Assembly;
+                var ext = entityAsm.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
+                var m = typeof(GameEntity).GetMethod("IsDynamicBody", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (m != null)
                 {
-                    try { _dEnt2 = (Action<GameEntity, Vec3, Vec3>)_ent2.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3>)); }
-                    catch { _dEnt2 = null; }
+                    try { _isDyn = (Func<GameEntity, bool>)m.CreateDelegate(typeof(Func<GameEntity, bool>)); }
+                    catch { _isDyn = null; }
                 }
-
-                _ent1 = ext.GetMethod("ApplyForceToDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
-                                      new[] { typeof(GameEntity), typeof(Vec3) }, null);
-                if (_ent1 != null)
+                if (ext != null)
                 {
-                    try { _dEnt1 = (Action<GameEntity, Vec3>)_ent1.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
-                    catch { _dEnt1 = null; }
-                }
-
-                _wake = ext.GetMethod("WakeUpDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
-                    null, new[] { typeof(GameEntity) }, null);
-                if (_wake != null)
-                {
-                    try { _dWake = (Action<GameEntity>)_wake.CreateDelegate(typeof(Action<GameEntity>)); }
-                    catch { _dWake = null; }
-                }
-            }
-
-            var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-            var skeletonAsm = typeof(Skeleton).Assembly; // avoid shadowing
-            foreach (var t in new[]
-            {
-                skeletonAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions"),
-                skeletonAsm.GetType("TaleWorlds.Engine.SkeletonExtensions"),
-                skeletonAsm.GetType("TaleWorlds.Engine.ISkeletonExtensions"),
-                skeletonAsm.GetType("TaleWorlds.Engine.ManagedExtensions.SkeletonExtensions"),
-                skeletonAsm.GetType("TaleWorlds.Engine.ManagedExtensions.ISkeletonExtensions"),
-                typeof(Skeleton)
-            })
-            {
-                if (t == null)
-                    continue;
-                foreach (var mi in t.GetMethods(flags))
-                {
-                    if (_sk2 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3), typeof(Vec3)))
-                        _sk2 = mi;
-                    if (_sk1 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3)))
-                        _sk1 = mi;
-                }
-            }
-            if (_sk1 == null || _sk2 == null)
-            {
-                try
-                {
-                    var asm = typeof(Skeleton).Assembly;
-                    foreach (var t in asm.GetTypes())
+                    _ent3 = ext.GetMethod("ApplyImpulseToDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                          new[] { typeof(GameEntity), typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
+                    if (_ent3 != null)
                     {
-                        foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
-                        {
-                            var ps = mi.GetParameters();
+                        try { _dEnt3 = (Action<GameEntity, Vec3, Vec3, bool>)_ent3.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3, bool>)); }
+                        catch { _dEnt3 = null; }
+                    }
 
-                            // static extension: (ISkeleton/Skeleton, Vec3[, Vec3])
-                            if (mi.IsStatic)
-                            {
-                                if (ps.Length == 3 && IsSkType(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && _sk2 == null)
-                                    _sk2 = mi;
-                                else if (ps.Length == 2 && IsSkType(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk1 == null)
-                                    _sk1 = mi;
-                            }
-                            // instance on Skeleton-like type: (Vec3[, Vec3])
-                            else if (IsSkType(mi.DeclaringType))
-                            {
-                                if (ps.Length == 2 && IsVec3(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk2 == null)
-                                    _sk2 = mi;
-                                else if (ps.Length == 1 && IsVec3(ps[0].ParameterType) && _sk1 == null)
-                                    _sk1 = mi;
-                            }
-                            if (_sk1 != null && _sk2 != null)
-                                break;
-                            if (ER_Config.DebugLogging && _skCandLogCount < 12)
-                            {
-                                try
-                                {
-                                    int pc = ps?.Length ?? -1;
-                                    if (pc >= 1 && pc <= 4)
-                                    {
-                                        ER_Log.Info($"SKEL_CANDIDATE {t.FullName}.{mi} | static={mi.IsStatic} params={pc}");
-                                        _skCandLogCount++;
-                                    }
-                                }
-                                catch { }
-                            }
-                        }
+                    _ent2 = ext.GetMethod("ApplyLocalImpulseToDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                          new[] { typeof(GameEntity), typeof(Vec3), typeof(Vec3) }, null);
+                    if (_ent2 != null)
+                    {
+                        try { _dEnt2 = (Action<GameEntity, Vec3, Vec3>)_ent2.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3>)); }
+                        catch { _dEnt2 = null; }
+                    }
+
+                    _ent1 = ext.GetMethod("ApplyForceToDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null,
+                                          new[] { typeof(GameEntity), typeof(Vec3) }, null);
+                    if (_ent1 != null)
+                    {
+                        try { _dEnt1 = (Action<GameEntity, Vec3>)_ent1.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
+                        catch { _dEnt1 = null; }
+                    }
+
+                    _wake = ext.GetMethod("WakeUpDynamicBody", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                        null, new[] { typeof(GameEntity) }, null);
+                    if (_wake != null)
+                    {
+                        try { _dWake = (Action<GameEntity>)_wake.CreateDelegate(typeof(Action<GameEntity>)); }
+                        catch { _dWake = null; }
+                    }
+                }
+
+                var flags = BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var skeletonAsm = typeof(Skeleton).Assembly; // avoid shadowing
+                var assemblies = EnumerateAssemblies().ToArray();
+                var holderTypes = new List<Type>();
+                var seenHolders = new HashSet<Type>();
+
+                void AddHolder(Type type)
+                {
+                    if (type != null && seenHolders.Add(type))
+                        holderTypes.Add(type);
+                }
+
+                AddHolder(TryGetType(skeletonAsm, "TaleWorlds.Engine.SkeletonPhysicsExtensions"));
+                AddHolder(TryGetType(skeletonAsm, "TaleWorlds.Engine.SkeletonExtensions"));
+                AddHolder(TryGetType(skeletonAsm, "TaleWorlds.Engine.ISkeletonExtensions"));
+
+                foreach (var asm in assemblies)
+                {
+                    AddHolder(TryGetType(asm, "TaleWorlds.Engine.ManagedExtensions.SkeletonExtensions"));
+                    AddHolder(TryGetType(asm, "TaleWorlds.Engine.ManagedExtensions.ISkeletonExtensions"));
+                }
+
+                AddHolder(typeof(Skeleton));
+
+                foreach (var holder in holderTypes)
+                {
+                    MethodInfo[] methods;
+                    try { methods = holder.GetMethods(flags); }
+                    catch { continue; }
+
+                    foreach (var mi in methods)
+                    {
+                        if (mi == null || mi.ContainsGenericParameters)
+                            continue;
+                        if (_sk2 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3), typeof(Vec3)))
+                            _sk2 = mi;
+                        if (_sk1 == null && SigMatches(mi, typeof(Skeleton), typeof(Vec3)))
+                            _sk1 = mi;
                         if (_sk1 != null && _sk2 != null)
                             break;
                     }
+
+                    if (_sk1 != null && _sk2 != null)
+                        break;
                 }
-                catch { }
-            }
-            SetSkNames();
-            try
-            {
-                if (_sk2 != null)
+                if ((_sk1 == null || _sk2 == null) && (_dSk1 == null || _dSk2 == null))
                 {
-                    var ps = _sk2.GetParameters();
-                    if (ps.Length > 1 && !ps[1].ParameterType.IsByRef)
+                    try
                     {
-                        var holder = _sk2.IsStatic ? ps[0].ParameterType : _sk2.DeclaringType;
-                        if (holder == typeof(Skeleton))
-                            _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
-                    }
-                }
-            }
-            catch { _dSk2 = null; }
-            try
-            {
-                if (_sk1 != null)
-                {
-                    var ps = _sk1.GetParameters();
-                    if (ps.Length > 0 && !ps[0].ParameterType.IsByRef)
-                    {
-                        var holder = _sk1.IsStatic ? ps[0].ParameterType : _sk1.DeclaringType;
-                        if (holder == typeof(Skeleton))
-                            _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
-                    }
-                }
-            }
-            catch { _dSk1 = null; }
-
-            var ge = typeof(GameEntity);
-
-            _ent3Inst = ge.GetMethod("ApplyImpulseToDynamicBody",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
-            if (_ent3Inst != null)
-            {
-                try { _dEnt3Inst = (Action<GameEntity, Vec3, Vec3, bool>)_ent3Inst.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3, bool>)); }
-                catch { _dEnt3Inst = null; }
-            }
-
-            _ent2Inst = ge.GetMethod("ApplyLocalImpulseToDynamicBody",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null, new[] { typeof(Vec3), typeof(Vec3) }, null);
-            if (_ent2Inst != null)
-            {
-                try { _dEnt2Inst = (Action<GameEntity, Vec3, Vec3>)_ent2Inst.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3>)); }
-                catch { _dEnt2Inst = null; }
-            }
-
-            _ent1Inst = ge.GetMethod("ApplyForceToDynamicBody",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null, new[] { typeof(Vec3) }, null);
-            if (_ent1Inst != null)
-            {
-                try { _dEnt1Inst = (Action<GameEntity, Vec3>)_ent1Inst.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
-                catch { _dEnt1Inst = null; }
-            }
-
-            var sk = typeof(Skeleton);
-            if (_sk2 == null)
-            {
-                _sk2 = sk.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                     ?? sk.GetMethod("AddForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                     ?? sk.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                     ?? sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
-                     ?? sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null);
-            }
-            if (_sk2 == null)
-            {
-                foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-                {
-                    var ps = mi.GetParameters();
-                    if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
-                    {
-                        var n = mi.Name.ToLowerInvariant();
-                        if ((n.Contains("force") || n.Contains("impulse")) && (n.Contains("bone") || n.Contains("ragdoll")))
+                        foreach (var asm in assemblies)
                         {
-                            _sk2 = mi;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (_sk2 != null && _dSk2 == null)
-            {
-                try
-                {
-                    var ps = _sk2.GetParameters();
-                    if (ps.Length > 1 && !ps[1].ParameterType.IsByRef)
-                    {
-                        var holder = _sk2.IsStatic ? ps[0].ParameterType : _sk2.DeclaringType;
-                        if (holder == typeof(Skeleton))
-                            _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
-                    }
-                }
-                catch { _dSk2 = null; }
-            }
-            if (_sk1 == null)
-            {
-                _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
-                     ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
-                     ?? sk.GetMethod("AddImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null);
-            }
-            if (_sk1 == null)
-            {
-                foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-                {
-                    var ps = mi.GetParameters();
-                    if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
-                    {
-                        var n = mi.Name.ToLowerInvariant();
-                        if ((n.Contains("force") || n.Contains("impulse")) && (n.Contains("bone") || n.Contains("ragdoll")))
-                        {
-                            _sk1 = mi;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (_sk1 != null && _dSk1 == null)
-            {
-                try
-                {
-                    var ps = _sk1.GetParameters();
-                    if (ps.Length > 0 && !ps[0].ParameterType.IsByRef)
-                    {
-                        var holder = _sk1.IsStatic ? ps[0].ParameterType : _sk1.DeclaringType;
-                        if (holder == typeof(Skeleton))
-                            _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
-                    }
-                }
-                catch { _dSk1 = null; }
-            }
+                            if ((_sk1 != null && _sk2 != null) || (_dSk1 != null && _dSk2 != null))
+                                break;
 
-            // --- static Skeleton extension fallbacks ---
-            if (_sk2 == null || _dSk2 == null || _sk1 == null || _dSk1 == null)
-            {
-                var skAsm = typeof(Skeleton).Assembly;
-                var skExt =
-                    skAsm.GetType("TaleWorlds.Engine.SkeletonExtensions") ??
-                    skAsm.GetType("TaleWorlds.Engine.Extensions.SkeletonExtensions") ??
-                    skAsm.GetType("TaleWorlds.Engine.ManagedExtensions.SkeletonExtensions") ??
-                    skAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions");
+                            Type[] types;
+                            try { types = asm.GetTypes(); }
+                            catch (ReflectionTypeLoadException ex) { types = ex.Types?.Where(x => x != null).ToArray() ?? Array.Empty<Type>(); }
+                            catch { continue; }
 
-                if (skExt != null)
-                {
-                    // (Skeleton, Vec3, Vec3)
-                    _sk2 = _sk2 ?? (
-                        skExt.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddForceToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("ApplyImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null));
-                    if (_sk2 != null && _dSk2 == null)
-                    {
-                        var sk2ParamCount = _sk2.GetParameters().Length;
-                        _dSk2 = (Skeleton s, Vec3 a, Vec3 b) =>
-                        {
-                            try
+                            foreach (var t in types)
                             {
-                                if (_sk2.IsStatic)
+                                MethodInfo[] methods;
+                                try { methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance); }
+                                catch { continue; }
+
+                                foreach (var mi in methods)
                                 {
-                                    if (sk2ParamCount == 3)
-                                        _sk2.Invoke(null, new object[] { s, a, b });
+                                    if (mi == null || mi.ContainsGenericParameters)
+                                        continue;
+
+                                    var ps = mi.GetParameters();
+
+                                    // static extension we can actually call with a Skeleton instance
+                                    if (mi.IsStatic && ps.Length >= 2 && AcceptsSkeletonArg(ps[0].ParameterType))
+                                    {
+                                        if (ps.Length == 3 && IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && _sk2 == null)
+                                            _sk2 = mi;
+                                        else if (ps.Length == 2 && IsVec3(ps[1].ParameterType) && _sk1 == null)
+                                            _sk1 = mi;
+                                        // bone-indexed static (Sk, <Vec3/IntLike> x2/1, <Vec3/IntLike> x2/1)
+                                        else if (_dSk2 == null && ps.Length == 4 && NoByRef(ps[1], ps[2], ps[3]))
+                                        {
+                                            var m = mi;
+                                            if (!AcceptsSkeletonArg(ps[0].ParameterType))
+                                                goto AfterStaticWrap;
+                                            // Sk, int, V3, V3
+                                            if (IsIntLike(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && IsVec3(ps[3].ParameterType))
+                                            {
+                                                var boneT = ps[1].ParameterType;
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(null, new object[] { s, BoxBoneArg(boneT, DefaultBoneIndex(s)), a, b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                            // Sk, V3, int, V3
+                                            else if (IsVec3(ps[1].ParameterType) && IsIntLike(ps[2].ParameterType) && IsVec3(ps[3].ParameterType))
+                                            {
+                                                var boneT = ps[2].ParameterType;
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(null, new object[] { s, a, BoxBoneArg(boneT, DefaultBoneIndex(s)), b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                            // Sk, V3, V3, int
+                                            else if (IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType) && IsIntLike(ps[3].ParameterType))
+                                            {
+                                                var boneT = ps[3].ParameterType;
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(null, new object[] { s, a, b, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                        AfterStaticWrap: ;
+                                        }
+                                        else if (_dSk1 == null && ps.Length == 3 && NoByRef(ps[1], ps[2]))
+                                        {
+                                            var m = mi;
+                                            if (!AcceptsSkeletonArg(ps[0].ParameterType))
+                                                goto AfterStaticWrap1;
+                                            // Sk, int, V3
+                                            if (IsIntLike(ps[1].ParameterType) && IsVec3(ps[2].ParameterType))
+                                            {
+                                                var boneT = ps[1].ParameterType;
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(null, new object[] { s, BoxBoneArg(boneT, DefaultBoneIndex(s)), a }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                            // Sk, V3, int
+                                            else if (IsVec3(ps[1].ParameterType) && IsIntLike(ps[2].ParameterType))
+                                            {
+                                                var boneT = ps[2].ParameterType;
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(null, new object[] { s, a, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                        AfterStaticWrap1: ;
+                                        }
+                                    }
+                                    // instance we can call on a Skeleton object
+                                    else if (!mi.IsStatic && DeclTypeAcceptsSkeleton(mi.DeclaringType))
+                                    {
+                                        if (ps.Length == 2 && IsVec3(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && _sk2 == null)
+                                            _sk2 = mi;
+                                        else if (ps.Length == 1 && IsVec3(ps[0].ParameterType) && _sk1 == null)
+                                            _sk1 = mi;
+                                        // bone-indexed instance (int/V3 permutations)
+                                        else if (_dSk2 == null && ps.Length == 3 && NoByRef(ps[0], ps[1], ps[2]))
+                                        {
+                                            var m = mi;
+                                            // int, V3, V3
+                                            if (IsIntLike(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsVec3(ps[2].ParameterType))
+                                            {
+                                                var boneT = ps[0].ParameterType;
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(s, new object[] { BoxBoneArg(boneT, DefaultBoneIndex(s)), a, b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                            // V3, int, V3
+                                            else if (IsVec3(ps[0].ParameterType) && IsIntLike(ps[1].ParameterType) && IsVec3(ps[2].ParameterType))
+                                            {
+                                                var boneT = ps[1].ParameterType;
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(s, new object[] { a, BoxBoneArg(boneT, DefaultBoneIndex(s)), b }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                            // V3, V3, int
+                                            else if (IsVec3(ps[0].ParameterType) && IsVec3(ps[1].ParameterType) && IsIntLike(ps[2].ParameterType))
+                                            {
+                                                var boneT = ps[2].ParameterType;
+                                                _dSk2 = (Skeleton s, Vec3 a, Vec3 b) => { try { m.Invoke(s, new object[] { a, b, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk2Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                        }
+                                        else if (_dSk1 == null && ps.Length == 2 && NoByRef(ps[0], ps[1]))
+                                        {
+                                            var m = mi;
+                                            // int, V3
+                                            if (IsIntLike(ps[0].ParameterType) && IsVec3(ps[1].ParameterType))
+                                            {
+                                                var boneT = ps[0].ParameterType;
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(s, new object[] { BoxBoneArg(boneT, DefaultBoneIndex(s)), a }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                            // V3, int
+                                            else if (IsVec3(ps[0].ParameterType) && IsIntLike(ps[1].ParameterType))
+                                            {
+                                                var boneT = ps[1].ParameterType;
+                                                _dSk1 = (Skeleton s, Vec3 a) => { try { m.Invoke(s, new object[] { a, BoxBoneArg(boneT, DefaultBoneIndex(s)) }); } catch { } };
+                                                _sk1Name = "[wrapped] " + (m.DeclaringType?.Name ?? "<null>") + "." + (m.Name ?? "<null>");
+                                            }
+                                        }
+                                    }
+
+                                    if ((_sk1 != null && _sk2 != null) || (_dSk1 != null && _dSk2 != null))
+                                        break;
+
+                                    if (ER_Config.DebugLogging && _skCandLogCount < 12)
+                                    {
+                                        try
+                                        {
+                                            int pc = ps?.Length ?? -1;
+                                            if (pc >= 1 && pc <= 4)
+                                            {
+                                                Type holder = mi.IsStatic ? (ps != null && ps.Length > 0 ? ps[0].ParameterType : null) : mi.DeclaringType;
+                                                if (holder != null && holder.IsByRef)
+                                                    holder = holder.GetElementType();
+                                                if (holder != typeof(object) && holder != typeof(ValueType))
+                                                {
+                                                    ER_Log.Info($"SKEL_CANDIDATE {t.FullName}.{mi} | static={mi.IsStatic} params={pc}");
+                                                    _skCandLogCount++;
+                                                }
+                                            }
+                                        }
+                                        catch { }
+                                    }
+
+                                    if ((_sk1 != null && _sk2 != null) || (_dSk1 != null && _dSk2 != null))
+                                        break;
+                                }
+
+                                if ((_sk1 != null && _sk2 != null) || (_dSk1 != null && _dSk2 != null))
+                                    break;
+                            }
+
+                            if ((_sk1 != null && _sk2 != null) || (_dSk1 != null && _dSk2 != null))
+                                break;
+                        }
+                    }
+                    catch { }
+                }
+                SetSkNames(); // also have names for wrapped delegates
+                try
+                {
+                    if (_sk2 != null)
+                    {
+                        var ps = _sk2.GetParameters();
+                        if (ps.Length > 1 && !ps[1].ParameterType.IsByRef)
+                        {
+                            var holder = _sk2.IsStatic ? ps[0].ParameterType : _sk2.DeclaringType;
+                            if (holder == typeof(Skeleton))
+                            {
+                                var d = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
+                                if (d != null)
+                                {
+                                    _dSk2 = d;
+                                    _sk2Name = FormatSkName(_sk2);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { /* keep any wrapped _dSk2 */ }
+                try
+                {
+                    if (_sk1 != null)
+                    {
+                        var ps = _sk1.GetParameters();
+                        if (ps.Length > 0 && !ps[0].ParameterType.IsByRef)
+                        {
+                            var holder = _sk1.IsStatic ? ps[0].ParameterType : _sk1.DeclaringType;
+                            if (holder == typeof(Skeleton))
+                            {
+                                var d = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+                                if (d != null)
+                                {
+                                    _dSk1 = d;
+                                    _sk1Name = FormatSkName(_sk1);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { /* keep any wrapped _dSk1 */ }
+
+                if (ER_Config.DebugLogging)
+                    ER_Log.Info($"SK_BIND sk2={_sk2Name} dSk2={_dSk2 != null}  sk1={_sk1Name} dSk1={_dSk1 != null}");
+
+                var ge = typeof(GameEntity);
+
+                _ent3Inst = ge.GetMethod("ApplyImpulseToDynamicBody",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(Vec3), typeof(Vec3), typeof(bool) }, null);
+                if (_ent3Inst != null)
+                {
+                    try { _dEnt3Inst = (Action<GameEntity, Vec3, Vec3, bool>)_ent3Inst.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3, bool>)); }
+                    catch { _dEnt3Inst = null; }
+                }
+
+                _ent2Inst = ge.GetMethod("ApplyLocalImpulseToDynamicBody",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(Vec3), typeof(Vec3) }, null);
+                if (_ent2Inst != null)
+                {
+                    try { _dEnt2Inst = (Action<GameEntity, Vec3, Vec3>)_ent2Inst.CreateDelegate(typeof(Action<GameEntity, Vec3, Vec3>)); }
+                    catch { _dEnt2Inst = null; }
+                }
+
+                _ent1Inst = ge.GetMethod("ApplyForceToDynamicBody",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(Vec3) }, null);
+                if (_ent1Inst != null)
+                {
+                    try { _dEnt1Inst = (Action<GameEntity, Vec3>)_ent1Inst.CreateDelegate(typeof(Action<GameEntity, Vec3>)); }
+                    catch { _dEnt1Inst = null; }
+                }
+
+                var sk = typeof(Skeleton);
+                if (_sk2 == null)
+                {
+                    _sk2 = sk.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                         ?? sk.GetMethod("AddForceToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                         ?? sk.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                         ?? sk.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null)
+                         ?? sk.GetMethod("ApplyImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3), typeof(Vec3) }, null);
+                }
+                if (_sk2 == null)
+                {
+                    foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        var ps = mi.GetParameters();
+                        if (ps.Length == 2 && ps[0].ParameterType == typeof(Vec3) && ps[1].ParameterType == typeof(Vec3))
+                        {
+                            var n = mi.Name.ToLowerInvariant();
+                            if ((n.Contains("force") || n.Contains("impulse")) && (n.Contains("bone") || n.Contains("ragdoll")))
+                            {
+                                _sk2 = mi;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (_sk2 != null && _dSk2 == null)
+                {
+                    try
+                    {
+                        var ps = _sk2.GetParameters();
+                        if (ps.Length > 1 && !ps[1].ParameterType.IsByRef)
+                        {
+                            var holder = _sk2.IsStatic ? ps[0].ParameterType : _sk2.DeclaringType;
+                            if (holder == typeof(Skeleton))
+                                _dSk2 = (Action<Skeleton, Vec3, Vec3>)_sk2.CreateDelegate(typeof(Action<Skeleton, Vec3, Vec3>));
+                        }
+                    }
+                catch { /* keep any wrapped _dSk2 */ }
+                }
+                if (_sk1 == null)
+                {
+                    _sk1 = sk.GetMethod("ApplyForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
+                         ?? sk.GetMethod("AddForceToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null)
+                         ?? sk.GetMethod("AddImpulseToBone", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Vec3) }, null);
+                }
+                if (_sk1 == null)
+                {
+                    foreach (var mi in sk.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        var ps = mi.GetParameters();
+                        if (ps.Length == 1 && ps[0].ParameterType == typeof(Vec3))
+                        {
+                            var n = mi.Name.ToLowerInvariant();
+                            if ((n.Contains("force") || n.Contains("impulse")) && (n.Contains("bone") || n.Contains("ragdoll")))
+                            {
+                                _sk1 = mi;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (_sk1 != null && _dSk1 == null)
+                {
+                    try
+                    {
+                        var ps = _sk1.GetParameters();
+                        if (ps.Length > 0 && !ps[0].ParameterType.IsByRef)
+                        {
+                            var holder = _sk1.IsStatic ? ps[0].ParameterType : _sk1.DeclaringType;
+                            if (holder == typeof(Skeleton))
+                                _dSk1 = (Action<Skeleton, Vec3>)_sk1.CreateDelegate(typeof(Action<Skeleton, Vec3>));
+                        }
+                    }
+                catch { /* keep any wrapped _dSk1 */ }
+                }
+
+                // --- static Skeleton extension fallbacks ---
+                if (_sk2 == null || _dSk2 == null || _sk1 == null || _dSk1 == null)
+                {
+                    var skAsm = typeof(Skeleton).Assembly;
+                    var skExt =
+                        skAsm.GetType("TaleWorlds.Engine.SkeletonExtensions") ??
+                        skAsm.GetType("TaleWorlds.Engine.Extensions.SkeletonExtensions") ??
+                        skAsm.GetType("TaleWorlds.Engine.ManagedExtensions.SkeletonExtensions") ??
+                        skAsm.GetType("TaleWorlds.Engine.SkeletonPhysicsExtensions");
+
+                    if (skExt != null)
+                    {
+                        // (Skeleton, Vec3, Vec3)
+                        _sk2 = _sk2 ?? (
+                            skExt.GetMethod("ApplyForceToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                         ?? skExt.GetMethod("AddForceToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                         ?? skExt.GetMethod("AddImpulseToBoneAtPos", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                         ?? skExt.GetMethod("ApplyLocalImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null)
+                         ?? skExt.GetMethod("ApplyImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3), typeof(Vec3) }, null));
+                        if (_sk2 != null && _dSk2 == null)
+                        {
+                            var sk2ParamCount = _sk2.GetParameters().Length;
+                            _dSk2 = (Skeleton s, Vec3 a, Vec3 b) =>
+                            {
+                                try
+                                {
+                                    if (_sk2.IsStatic)
+                                    {
+                                        if (sk2ParamCount == 3)
+                                            _sk2.Invoke(null, new object[] { s, a, b });
+                                        else
+                                            _sk2.Invoke(null, new object[] { a, b });
+                                    }
                                     else
-                                        _sk2.Invoke(null, new object[] { a, b });
+                                    {
+                                        _sk2.Invoke(s, new object[] { a, b });
+                                    }
                                 }
-                                else
-                                {
-                                    _sk2.Invoke(s, new object[] { a, b });
-                                }
-                            }
-                            catch { }
-                        };
-                    }
+                                catch { }
+                            };
+                        }
 
-                    // (Skeleton, Vec3)
-                    _sk1 = _sk1 ?? (
-                        skExt.GetMethod("ApplyForceToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddForceToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3) }, null)
-                     ?? skExt.GetMethod("AddImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
-                                        new[] { typeof(Skeleton), typeof(Vec3) }, null));
-                    if (_sk1 != null && _dSk1 == null)
-                    {
-                        var sk1ParamCount = _sk1.GetParameters().Length;
-                        _dSk1 = (Skeleton s, Vec3 a) =>
+                        // (Skeleton, Vec3)
+                        _sk1 = _sk1 ?? (
+                            skExt.GetMethod("ApplyForceToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3) }, null)
+                         ?? skExt.GetMethod("AddForceToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3) }, null)
+                         ?? skExt.GetMethod("AddImpulseToBone", BindingFlags.Static|BindingFlags.Public|BindingFlags.NonPublic, null,
+                                            new[] { typeof(Skeleton), typeof(Vec3) }, null));
+                        if (_sk1 != null && _dSk1 == null)
                         {
-                            try
+                            var sk1ParamCount = _sk1.GetParameters().Length;
+                            _dSk1 = (Skeleton s, Vec3 a) =>
                             {
-                                if (_sk1.IsStatic)
+                                try
                                 {
-                                    if (sk1ParamCount == 2)
-                                        _sk1.Invoke(null, new object[] { s, a });
+                                    if (_sk1.IsStatic)
+                                    {
+                                        if (sk1ParamCount == 2)
+                                            _sk1.Invoke(null, new object[] { s, a });
+                                        else
+                                            _sk1.Invoke(null, new object[] { a });
+                                    }
                                     else
-                                        _sk1.Invoke(null, new object[] { a });
+                                    {
+                                        _sk1.Invoke(s, new object[] { a });
+                                    }
                                 }
-                                else
-                                {
-                                    _sk1.Invoke(s, new object[] { a });
-                                }
-                            }
-                            catch { }
-                        };
-                    }
-                }
-            }
-
-            if ((_dSk1 == null && _sk1 == null) || (_dSk2 == null && _sk2 == null))
-            {
-                try
-                {
-                    foreach (var t in entityAsm.GetTypes())
-                    {
-                        var name = t.FullName;
-                        if (name != null && name.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            foreach (var mInfo in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
-                            {
-                                if (mInfo.Name.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0)
-                                    ER_Log.Info($"SKEL_API_CAND {name}.{mInfo}");
-                            }
+                                catch { }
+                            };
                         }
                     }
                 }
-                catch { }
-            }
 
-            SetSkNames();
-            if (ER_Config.DebugLogging)
-            {
-                _ent3Name = _ent3?.Name; _ent2Name = _ent2?.Name; _ent1Name = _ent1?.Name;
-                ER_Log.Info($"IMP_BIND ent3:{_ent3!=null}|{_dEnt3!=null} inst:{_ent3Inst!=null}|{_dEnt3Inst!=null} " +
-                            $"ent2:{_ent2!=null}|{_dEnt2!=null} inst:{_ent2Inst!=null}|{_dEnt2Inst!=null} " +
-                            $"ent1:{_ent1!=null}|{_dEnt1!=null} inst:{_ent1Inst!=null}|{_dEnt1Inst!=null} " +
-                            $"sk2:{_sk2!=null}|{_dSk2!=null} sk1:{_sk1!=null}|{_dSk1!=null} isDyn:{_isDyn!=null}");
-                ER_Log.Info($"IMP_BIND_NAMES ent3:{_ent3Name} ent2:{_ent2Name} ent1:{_ent1Name} sk2:{_sk2Name} sk1:{_sk1Name}");
-            }
-
-            Volatile.Write(ref _ensured, true);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void MaybeReEnable()
-        {
-            float now = GetNow();
-            if (_ent1Unsafe && _disableUntil[1] <= now) _ent1Unsafe = false;
-            if (_ent2Unsafe && _disableUntil[2] <= now) _ent2Unsafe = false;
-            if (_ent3Unsafe && _disableUntil[3] <= now) _ent3Unsafe = false;
-            if (_sk1Unsafe && _disableUntil[4] <= now) _sk1Unsafe = false;
-            if (_sk2Unsafe && _disableUntil[5] <= now) _sk2Unsafe = false;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void MarkUnsafe(int which, Exception ex)
-        {
-            if (ex is TargetInvocationException tie && tie.InnerException != null)
-                ex = tie.InnerException;
-
-            if (!(ex is AccessViolationException))
-                return;
-
-            float now = GetNow();
-            if (which < 1 || which > 5)
-                return;
-            if (_disableUntil[which] > now)
-                return;
-
-            int count = ++_avCount[which];
-            if (count < 3)
-                return;
-
-            _avCount[which] = 0;
-            _disableUntil[which] = now + 5.0f;
-
-            switch (which)
-            {
-                case 1: _ent1Unsafe = true; break;
-                case 2: _ent2Unsafe = true; break;
-                case 3: _ent3Unsafe = true; break;
-                case 4: _sk1Unsafe = true; break;
-                case 5: _sk2Unsafe = true; break;
-            }
-
-            ER_Log.Info($"IMPULSE_DISABLE route#{which} for 5.0s after {ex.GetType().Name}");
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool ShouldLog(float now, float minDelta = 0.05f)
-        {
-            if (now < _lastImpulseLog)
-                _lastImpulseLog = now - minDelta;
-            if (now - _lastImpulseLog < minDelta)
-                return false;
-            _lastImpulseLog = now;
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static float GetNow()
-        {
-            return Mission.Current?.CurrentTime ?? 0f;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void Log(string message)
-        {
-            if (ER_Config.DebugLogging && ShouldLog(GetNow()))
-                ER_Log.Info(message);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void LogAlways(string message)
-        {
-            if (ER_Config.DebugLogging)
-                ER_Log.Info(message);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void LogNoiseOncePer(float minDelta, string message)
-        {
-            float now = GetNow();
-            if (now - _lastNoiseLog < minDelta)
-                return;
-            Log(message);
-            _lastNoiseLog = now;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void LogFailure(string context, Exception ex)
-        {
-            // Do not fully hide AVs; throttle them
-            if (ex is TargetInvocationException tie && tie.InnerException != null)
-                ex = tie.InnerException;
-            if (ex is AccessViolationException)
-            {
-                float now = GetNow();
-                if (now - _lastAvLog >= 0.25f)
+                if ((_dSk1 == null && _sk1 == null) || (_dSk2 == null && _sk2 == null))
                 {
-                    _lastAvLog = now;
-                    LogAlways($"IMPULSE_FAIL_AV {context}");
+                    try
+                    {
+                        foreach (var t in entityAsm.GetTypes())
+                        {
+                            var name = t.FullName;
+                            if (name != null && name.IndexOf("Skeleton", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                foreach (var mInfo in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
+                                {
+                                    if (mInfo.Name.IndexOf("Impulse", StringComparison.OrdinalIgnoreCase) >= 0)
+                                        ER_Log.Info($"SKEL_API_CAND {name}.{mInfo}");
+                                }
+                            }
+                        }
+                    }
+                    catch { }
                 }
-                return;
+
+                SetSkNames();
+                if (ER_Config.DebugLogging)
+                {
+                    _ent3Name = _ent3?.Name; _ent2Name = _ent2?.Name; _ent1Name = _ent1?.Name;
+                    ER_Log.Info($"IMP_BIND ent3:{_ent3!=null}|{_dEnt3!=null} inst:{_ent3Inst!=null}|{_dEnt3Inst!=null} " +
+                                $"ent2:{_ent2!=null}|{_dEnt2!=null} inst:{_ent2Inst!=null}|{_dEnt2Inst!=null} " +
+                                $"ent1:{_ent1!=null}|{_dEnt1!=null} inst:{_ent1Inst!=null}|{_dEnt1Inst!=null} " +
+                                $"sk2:{_sk2!=null}|{_dSk2!=null} sk1:{_sk1!=null}|{_dSk1!=null} isDyn:{_isDyn!=null}");
+                    ER_Log.Info($"IMP_BIND_NAMES ent3:{_ent3Name} ent2:{_ent2Name} ent1:{_ent1Name} sk2:{_sk2Name} sk1:{_sk1Name}");
+                }
+
+                Volatile.Write(ref _ensured, true);
             }
-            Log($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
-        }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsValidVec(in Vec3 v) => ER_Math.IsFinite(in v);
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void MaybeReEnable()
+            {
+                float now = TimeNow();
+                if (_ent1Unsafe && _disableUntil[1] <= now) _ent1Unsafe = false;
+                if (_ent2Unsafe && _disableUntil[2] <= now) _ent2Unsafe = false;
+                if (_ent3Unsafe && _disableUntil[3] <= now) _ent3Unsafe = false;
+                if (_sk1Unsafe && _disableUntil[4] <= now) _sk1Unsafe = false;
+                if (_sk2Unsafe && _disableUntil[5] <= now) _sk2Unsafe = false;
+            }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryResolveContact(GameEntity ent, ref Vec3 contact)
-        {
-            if (IsValidVec(contact) && contact.LengthSquared >= ContactTinySqThreshold)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void MarkUnsafe(int which, Exception ex)
+            {
+                if (ex is TargetInvocationException tie && tie.InnerException != null)
+                    ex = tie.InnerException;
+
+                if (!(ex is AccessViolationException))
+                    return;
+
+                float now = TimeNow();
+                if (which < 1 || which > 5)
+                    return;
+                if (_disableUntil[which] > now)
+                    return;
+
+                int count = ++_avCount[which];
+                if (count < 3)
+                    return;
+
+                _avCount[which] = 0;
+                _disableUntil[which] = now + 5.0f;
+
+                switch (which)
+                {
+                    case 1: _ent1Unsafe = true; break;
+                    case 2: _ent2Unsafe = true; break;
+                    case 3: _ent3Unsafe = true; break;
+                    case 4: _sk1Unsafe = true; break;
+                    case 5: _sk2Unsafe = true; break;
+                }
+
+                ER_Log.Info($"IMPULSE_DISABLE route#{which} for 5.0s after {ex.GetType().Name}");
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static bool ShouldLog(float now, float minDelta = 0.05f)
+            {
+                if (now < _lastImpulseLog)
+                    _lastImpulseLog = now - minDelta;
+                if (now - _lastImpulseLog < minDelta)
+                    return false;
+                _lastImpulseLog = now;
                 return true;
+            }
 
-            if (ent != null)
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void Log(string message)
             {
-                try
+                if (ER_Config.DebugLogging && ShouldLog(TimeNow()))
+                    ER_Log.Info(message);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void LogAlways(string message)
+            {
+                if (ER_Config.DebugLogging)
+                    ER_Log.Info(message);
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void LogNoiseOncePer(float minDelta, string message)
+            {
+                float now = TimeNow();
+                if (now - _lastNoiseLog < minDelta)
+                    return;
+                Log(message);
+                _lastNoiseLog = now;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static void LogFailure(string context, Exception ex)
+            {
+                // Do not fully hide AVs; throttle them
+                if (ex is TargetInvocationException tie && tie.InnerException != null)
+                    ex = tie.InnerException;
+                if (ex is AccessViolationException)
                 {
-                    MatrixFrame frame;
-                    try { frame = ent.GetGlobalFrame(); }
+                    float now = TimeNow();
+                    if (now - _lastAvLog >= 0.25f)
+                    {
+                        _lastAvLog = now;
+                        LogAlways($"IMPULSE_FAIL_AV {context}");
+                    }
+                    return;
+                }
+                Log($"IMPULSE_FAIL {context}: {ex.GetType().Name}");
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static bool IsValidVec(in Vec3 v) => ER_Math.IsFinite(in v);
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static bool TryResolveContact(GameEntity ent, ref Vec3 contact)
+            {
+                if (IsValidVec(contact) && contact.LengthSquared >= ContactTinySqThreshold)
+                    return true;
+
+                if (ent != null)
+                {
+                    try
+                    {
+                        MatrixFrame frame;
+                        try { frame = ent.GetGlobalFrame(); }
+                        catch
+                        {
+                            try { frame = ent.GetFrame(); }
+                            catch { frame = default; }
+                        }
+                        var fallback = frame.origin;
+                        if (IsValidVec(fallback))
+                        {
+                            fallback.z += ER_Config.CorpseLaunchContactHeight;
+                            var l2 = fallback.LengthSquared;
+                            if (IsValidVec(fallback) && l2 >= ContactTinySqThreshold && !float.IsNaN(l2) && !float.IsInfinity(l2))
+                            {
+                                contact = fallback;
+                                LiftContactFloor(ent, ref contact);
+                                return true;
+                            }
+                        }
+                    }
                     catch
                     {
-                        try { frame = ent.GetFrame(); }
-                        catch { frame = default; }
+                        // fall through to false
                     }
-                    var fallback = frame.origin;
-                    if (IsValidVec(fallback))
+                }
+
+                return false;
+            }
+
+            public static bool TryImpulse(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos)
+            {
+                Ensure();
+                MaybeReEnable();
+                // show every exception for this attempt (disable throttling)
+                _lastImpulseLog = float.NegativeInfinity;
+                // Belt-and-suspenders: clamp world-space impulse before any transforms
+                var impW = worldImpulse;
+                if (!IsValidVec(in impW))
+                {
+                    Log("IMPULSE_SKIP invalid impulse");
+                    return false;
+                }
+                ClampWorldUp(ref impW);
+                float l2 = impW.LengthSquared;
+                if (l2 < ImpulseTinySqThreshold)
+                {
+                    Log("IMPULSE_SKIP tiny impulse");
+                    return false;
+                }
+                var contact = worldPos;
+                bool hasEnt = ent != null;
+                bool dynOk = hasEnt && LooksDynamic(ent);
+
+                if (!_bindLogged)
+                {
+                    _bindLogged = true;
+                    Log($"SK_BIND sk2={( _sk2?.DeclaringType?.FullName + "." + _sk2?.Name) ?? "null"} sk1={( _sk1?.DeclaringType?.FullName + "." + _sk1?.Name) ?? "null"}");
+                    if (ER_Config.DebugLogging)
                     {
-                        fallback.z += ER_Config.CorpseLaunchContactHeight;
-                        var l2 = fallback.LengthSquared;
-                        if (IsValidVec(fallback) && l2 >= ContactTinySqThreshold && !float.IsNaN(l2) && !float.IsInfinity(l2))
-                        {
-                            contact = fallback;
-                            LiftContactFloor(ent, ref contact);
-                            return true;
-                        }
+                        ER_Log.Info($"IMP_BIND_NAMES ent3Inst={_ent3Inst?.Name ?? "null"} ent3={_ent3?.Name ?? "null"} ent2Inst={_ent2Inst?.Name ?? "null"} ent2={_ent2?.Name ?? "null"} sk2={_sk2?.Name ?? "null"} sk1={_sk1?.Name ?? "null"}");
                     }
+                }
+                if (ER_Config.DebugLogging)
+                {
+                    ER_Log.Info($"IMP_TRY haveEnt={(ent!=null)} haveSk={(skel!=null)} imp2={l2:0} pos2={worldPos.LengthSquared:0}");
+                }
+
+                bool wasRag = false;
+                try { wasRag = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
+                catch { }
+                bool ragActive = wasRag;
+                if (!wasRag)
+                    MarkRagStart(skel);
+                try
+                {
+                    skel?.ActivateRagdoll();
+                    ragActive = (ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive || skel != null);
                 }
                 catch
                 {
-                    // fall through to false
+                    ragActive = ragActive || skel != null;
                 }
-            }
-
-            return false;
-        }
-
-        public static bool TryImpulse(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos)
-        {
-            Ensure();
-            MaybeReEnable();
-            // show every exception for this attempt (disable throttling)
-            _lastImpulseLog = float.NegativeInfinity;
-            // Belt-and-suspenders: clamp world-space impulse before any transforms
-            var impW = worldImpulse;
-            if (!IsValidVec(in impW))
-            {
-                Log("IMPULSE_SKIP invalid impulse");
-                return false;
-            }
-            ClampWorldUp(ref impW);
-            float l2 = impW.LengthSquared;
-            if (l2 < ImpulseTinySqThreshold)
-            {
-                Log("IMPULSE_SKIP tiny impulse");
-                return false;
-            }
-            var contact = worldPos;
-            bool hasEnt = ent != null;
-            bool dynOk = hasEnt && LooksDynamic(ent);
-
-            if (!_bindLogged)
-            {
-                _bindLogged = true;
-                Log($"SK_BIND sk2={( _sk2?.DeclaringType?.FullName + "." + _sk2?.Name) ?? "null"} sk1={( _sk1?.DeclaringType?.FullName + "." + _sk1?.Name) ?? "null"}");
-                if (ER_Config.DebugLogging)
+                if (ragActive)
                 {
-                    ER_Log.Info($"IMP_BIND_NAMES ent3Inst={_ent3Inst?.Name ?? "null"} ent3={_ent3?.Name ?? "null"} ent2Inst={_ent2Inst?.Name ?? "null"} ent2={_ent2?.Name ?? "null"} sk2={_sk2?.Name ?? "null"} sk1={_sk1?.Name ?? "null"}");
+                    try { skel?.ForceUpdateBoneFrames(); } catch { }
                 }
-            }
-            if (ER_Config.DebugLogging)
-            {
-                ER_Log.Info($"IMP_TRY haveEnt={(ent!=null)} haveSk={(skel!=null)} imp2={l2:0} pos2={worldPos.LengthSquared:0}");
-            }
 
-            bool wasRag = false;
-            try { wasRag = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
-            catch { }
-            bool ragActive = wasRag;
-            if (!wasRag)
-                MarkRagStart(skel);
-            try
-            {
-                skel?.ActivateRagdoll();
-                ragActive = (ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive || skel != null);
-            }
-            catch
-            {
-                ragActive = ragActive || skel != null;
-            }
-            if (ragActive)
-            {
-                try { skel?.ForceUpdateBoneFrames(); } catch { }
-            }
+                try { ent?.ActivateRagdoll(); } catch { }
 
-            try { ent?.ActivateRagdoll(); } catch { }
-
-            // If ragdoll is (now) active but the body stayed kinematic, nudge it awake safely.
-            if (hasEnt && ragActive && !dynOk)
-            {
-                try
+                // If ragdoll is (now) active but the body stayed kinematic, nudge it awake safely.
+                if (hasEnt && ragActive && !dynOk)
                 {
-                    WakeDynamicBody(ent);              // safe wake helper, no ent1 force
-                    try { dynOk = LooksDynamic(ent); } // re-check once
-                    catch { }
-                    if (ER_Config.DebugLogging)
+                    try
                     {
-                        Log($"POST_WAKE dynOk={dynOk}");
-                        try { ER_Log.Info($"POST_WAKE flags Body={ent.BodyFlag} Phys={ent.PhysicsDescBodyFlag}"); }
+                        WakeDynamicBody(ent);              // safe wake helper, no ent1 force
+                        try { dynOk = LooksDynamic(ent); } // re-check once
                         catch { }
-                    }
-                }
-                catch { }
-            }
-
-            LiftContactFloor(ent, ref contact);
-            bool haveContact = TryResolveContact(ent, ref contact);
-            // If no contact, try AABB center first (safer than origin), then origin.
-            if (!haveContact && ent != null)
-            {
-                try
-                {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    var mx = ent.GetPhysicsBoundingBoxMax();
-                    if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
-                    {
-                        var d = mx - mn;
-                        if (d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f)
+                        if (ER_Config.DebugLogging)
                         {
-                            var c = (mn + mx) * 0.5f;
-                            c.z += ER_Config.CorpseLaunchContactHeight;
-                            contact = c;
+                            Log($"POST_WAKE dynOk={dynOk}");
+                            try { ER_Log.Info($"POST_WAKE flags Body={ent.BodyFlag} Phys={ent.PhysicsDescBodyFlag}"); }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                }
+
+                LiftContactFloor(ent, ref contact);
+                bool haveContact = TryResolveContact(ent, ref contact);
+                // If no contact, try AABB center first (safer than origin), then origin.
+                if (!haveContact && ent != null)
+                {
+                    try
+                    {
+                        var mn = ent.GetPhysicsBoundingBoxMin();
+                        var mx = ent.GetPhysicsBoundingBoxMax();
+                        if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
+                        {
+                            var d = mx - mn;
+                            if (d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f)
+                            {
+                                var c = (mn + mx) * 0.5f;
+                                c.z += ER_Config.CorpseLaunchContactHeight;
+                                contact = c;
+                                LiftContactFloor(ent, ref contact);
+                                haveContact = true;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                if (!haveContact && ent != null)
+                {
+                    try
+                    {
+                        MatrixFrame f;
+                        try { f = ent.GetGlobalFrame(); } catch { f = ent.GetFrame(); }
+                        var o = f.origin;
+                        if (o.IsValid)
+                        {
+                            o.z += ER_Config.CorpseLaunchContactHeight;
+                            contact = o;
                             LiftContactFloor(ent, ref contact);
                             haveContact = true;
                         }
                     }
+                    catch { }
                 }
-                catch { }
-            }
 
-            if (!haveContact && ent != null)
-            {
-                try
+                // If we still don't have a contact but we do have an entity, synth one.
+                if (!haveContact && ent != null)
                 {
-                    MatrixFrame f;
-                    try { f = ent.GetGlobalFrame(); } catch { f = ent.GetFrame(); }
-                    var o = f.origin;
-                    if (o.IsValid)
+                    try
                     {
-                        o.z += ER_Config.CorpseLaunchContactHeight;
-                        contact = o;
-                        LiftContactFloor(ent, ref contact);
-                        haveContact = true;
-                    }
-                }
-                catch { }
-            }
-
-            // If we still don't have a contact but we do have an entity, synth one.
-            if (!haveContact && ent != null)
-            {
-                try
-                {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    var mx = ent.GetPhysicsBoundingBoxMax();
-                    var c = (mn + mx) * 0.5f;
-                    if (ER_Math.IsFinite(in c))
-                    {
-                        c.z = MathF.Max(c.z, mx.z - 0.05f);
-                        contact = c;
-                        haveContact = true;
-                        if (ER_Config.DebugLogging)
-                            Log("IMP_CONTACT synth=aabb");
-                    }
-                }
-                catch { }
-                if (!haveContact)
-                {
-                    var c = ent.GlobalPosition;
-                    if (ER_Math.IsFinite(in c))
-                    {
-                        contact = c;
-                        haveContact = true;
-                        if (ER_Config.DebugLogging)
-                            Log("IMP_CONTACT synth=com");
-                    }
-                }
-            }
-
-            // Do NOT early-return here: ent1 (COM) and skel1 don't need contact.
-            // Only skip if we have neither an entity nor a skeleton to target.
-            if (!haveContact && skel == null && ent == null)
-            {
-                Log("IMPULSE_SKIP: no entity, no skeleton, no contact");
-                return false;
-            }
-
-            // Explosion-style shaping: ensure strong lateral push away from hit → COM
-            if (ent != null && haveContact && ER_Math.IsFinite(in impW))
-            {
-                try
-                {
-                    var com = ent.GlobalPosition;
-                    var away = com - contact;    // push COM away from contact
-                    away.z = 0f;
-                    float a2 = away.LengthSquared;
-                    if (a2 > 1e-10f)
-                    {
-                        away *= 1f / MathF.Sqrt(a2);
-                        float mag  = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
-                        float side = MathF.Sqrt(MathF.Max(impW.x * impW.x + impW.y * impW.y, 1e-12f));
-                        float want = 0.6f * mag;                 // >= 60% of total as sideways
-                        float extra = want - side;
-                        if (extra > 0f) { impW.x += away.x * extra; impW.y += away.y * extra; }
-                        ClampWorldUp(ref impW);                   // respect up cone
-                    }
-                }
-                catch { }
-            }
-            l2 = impW.LengthSquared;
-
-            bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
-            bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
-            bool skeletonAvailable = skel != null;
-            bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
-            bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
-            bool extEnt2Available = (_dEnt2 != null || _ent2 != null); // don’t blanket block; gate below
-            if (!skApis)
-            {
-                allowSkeletonNow = false;
-                // throttle noise
-                float now = GetNow();
-                if (now - _lastNoSkNote > 1.5f)
-                {
-                    _lastNoSkNote = now;
-                    Log("IMPULSE_NOTE: no skeleton API bound");
-                    Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
-                }
-            }
-            bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
-            bool aabbOk = hasEnt && AabbSane(ent);
-            try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
-            catch { ragActive = ragActive || skel != null; }
-            if (hasEnt && !dynOk && ragActive && aabbOk && ER_Config.DebugLogging)
-            {
-                try { LogNoiseOncePer(1.0f, "DYN_UNKNOWN: proceeding due to ragActive/AABB"); }
-                catch { }
-            }
-            // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
-            // Agent ragdolls often flip to dynamic a frame later; skipping here kills the launch.
-            // Entity impulses require a contact point; COM route remains disabled.
-            // Don't return; let skeleton routes handle no-contact cases.
-            if (dynOk && !haveContact)
-            {
-                Log("IMPULSE_SKIP_ENT_ONLY: no contact (COM disabled) — trying skeleton routes");
-                // do not return; entity routes are skipped, skeleton routes may still run
-            }
-
-            // if contact got set to NaN/Inf somewhere, don't feed it to transforms
-            if (!ER_Math.IsFinite(in contact))
-                haveContact = false;
-            // Contact way outside bbox? snap toward center before using entity routes.
-            if (haveContact && hasEnt && aabbOk)
-            {
-                try
-                {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    var mx = ent.GetPhysicsBoundingBoxMax();
-                    var c = (mn + mx) * 0.5f;
-                    var half = mx - c;
-                    var r2 = half.LengthSquared;
-                    if (r2 <= 0f)
-                    {
-                        haveContact = false;
-                    }
-                    else
-                    {
-                        var dc2 = (contact - c).LengthSquared;
-                        if (dc2 > r2 * 9f)
+                        var mn = ent.GetPhysicsBoundingBoxMin();
+                        var mx = ent.GetPhysicsBoundingBoxMax();
+                        var c = (mn + mx) * 0.5f;
+                        if (ER_Math.IsFinite(in c))
                         {
-                            c.z += ER_Config.CorpseLaunchContactHeight;
+                            c.z = MathF.Max(c.z, mx.z - 0.05f);
+                            contact = c;
+                            haveContact = true;
                             if (ER_Config.DebugLogging)
-                                Log("CONTACT_CLAMP: outside AABB*3 — snapping toward center");
+                                Log("IMP_CONTACT synth=aabb");
+                        }
+                    }
+                    catch { }
+                    if (!haveContact)
+                    {
+                        var c = ent.GlobalPosition;
+                        if (ER_Math.IsFinite(in c))
+                        {
+                            contact = c;
+                            haveContact = true;
+                            if (ER_Config.DebugLogging)
+                                Log("IMP_CONTACT synth=com");
+                        }
+                    }
+                }
+
+                // Do NOT early-return here: ent1 (COM) and skel1 don't need contact.
+                // Only skip if we have neither an entity nor a skeleton to target.
+                if (!haveContact && skel == null && ent == null)
+                {
+                    Log("IMPULSE_SKIP: no entity, no skeleton, no contact");
+                    return false;
+                }
+
+                // Explosion-style shaping: ensure strong lateral push away from hit → COM
+                if (ent != null && haveContact && ER_Math.IsFinite(in impW))
+                {
+                    try
+                    {
+                        var com = ent.GlobalPosition;
+                        var away = com - contact;    // push COM away from contact
+                        away.z = 0f;
+                        float a2 = away.LengthSquared;
+                        if (a2 > 1e-10f)
+                        {
+                            away *= 1f / MathF.Sqrt(a2);
+                            float mag  = MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                            float side = MathF.Sqrt(MathF.Max(impW.x * impW.x + impW.y * impW.y, 1e-12f));
+                            float want = 0.6f * mag;                 // >= 60% of total as sideways
+                            float extra = want - side;
+                            if (extra > 0f) { impW.x += away.x * extra; impW.y += away.y * extra; }
+                            ClampWorldUp(ref impW);                   // respect up cone
+                        }
+                    }
+                    catch { }
+                }
+                l2 = impW.LengthSquared;
+
+                bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
+                bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
+                bool skeletonAvailable = skel != null;
+                bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
+                bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
+                bool extEnt2Available = (_dEnt2 != null || _ent2 != null); // don’t blanket block; gate below
+                if (!skApis)
+                {
+                    allowSkeletonNow = false;
+                    // throttle noise
+                    float now = TimeNow();
+                    if (now - _lastNoSkNote > 1.5f)
+                    {
+                        _lastNoSkNote = now;
+                        Log("IMPULSE_NOTE: no skeleton API bound");
+                        Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
+                    }
+                }
+                bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
+                bool aabbOk = hasEnt && AabbSane(ent);
+                try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
+                catch { ragActive = ragActive || skel != null; }
+                if (hasEnt && !dynOk && ragActive && aabbOk && ER_Config.DebugLogging)
+                {
+                    try { LogNoiseOncePer(1.0f, "DYN_UNKNOWN: proceeding due to ragActive/AABB"); }
+                    catch { }
+                }
+                // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
+                // Agent ragdolls often flip to dynamic a frame later; skipping here kills the launch.
+                // Entity impulses require a contact point; COM route remains disabled.
+                // Don't return; let skeleton routes handle no-contact cases.
+                if (dynOk && !haveContact)
+                {
+                    Log("IMPULSE_SKIP_ENT_ONLY: no contact (COM disabled) — trying skeleton routes");
+                    // do not return; entity routes are skipped, skeleton routes may still run
+                }
+
+                // if contact got set to NaN/Inf somewhere, don't feed it to transforms
+                if (!ER_Math.IsFinite(in contact))
+                    haveContact = false;
+                // Contact way outside bbox? snap toward center before using entity routes.
+                if (haveContact && hasEnt && aabbOk)
+                {
+                    try
+                    {
+                        var mn = ent.GetPhysicsBoundingBoxMin();
+                        var mx = ent.GetPhysicsBoundingBoxMax();
+                        var c = (mn + mx) * 0.5f;
+                        var half = mx - c;
+                        var r2 = half.LengthSquared;
+                        if (r2 <= 0f)
+                        {
+                            haveContact = false;
+                        }
+                        else
+                        {
+                            var dc2 = (contact - c).LengthSquared;
+                            if (dc2 > r2 * 9f)
+                            {
+                                c.z += ER_Config.CorpseLaunchContactHeight;
+                                if (ER_Config.DebugLogging)
+                                    Log("CONTACT_CLAMP: outside AABB*3 — snapping toward center");
+                                contact = c;
+                                LiftContactFloor(ent, ref contact);
+                                haveContact = true;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                // ---------- skeleton first (local) ----------
+                if (allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
+                {
+                    try
+                    {
+                        var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
+                        if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
+                            okLocal = false;
+                        // Fallback: if no valid transform (null ent / rare NaNs), use world values as "local".
+                        if (!okLocal)
+                        {
+                            impL = impW;
+                            posL = contact;
+                            okLocal = ER_Math.IsFinite(in impL) && ER_Math.IsFinite(in posL);
+                        }
+                        if (okLocal)
+                        {
+                            ClampLocalUp(ref impL);
+                            if (impL.LengthSquared < ImpulseTinySqThreshold)
+                                okLocal = false;
+                        }
+                        if (okLocal)
+                        {
+                            if (_dSk2 != null)
+                            {
+                                _dSk2(skel, impL, posL);
+                            }
+                            else
+                            {
+                                var pars = _sk2.GetParameters();
+                                if (_sk2.IsStatic)
+                                {
+                                    if (pars.Length == 3)
+                                        _sk2.Invoke(null, new object[] { skel, impL, posL });
+                                    else
+                                        _sk2.Invoke(null, new object[] { impL, posL });
+                                }
+                                else
+                                {
+                                    _sk2.Invoke(skel, new object[] { impL, posL });
+                                }
+                            }
+                            Log("IMPULSE_USE skel2(local)");
+                            return true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("skel2(local)", ex);
+                        MarkUnsafe(5, ex);
+                    }
+                }
+
+                if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
+                {
+                    try
+                    {
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared >= ImpulseTinySqThreshold)
+                        {
+                            if (_dSk1 != null)
+                            {
+                                _dSk1(skel, impWc);
+                            }
+                            else
+                            {
+                                var pars = _sk1.GetParameters();
+                                if (_sk1.IsStatic)
+                                {
+                                    if (pars.Length == 2)
+                                        _sk1.Invoke(null, new object[] { skel, impWc });
+                                    else
+                                        _sk1.Invoke(null, new object[] { impWc });
+                                }
+                                else
+                                {
+                                    _sk1.Invoke(skel, new object[] { impWc });
+                                }
+                            }
+                            Log("IMPULSE_USE skel1(world)");
+                            return true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("skel1(world)", ex);
+                        MarkUnsafe(4, ex);
+                    }
+                }
+
+                // Do not skip entity routes just because ragdoll is active.
+                // Skeleton routing already attempted; allow ent2/ent3 to fire if available.
+                if (ER_Config.DebugLogging)
+                    Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
+
+                // Synthesize a safe contact point if missing/invalid.
+                if ((!haveContact || !ER_Math.IsFinite(in contact)) && hasEnt)
+                {
+                    try
+                    {
+                        var c = ent.GlobalPosition;
+                        if (ER_Math.IsFinite(in c))
+                        {
+                            c.z += MathF.Max(0f, ER_Config.CorpseLaunchContactHeight);
+                            float jitter = ER_Config.CorpseLaunchXYJitter;
+                            if (jitter > 0f)
+                            {
+                                c.x += MBRandom.RandomFloatRanged(-jitter, jitter);
+                                c.y += MBRandom.RandomFloatRanged(-jitter, jitter);
+                            }
                             contact = c;
                             LiftContactFloor(ent, ref contact);
                             haveContact = true;
+                            if (ER_Config.DebugLogging)
+                                Log("IMP_CONTACT synth=center");
                         }
                     }
+                    catch { }
                 }
-                catch { }
-            }
-            // ---------- skeleton first (local) ----------
-            if (allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null))
-            {
-                try
+
+                // Don't hard-stop on dyn/AABB; ent2 can still work with world->local fallback.
+                if (!hasEnt && !allowSkeletonNow)
                 {
-                    var okLocal = TryWorldToLocalSafe(ent, impW, contact, out var impL, out var posL);
-                    if (okLocal && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                        okLocal = false;
-                    // Fallback: if no valid transform (null ent / rare NaNs), use world values as "local".
-                    if (!okLocal)
+                    Log("IMPULSE_SKIP: no entity or skeleton route");
+                    return false;
+                }
+                // Always try entity routes when we have contact+entity.
+                if (!hasEnt)
+                {
+                    bool skeletonWillHandle = skeletonAvailable && (!forceEntity ? true : allowFallbackWhenInvalid);
+                    if (!skeletonWillHandle && !forceEntity)
+                        Log("IMPULSE_SKIP ent routes: missing entity");
+                }
+
+                // Prefer contact entity routes (world) after skeleton attempt.
+                // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
+                if (hasEnt && haveContact)
+                {
+                    try
                     {
-                        impL = impW;
-                        posL = contact;
-                        okLocal = ER_Math.IsFinite(in impL) && ER_Math.IsFinite(in posL);
-                    }
-                    if (okLocal)
-                    {
-                        ClampLocalUp(ref impL);
-                        if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            okLocal = false;
-                    }
-                    if (okLocal)
-                    {
-                        if (_dSk2 != null)
+                        var com = ent.GlobalPosition;
+                        var lateral = com - contact;
+                        lateral.z = 0f;
+                        float L2 = lateral.x * lateral.x + lateral.y * lateral.y;
+                        if (L2 > 1e-10f)
                         {
-                            _dSk2(skel, impL, posL);
+                            float L = MathF.Sqrt(L2);
+                            var tangent = new Vec3(-lateral.y / L, lateral.x / L, 0f);
+                            float spin = 0.05f * MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
+                            impW += tangent * spin;
+                            ClampWorldUp(ref impW);
                         }
-                        else
-                        {
-                            var pars = _sk2.GetParameters();
-                            if (_sk2.IsStatic)
-                            {
-                                if (pars.Length == 3)
-                                    _sk2.Invoke(null, new object[] { skel, impL, posL });
-                                else
-                                    _sk2.Invoke(null, new object[] { impL, posL });
-                            }
-                            else
-                            {
-                                _sk2.Invoke(skel, new object[] { impL, posL });
-                            }
-                        }
-                        Log("IMPULSE_USE skel2(local)");
+                    }
+                    catch { }
+                }
+
+                bool canFireEnt = hasEnt && haveContact && (dynOk || ragActive);
+
+                if (ER_Config.DebugLogging)
+                    Log($"ENT3_CHECK canFireEnt={canFireEnt} haveContact={haveContact} dynOk={dynOk} ragActive={ragActive} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
+
+                if (ER_Config.AllowEnt3World && canFireEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+                {
+                    try
+                    {
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared <= ImpulseTinySqThreshold)
+                            return false;
+                        if (_dEnt3Inst != null) _dEnt3Inst(ent, impWc, contact, false);
+                        else                    _ent3Inst.Invoke(ent, new object[] { impWc, contact, false });
+                        Log("IMPULSE_USE ent3(world)");
                         return true;
                     }
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("skel2(local)", ex);
-                    MarkUnsafe(5, ex);
-                }
-            }
-
-            if (allowSkeletonNow && !_sk1Unsafe && (_dSk1 != null || _sk1 != null))
-            {
-                try
-                {
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared >= ImpulseTinySqThreshold)
+                    catch (Exception ex)
                     {
-                        if (_dSk1 != null)
-                        {
-                            _dSk1(skel, impWc);
-                        }
-                        else
-                        {
-                            var pars = _sk1.GetParameters();
-                            if (_sk1.IsStatic)
-                            {
-                                if (pars.Length == 2)
-                                    _sk1.Invoke(null, new object[] { skel, impWc });
-                                else
-                                    _sk1.Invoke(null, new object[] { impWc });
-                            }
-                            else
-                            {
-                                _sk1.Invoke(skel, new object[] { impWc });
-                            }
-                        }
-                        Log("IMPULSE_USE skel1(world)");
-                        return true;
+                        LogFailure("ent3(world)", ex);
+                        MarkUnsafe(3, ex);
                     }
                 }
-                catch (Exception ex)
+
+                if (ER_Config.AllowEnt3World && canFireEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
                 {
-                    LogFailure("skel1(world)", ex);
-                    MarkUnsafe(4, ex);
-                }
-            }
-
-            // Do not skip entity routes just because ragdoll is active.
-            // Skeleton routing already attempted; allow ent2/ent3 to fire if available.
-            if (ER_Config.DebugLogging)
-                Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
-
-            // Synthesize a safe contact point if missing/invalid.
-            if ((!haveContact || !ER_Math.IsFinite(in contact)) && hasEnt)
-            {
-                try
-                {
-                    var c = ent.GlobalPosition;
-                    if (ER_Math.IsFinite(in c))
+                    try
                     {
-                        c.z += MathF.Max(0f, ER_Config.CorpseLaunchContactHeight);
-                        float jitter = ER_Config.CorpseLaunchXYJitter;
-                        if (jitter > 0f)
-                        {
-                            c.x += MBRandom.RandomFloatRanged(-jitter, jitter);
-                            c.y += MBRandom.RandomFloatRanged(-jitter, jitter);
-                        }
-                        contact = c;
-                        LiftContactFloor(ent, ref contact);
-                        haveContact = true;
-                        if (ER_Config.DebugLogging)
-                            Log("IMP_CONTACT synth=center");
-                    }
-                }
-                catch { }
-            }
-
-            // Don't hard-stop on dyn/AABB; ent2 can still work with world->local fallback.
-            if (!hasEnt && !allowSkeletonNow)
-            {
-                Log("IMPULSE_SKIP: no entity or skeleton route");
-                return false;
-            }
-            // Always try entity routes when we have contact+entity.
-            if (!hasEnt)
-            {
-                bool skeletonWillHandle = skeletonAvailable && (!forceEntity ? true : allowFallbackWhenInvalid);
-                if (!skeletonWillHandle && !forceEntity)
-                    Log("IMPULSE_SKIP ent routes: missing entity");
-            }
-
-            // Prefer contact entity routes (world) after skeleton attempt.
-            // Relax guards so we still fire when ragdoll is active and when dyn/AABB cannot be proven.
-            if (hasEnt && haveContact)
-            {
-                try
-                {
-                    var com = ent.GlobalPosition;
-                    var lateral = com - contact;
-                    lateral.z = 0f;
-                    float L2 = lateral.x * lateral.x + lateral.y * lateral.y;
-                    if (L2 > 1e-10f)
-                    {
-                        float L = MathF.Sqrt(L2);
-                        var tangent = new Vec3(-lateral.y / L, lateral.x / L, 0f);
-                        float spin = 0.05f * MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
-                        impW += tangent * spin;
-                        ClampWorldUp(ref impW);
-                    }
-                }
-                catch { }
-            }
-
-            bool canFireEnt = hasEnt && haveContact && (dynOk || ragActive);
-
-            if (ER_Config.DebugLogging)
-                Log($"ENT3_CHECK canFireEnt={canFireEnt} haveContact={haveContact} dynOk={dynOk} ragActive={ragActive} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
-
-            if (ER_Config.AllowEnt3World && canFireEnt && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
-            {
-                try
-                {
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared <= 1e-8f)
-                        return false;
-                    if (_dEnt3Inst != null) _dEnt3Inst(ent, impWc, contact, false);
-                    else                    _ent3Inst.Invoke(ent, new object[] { impWc, contact, false });
-                    Log("IMPULSE_USE ent3(world)");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("ent3(world)", ex);
-                    MarkUnsafe(3, ex);
-                }
-            }
-
-            if (ER_Config.AllowEnt3World && canFireEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
-            {
-                try
-                {
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared <= 1e-8f)
-                        return false;
-                    if (_dEnt3 != null)
-                        _dEnt3(ent, impWc, contact, false);
-                    else
-                        _ent3.Invoke(null, new object[] { ent, impWc, contact, false });
-                    Log("IMPULSE_USE ext ent3(world)");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("ext ent3(world)", ex);
-                    MarkUnsafe(3, ex);
-                }
-            }
-
-            if (canFireEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
-            {
-                try
-                {
-                    if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
-                    {
-                        if (ER_Config.DebugLogging)
-                            Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
-                        goto SkipInstEnt2;
-                    }
-
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared <= ImpulseTinySqThreshold)
-                    {
-                        Log("IMPULSE_SKIP ent2: tiny after world clamp");
-                        goto SkipInstEnt2;
-                    }
-
-                    if (!aabbOk && !extEnt2Available)
-                    {
-                        if (ER_Config.DebugLogging)
-                            Log("IMPULSE_SKIP inst ent2: aabb invalid");
-                        goto SkipInstEnt2;
-                    }
-
-                    var ok = TryWorldToLocalSafe(ent, impWc, contact, out var impL, out var posL);
-                    if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                        ok = false;
-                    if (ok)
-                    {
-                        // keep local contact above plane, kill lever arm when nearly on floor
-                        if (posL.z < 0.05f)
-                        {
-                            posL.x = 0f;
-                            posL.y = 0f;
-                            posL.z = 0.05f;
-                        }
-
-                        // limit XY lever arm so torque can't spike when near the ground
-                        float maxXY = MathF.Max(0.03f, posL.z * 0.6f);
-                        float r2 = posL.x * posL.x + posL.y * posL.y;
-                        if (r2 > maxXY * maxXY)
-                        {
-                            float s = maxXY / MathF.Sqrt(MathF.Max(r2, 1e-12f));
-                            posL.x *= s;
-                            posL.y *= s;
-                        }
-
-                        // keep some lateral so it doesn't go straight up
-                        float side2 = impL.x * impL.x + impL.y * impL.y;
-                        if (side2 > 1e-12f)
-                        {
-                            // at least 35% of sideways even very close to the floor,
-                            // blending to 100% by ~0.30m above the floor
-                            const float baseKeep = 0.35f;
-                            float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
-                            float keep = baseKeep + (1f - baseKeep) * lerp;
-                            impL.x *= keep;
-                            impL.y *= keep;
-                        }
-
-                        // add a tiny tangential spin (torque) to avoid freeze-y look
-                        if (ER_Math.IsFinite(in posL))
-                        {
-                            Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
-                            float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
-                            impL += tangential * spin;
-                        }
-
-                        // keep impulse inside the local up cone, then cap magnitude
-                        ClampLocalUp(ref impL);
-                        float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
-                        if (maxMag > 0f)
-                        {
-                            float magSq = impL.LengthSquared;
-                            float maxMagSq = maxMag * maxMag;
-                            if (magSq > maxMagSq)
-                                impL *= (maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f)));
-                        }
-                        if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            ok = false;
-                    }
-                    if (ok)
-                    {
-                        if (ER_Config.DebugLogging)
-                        {
-                            Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
-                            Log($"ENT2_FIRE(inst) warm={RagWarmSeconds(skel):0.000}s");
-                        }
-                        if (_dEnt2Inst != null)
-                            _dEnt2Inst(ent, impL, posL);
-                        else
-                            _ent2Inst.Invoke(ent, new object[] { impL, posL });
-                        Log("IMPULSE_USE inst ent2(local)");
-                        return true;
-                    }
-                    Log("IMPULSE_SKIP inst ent2: prechecks/local failed");
-SkipInstEnt2:
-                    ;
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("inst ent2", ex);
-                    MarkUnsafe(2, ex);
-                }
-            }
-            if (canFireEnt && !_ent2Unsafe && extEnt2Available && aabbOk) // ext ent2 only when rag active or truly dynamic
-            {
-                try
-                {
-                    if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
-                    {
-                        if (ER_Config.DebugLogging)
-                            Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
-                        goto SkipExtEnt2;
-                    }
-
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared <= ImpulseTinySqThreshold)
-                    {
-                        Log("IMPULSE_SKIP ent2: tiny after world clamp");
-                        goto SkipExtEnt2;
-                    }
-
-                    var ok = TryWorldToLocalSafe(ent, impWc, contact, out var impL, out var posL);
-                    if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
-                        ok = false;
-                    if (ok)
-                    {
-                        // keep local contact above plane, kill lever arm when nearly on floor
-                        if (posL.z < 0.05f)
-                        {
-                            posL.x = 0f;
-                            posL.y = 0f;
-                            posL.z = 0.05f;
-                        }
-
-                        // limit XY lever arm so torque can't spike when near the ground
-                        float maxXY = MathF.Max(0.03f, posL.z * 0.6f);
-                        float r2 = posL.x * posL.x + posL.y * posL.y;
-                        if (r2 > maxXY * maxXY)
-                        {
-                            float s = maxXY / MathF.Sqrt(MathF.Max(r2, 1e-12f));
-                            posL.x *= s;
-                            posL.y *= s;
-                        }
-
-                        // keep some lateral so it doesn't go straight up
-                        float side2 = impL.x * impL.x + impL.y * impL.y;
-                        if (side2 > 1e-12f)
-                        {
-                            // at least 35% of sideways even very close to the floor,
-                            // blending to 100% by ~0.30m above the floor
-                            const float baseKeep = 0.35f;
-                            float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
-                            float keep = baseKeep + (1f - baseKeep) * lerp;
-                            impL.x *= keep;
-                            impL.y *= keep;
-                        }
-
-                        // add a tiny tangential spin (torque) to avoid freeze-y look
-                        if (ER_Math.IsFinite(in posL))
-                        {
-                            Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
-                            float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
-                            impL += tangential * spin;
-                        }
-
-                        // keep impulse inside the local up cone, then cap magnitude
-                        ClampLocalUp(ref impL);
-                        float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
-                        if (maxMag > 0f)
-                        {
-                            float magSq = impL.LengthSquared;
-                            float maxMagSq = maxMag * maxMag;
-                            if (magSq > maxMagSq)
-                                impL *= (maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f)));
-                        }
-                        if (impL.LengthSquared < ImpulseTinySqThreshold)
-                            ok = false;
-                    }
-                    if (ok)
-                    {
-                        if (ER_Config.DebugLogging)
-                        {
-                            Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
-                            Log($"ENT2_FIRE(ext) warm={RagWarmSeconds(skel):0.000}s");
-                        }
-                        if (_dEnt2 != null)
-                            _dEnt2(ent, impL, posL);
-                        else
-                            _ent2.Invoke(null, new object[] { ent, impL, posL });
-                        Log("IMPULSE_USE ext ent2(local)");
-                        return true;
-                    }
-                    Log("IMPULSE_SKIP ext ent2: prechecks/local failed");
-SkipExtEnt2:
-                    ;
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("ext ent2", ex);
-                    MarkUnsafe(2, ex);
-                }
-            }
-
-            if (!skApis && canFireEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
-            {
-                try
-                {
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared > ImpulseTinySqThreshold)
-                    {
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared <= ImpulseTinySqThreshold)
+                            return false;
                         if (_dEnt3 != null)
                             _dEnt3(ent, impWc, contact, false);
                         else
                             _ent3.Invoke(null, new object[] { ent, impWc, contact, false });
-                        Log("IMPULSE_USE ext ent3(world) fallback");
+                        Log("IMPULSE_USE ext ent3(world)");
                         return true;
                     }
-                }
-                catch (Exception ex)
-                {
-                    LogFailure("ext ent3(world) fallback", ex);
-                    MarkUnsafe(3, ex);
-                }
-            }
-
-            bool skeletonRouteReady = allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null);
-            bool ent3WorldReady = ER_Config.AllowEnt3World && canFireEnt && !_ent3Unsafe
-                                   && ((_dEnt3Inst != null || _ent3Inst != null) || (_dEnt3 != null || _ent3 != null));
-            bool ent2Ready = canFireEnt && !_ent2Unsafe && aabbOk
-                              && (
-                                   (_dEnt2Inst != null || _ent2Inst != null)
-                                   || extEnt2Available
-                                 );
-            Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} dynOk={dynOk} ragActive={ragActive} canFireEnt={canFireEnt} aabbOk={aabbOk} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
-            if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && (dynOk || ragActive) && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
-                && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
-            {
-                try
-                {
-                    var impWc = impW;
-                    ClampWorldUp(ref impWc);
-                    if (impWc.LengthSquared > ImpulseTinySqThreshold)
+                    catch (Exception ex)
                     {
-                        if (_dEnt1 != null) _dEnt1(ent, impWc);
-                        else               _ent1.Invoke(null, new object[] { ent, impWc });
-                        Log("IMPULSE_USE ext ent1(world) fallback");
-                        return true;
+                        LogFailure("ext ent3(world)", ex);
+                        MarkUnsafe(3, ex);
                     }
                 }
-                catch (Exception ex)
-                {
-                    LogFailure("ext ent1(world) fallback", ex);
-                    MarkUnsafe(1, ex);
-                }
-            }
 
-            if (ER_Config.DebugLogging)
-            {
-                Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
-                try
+                if (canFireEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
                 {
-                    if (hasEnt && dynOk) // AABB logging only when dynamic
+                    try
                     {
-                        var mn = ent.GetPhysicsBoundingBoxMin();
-                        var mx = ent.GetPhysicsBoundingBoxMax();
-                        Log($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                        if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
+                        {
+                            if (ER_Config.DebugLogging)
+                                Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
+                            goto SkipInstEnt2;
+                        }
+
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared <= ImpulseTinySqThreshold)
+                        {
+                            Log("IMPULSE_SKIP ent2: tiny after world clamp");
+                            goto SkipInstEnt2;
+                        }
+
+                        if (!aabbOk && !extEnt2Available)
+                        {
+                            if (ER_Config.DebugLogging)
+                                Log("IMPULSE_SKIP inst ent2: aabb invalid");
+                            goto SkipInstEnt2;
+                        }
+
+                        var ok = TryWorldToLocalSafe(ent, impWc, contact, out var impL, out var posL);
+                        if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
+                            ok = false;
+                        if (ok)
+                        {
+                            // keep local contact above plane, kill lever arm when nearly on floor
+                            if (posL.z < 0.05f)
+                            {
+                                posL.x = 0f;
+                                posL.y = 0f;
+                                posL.z = 0.05f;
+                            }
+
+                            // limit XY lever arm so torque can't spike when near the ground
+                            float maxXY = MathF.Max(0.03f, posL.z * 0.6f);
+                            float r2 = posL.x * posL.x + posL.y * posL.y;
+                            if (r2 > maxXY * maxXY)
+                            {
+                                float s = maxXY / MathF.Sqrt(MathF.Max(r2, 1e-12f));
+                                posL.x *= s;
+                                posL.y *= s;
+                            }
+
+                            // keep some lateral so it doesn't go straight up
+                            float side2 = impL.x * impL.x + impL.y * impL.y;
+                            if (side2 > 1e-12f)
+                            {
+                                // at least 35% of sideways even very close to the floor,
+                                // blending to 100% by ~0.30m above the floor
+                                const float baseKeep = 0.35f;
+                                float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
+                                float keep = baseKeep + (1f - baseKeep) * lerp;
+                                impL.x *= keep;
+                                impL.y *= keep;
+                            }
+
+                            // add a tiny tangential spin (torque) to avoid freeze-y look
+                            if (ER_Math.IsFinite(in posL))
+                            {
+                                Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
+                                float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
+                                impL += tangential * spin;
+                            }
+
+                            // keep impulse inside the local up cone, then cap magnitude
+                            ClampLocalUp(ref impL);
+                            float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
+                            if (maxMag > 0f)
+                            {
+                                float magSq = impL.LengthSquared;
+                                float maxMagSq = maxMag * maxMag;
+                                if (magSq > maxMagSq)
+                                    impL *= (maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f)));
+                            }
+                            if (impL.LengthSquared < ImpulseTinySqThreshold)
+                                ok = false;
+                        }
+                        if (ok)
+                        {
+                            if (ER_Config.DebugLogging)
+                            {
+                                Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
+                                Log($"ENT2_FIRE(inst) warm={RagWarmSeconds(skel):0.000}s");
+                            }
+                            if (_dEnt2Inst != null)
+                                _dEnt2Inst(ent, impL, posL);
+                            else
+                                _ent2Inst.Invoke(ent, new object[] { impL, posL });
+                            Log("IMPULSE_USE inst ent2(local)");
+                            return true;
+                        }
+                        Log("IMPULSE_SKIP inst ent2: prechecks/local failed");
+    SkipInstEnt2:
+                        ;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("inst ent2", ex);
+                        MarkUnsafe(2, ex);
                     }
                 }
-                catch { }
+                if (canFireEnt && !_ent2Unsafe && extEnt2Available && aabbOk) // ext ent2 only when rag active or truly dynamic
+                {
+                    try
+                    {
+                        if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
+                        {
+                            if (ER_Config.DebugLogging)
+                                Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
+                            goto SkipExtEnt2;
+                        }
+
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared <= ImpulseTinySqThreshold)
+                        {
+                            Log("IMPULSE_SKIP ent2: tiny after world clamp");
+                            goto SkipExtEnt2;
+                        }
+
+                        var ok = TryWorldToLocalSafe(ent, impWc, contact, out var impL, out var posL);
+                        if (ok && (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL)))
+                            ok = false;
+                        if (ok)
+                        {
+                            // keep local contact above plane, kill lever arm when nearly on floor
+                            if (posL.z < 0.05f)
+                            {
+                                posL.x = 0f;
+                                posL.y = 0f;
+                                posL.z = 0.05f;
+                            }
+
+                            // limit XY lever arm so torque can't spike when near the ground
+                            float maxXY = MathF.Max(0.03f, posL.z * 0.6f);
+                            float r2 = posL.x * posL.x + posL.y * posL.y;
+                            if (r2 > maxXY * maxXY)
+                            {
+                                float s = maxXY / MathF.Sqrt(MathF.Max(r2, 1e-12f));
+                                posL.x *= s;
+                                posL.y *= s;
+                            }
+
+                            // keep some lateral so it doesn't go straight up
+                            float side2 = impL.x * impL.x + impL.y * impL.y;
+                            if (side2 > 1e-12f)
+                            {
+                                // at least 35% of sideways even very close to the floor,
+                                // blending to 100% by ~0.30m above the floor
+                                const float baseKeep = 0.35f;
+                                float lerp = Clamp01((posL.z - 0.05f) / 0.25f);
+                                float keep = baseKeep + (1f - baseKeep) * lerp;
+                                impL.x *= keep;
+                                impL.y *= keep;
+                            }
+
+                            // add a tiny tangential spin (torque) to avoid freeze-y look
+                            if (ER_Math.IsFinite(in posL))
+                            {
+                                Vec3 tangential = new Vec3(-posL.y, posL.x, 0f);
+                                float spin = 0.06f * MathF.Sqrt(MathF.Max(impL.LengthSquared, 1e-12f));
+                                impL += tangential * spin;
+                            }
+
+                            // keep impulse inside the local up cone, then cap magnitude
+                            ClampLocalUp(ref impL);
+                            float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
+                            if (maxMag > 0f)
+                            {
+                                float magSq = impL.LengthSquared;
+                                float maxMagSq = maxMag * maxMag;
+                                if (magSq > maxMagSq)
+                                    impL *= (maxMag / MathF.Sqrt(MathF.Max(magSq, 1e-12f)));
+                            }
+                            if (impL.LengthSquared < ImpulseTinySqThreshold)
+                                ok = false;
+                        }
+                        if (ok)
+                        {
+                            if (ER_Config.DebugLogging)
+                            {
+                                Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
+                                Log($"ENT2_FIRE(ext) warm={RagWarmSeconds(skel):0.000}s");
+                            }
+                            if (_dEnt2 != null)
+                                _dEnt2(ent, impL, posL);
+                            else
+                                _ent2.Invoke(null, new object[] { ent, impL, posL });
+                            Log("IMPULSE_USE ext ent2(local)");
+                            return true;
+                        }
+                        Log("IMPULSE_SKIP ext ent2: prechecks/local failed");
+    SkipExtEnt2:
+                        ;
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("ext ent2", ex);
+                        MarkUnsafe(2, ex);
+                    }
+                }
+
+                if (!skApis && canFireEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+                {
+                    try
+                    {
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared > ImpulseTinySqThreshold)
+                        {
+                            if (_dEnt3 != null)
+                                _dEnt3(ent, impWc, contact, false);
+                            else
+                                _ent3.Invoke(null, new object[] { ent, impWc, contact, false });
+                            Log("IMPULSE_USE ext ent3(world) fallback");
+                            return true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("ext ent3(world) fallback", ex);
+                        MarkUnsafe(3, ex);
+                    }
+                }
+
+                bool skeletonRouteReady = allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null);
+                bool ent3WorldReady = ER_Config.AllowEnt3World && canFireEnt && !_ent3Unsafe
+                                       && ((_dEnt3Inst != null || _ent3Inst != null) || (_dEnt3 != null || _ent3 != null));
+                bool ent2Ready = canFireEnt && !_ent2Unsafe && aabbOk
+                                  && (
+                                       (_dEnt2Inst != null || _ent2Inst != null)
+                                       || extEnt2Available
+                                     );
+                Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} dynOk={dynOk} ragActive={ragActive} canFireEnt={canFireEnt} aabbOk={aabbOk} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
+                if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && (dynOk || ragActive) && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+                    && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
+                {
+                    try
+                    {
+                        var impWc = impW;
+                        ClampWorldUp(ref impWc);
+                        if (impWc.LengthSquared > ImpulseTinySqThreshold)
+                        {
+                            if (_dEnt1 != null) _dEnt1(ent, impWc);
+                            else               _ent1.Invoke(null, new object[] { ent, impWc });
+                            Log("IMPULSE_USE ext ent1(world) fallback");
+                            return true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogFailure("ext ent1(world) fallback", ex);
+                        MarkUnsafe(1, ex);
+                    }
+                }
+
+                if (ER_Config.DebugLogging)
+                {
+                    Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
+                    try
+                    {
+                        if (hasEnt && dynOk) // AABB logging only when dynamic
+                        {
+                            var mn = ent.GetPhysicsBoundingBoxMin();
+                            var mx = ent.GetPhysicsBoundingBoxMax();
+                            Log($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                        }
+                    }
+                    catch { }
+                }
+                if (ER_Config.DebugLogging)
+                    Log("IMPULSE_END: no entity/skeleton path succeeded");
+                return false;
             }
-            if (ER_Config.DebugLogging)
-                Log("IMPULSE_END: no entity/skeleton path succeeded");
-            return false;
-        }
+    }
     }
 
     internal static class ER_Space
