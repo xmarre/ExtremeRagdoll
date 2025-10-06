@@ -88,6 +88,16 @@ namespace ExtremeRagdoll
         }
         public static float CorpseLaunchRetryDelay              => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryDelay ?? 0.03f);
         public static float CorpseLaunchRetryJitter             => MathF.Max(0f, Settings.Instance?.CorpseLaunchRetryJitter ?? 0.005f);
+        public static int   CorpseLaunchRetryMaxTries
+        {
+            get
+            {
+                int value = Settings.Instance?.CorpseLaunchRetryMaxTries ?? 4;
+                if (value < 0) return 0;
+                if (value > 20) return 20;
+                return value;
+            }
+        }
         public static float CorpseLaunchScheduleWindow          => MathF.Max(0f, Settings.Instance?.CorpseLaunchScheduleWindow ?? 0.08f);
         public static float ScheduleDirDuplicateSqThreshold
         {
@@ -158,6 +168,16 @@ namespace ExtremeRagdoll
             }
         }
         public static int   CorpseLaunchQueueCap                => Math.Max(0, Settings.Instance?.CorpseLaunchQueueCap ?? 3);
+        public static int   CorpseLaunchRetryQueueLimit
+        {
+            get
+            {
+                int value = Settings.Instance?.CorpseLaunchRetryQueueLimit ?? 256;
+                if (value < 0) return 0;
+                if (value > 4096) return 4096;
+                return value;
+            }
+        }
         public static int   CorpsePrelaunchTries
         {
             get

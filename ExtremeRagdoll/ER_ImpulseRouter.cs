@@ -82,7 +82,7 @@ namespace ExtremeRagdoll
             return true;
         }
 
-        private static bool LooksDynamic(GameEntity ent)
+        internal static bool LooksDynamic(GameEntity ent)
         {
             // Prefer engine check if available
             try
@@ -248,7 +248,7 @@ namespace ExtremeRagdoll
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void LiftContactFloor(GameEntity ent, ref Vec3 c)
         {
-            if (ent == null)
+            if (ent == null || !LooksDynamic(ent))
                 return;
             try
             {
@@ -757,6 +757,8 @@ namespace ExtremeRagdoll
                 return false;
             }
             var contact = worldPos;
+            bool hasEnt = ent != null;
+            bool dynOk = hasEnt && LooksDynamic(ent);
 
             if (!_bindLogged)
             {
@@ -787,15 +789,31 @@ namespace ExtremeRagdoll
             {
                 ragActive = ragActive || skel != null;
             }
-            try { skel?.ForceUpdateBoneFrames(); } catch { }
+            if (ragActive)
+            {
+                try { skel?.ForceUpdateBoneFrames(); } catch { }
+            }
 
             try { ent?.ActivateRagdoll(); } catch { }
 
+            // If ragdoll is (now) active but the body stayed kinematic, nudge it awake safely.
+            if (hasEnt && ragActive && !dynOk)
+            {
+                try
+                {
+                    WakeDynamicBody(ent);              // safe wake helper, no ent1 force
+                    try { dynOk = LooksDynamic(ent); } // re-check once
+                    catch { }
+                    if (ER_Config.DebugLogging)
+                        Log($"POST_WAKE dynOk={dynOk}");
+                }
+                catch { }
+            }
+
             LiftContactFloor(ent, ref contact);
             bool haveContact = TryResolveContact(ent, ref contact);
-            bool hasEnt = ent != null;
             // If no contact, try AABB center first (safer than origin), then origin.
-            if (!haveContact && ent != null)
+            if (!haveContact && ent != null && dynOk)
             {
                 try
                 {
@@ -817,7 +835,7 @@ namespace ExtremeRagdoll
                 catch { }
             }
 
-            if (!haveContact && ent != null)
+            if (!haveContact && ent != null && dynOk)
             {
                 try
                 {
@@ -838,22 +856,25 @@ namespace ExtremeRagdoll
             // If we still don't have a contact but we do have an entity, synth one.
             if (!haveContact && ent != null)
             {
-                try
+                if (dynOk)
                 {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    var mx = ent.GetPhysicsBoundingBoxMax();
-                    var c = (mn + mx) * 0.5f;
-                    if (ER_Math.IsFinite(in c))
+                    try
                     {
-                        c.z = MathF.Max(c.z, mx.z - 0.05f);
-                        contact = c;
-                        haveContact = true;
-                        if (ER_Config.DebugLogging)
-                            Log("IMP_CONTACT synth=aabb");
+                        var mn = ent.GetPhysicsBoundingBoxMin();
+                        var mx = ent.GetPhysicsBoundingBoxMax();
+                        var c = (mn + mx) * 0.5f;
+                        if (ER_Math.IsFinite(in c))
+                        {
+                            c.z = MathF.Max(c.z, mx.z - 0.05f);
+                            contact = c;
+                            haveContact = true;
+                            if (ER_Config.DebugLogging)
+                                Log("IMP_CONTACT synth=aabb");
+                        }
                     }
+                    catch { }
                 }
-                catch { }
-                if (!haveContact)
+                if (!haveContact && dynOk)
                 {
                     var c = ent.GlobalPosition;
                     if (ER_Math.IsFinite(in c))
@@ -903,27 +924,15 @@ namespace ExtremeRagdoll
             bool skeletonAvailable = skel != null;
             bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
             bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
-            bool extEnt2Blocked = !skApis;
-            bool extEnt2Available = !extEnt2Blocked && (_dEnt2 != null || _ent2 != null);
-            if (extEnt2Blocked)
+            bool extEnt2Available = (_dEnt2 != null || _ent2 != null); // don’t blanket block; gate below
+            if (!skApis)
             {
                 allowSkeletonNow = false;
                 Log("IMPULSE_NOTE: no skeleton API bound");
-                Log("IMPULSE_NOTE: blocking ext ent2 (no sk APIs)");
+                Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
             }
             bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
-            bool dynOk = hasEnt && LooksDynamic(ent);
-            bool aabbOk = hasEnt && AabbSane(ent);
-            bool dynSure = dynOk && aabbOk;
-            if (!dynOk && hasEnt)
-            {
-                WakeDynamicBody(ent);
-                try { dynOk = LooksDynamic(ent); }
-                catch { }
-                if (ER_Config.DebugLogging)
-                    Log($"POST_WAKE dynOk={dynOk} ragActive={ragActive}");
-                dynSure = dynOk && aabbOk;
-            }
+            bool aabbOk = hasEnt && dynOk && AabbSane(ent);
             try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
             catch { ragActive = ragActive || skel != null; }
             // Allow ent2 even when engine reports BodyOwnerNone / not dynamic.
@@ -1008,7 +1017,7 @@ namespace ExtremeRagdoll
             // Do not skip entity routes just because ragdoll is active.
             // Skeleton routing already attempted; allow ent2/ent3 to fire if available.
             if (ER_Config.DebugLogging)
-                Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} dynSure={dynSure} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
+                Log($"IMP_SNAPSHOT ragActive={ragActive} ent={hasEnt} skAvail={skeletonAvailable} contact={haveContact} dynOk={dynOk} aabbOk={aabbOk} forceEnt={ER_Config.ForceEntityImpulse} allowEnt3={ER_Config.AllowEnt3World}");
 
             // Synthesize a safe contact point if missing/invalid.
             if ((!haveContact || !ER_Math.IsFinite(in contact)) && hasEnt)
@@ -1039,6 +1048,12 @@ namespace ExtremeRagdoll
             if (!hasEnt && !allowSkeletonNow)
             {
                 Log("IMPULSE_SKIP: no entity or skeleton route");
+                return false;
+            }
+            // If we only have an entity and it’s still kinematic *after* wake, defer.
+            if (hasEnt && !allowSkeletonNow && !dynOk)
+            {
+                Log("IMPULSE_DEFER: entity non-dynamic post-wake");
                 return false;
             }
 
@@ -1075,7 +1090,7 @@ namespace ExtremeRagdoll
             if (ER_Config.DebugLogging)
                 Log($"ENT3_CHECK haveContact={haveContact} dynOk={dynOk} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
 
-            if (ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
+            if (ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3Inst != null || _ent3Inst != null))
             {
                 try
                 {
@@ -1083,7 +1098,6 @@ namespace ExtremeRagdoll
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared <= 1e-8f)
                         return false;
-                    WakeDynamicBody(ent);
                     if (_dEnt3Inst != null) _dEnt3Inst(ent, impWc, contact, false);
                     else                    _ent3Inst.Invoke(ent, new object[] { impWc, contact, false });
                     Log("IMPULSE_USE ent3(world)");
@@ -1096,7 +1110,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -1104,7 +1118,6 @@ namespace ExtremeRagdoll
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared <= 1e-8f)
                         return false;
-                    WakeDynamicBody(ent);
                     if (_dEnt3 != null)
                         _dEnt3(ent, impWc, contact, false);
                     else
@@ -1119,7 +1132,7 @@ namespace ExtremeRagdoll
                 }
             }
 
-            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null))
+            if (haveContact && hasEnt && !_ent2Unsafe && (_dEnt2Inst != null || _ent2Inst != null) && dynOk)
             {
                 try
                 {
@@ -1202,7 +1215,6 @@ namespace ExtremeRagdoll
                             Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
                             Log($"ENT2_FIRE(inst) warm={RagWarmSeconds(skel):0.000}s");
                         }
-                        WakeDynamicBody(ent);
                         if (_dEnt2Inst != null)
                             _dEnt2Inst(ent, impL, posL);
                         else
@@ -1220,7 +1232,8 @@ SkipInstEnt2:
                     MarkUnsafe(2, ex);
                 }
             }
-            if (haveContact && hasEnt && !_ent2Unsafe && extEnt2Available)
+            if (haveContact && hasEnt && !_ent2Unsafe && extEnt2Available
+                && dynOk && aabbOk) // ext ent2 only when truly dynamic
             {
                 try
                 {
@@ -1303,7 +1316,6 @@ SkipInstEnt2:
                             Log($"ENT2_LOC posL=({posL.x:0.###},{posL.y:0.###},{posL.z:0.###}) impL=({impL.x:0.###},{impL.y:0.###},{impL.z:0.###})");
                             Log($"ENT2_FIRE(ext) warm={RagWarmSeconds(skel):0.000}s");
                         }
-                        WakeDynamicBody(ent);
                         if (_dEnt2 != null)
                             _dEnt2(ent, impL, posL);
                         else
@@ -1322,7 +1334,7 @@ SkipExtEnt2:
                 }
             }
 
-            if (!skApis && haveContact && hasEnt && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
+            if (!skApis && haveContact && hasEnt && dynOk && !_ent3Unsafe && (_dEnt3 != null || _ent3 != null))
             {
                 try
                 {
@@ -1330,7 +1342,6 @@ SkipExtEnt2:
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared > ImpulseTinySqThreshold)
                     {
-                        WakeDynamicBody(ent);
                         if (_dEnt3 != null)
                             _dEnt3(ent, impWc, contact, false);
                         else
@@ -1347,15 +1358,15 @@ SkipExtEnt2:
             }
 
             bool skeletonRouteReady = allowSkeletonNow && haveContact && !_sk2Unsafe && (_dSk2 != null || _sk2 != null);
-            bool ent3WorldReady = ER_Config.AllowEnt3World && haveContact && hasEnt && (dynOk || ragActive) && !_ent3Unsafe
+            bool ent3WorldReady = ER_Config.AllowEnt3World && haveContact && hasEnt && dynOk && !_ent3Unsafe
                                    && ((_dEnt3Inst != null || _ent3Inst != null) || (_dEnt3 != null || _ent3 != null));
-            bool ent2Ready = haveContact && hasEnt && !_ent2Unsafe
+            bool ent2Ready = haveContact && hasEnt && !_ent2Unsafe && aabbOk && dynOk
                               && (
                                    (_dEnt2Inst != null || _ent2Inst != null)
                                    || extEnt2Available
                                  );
-            Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
-            if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+            Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} dynOk={dynOk} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
+            if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && dynOk && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
                 && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
             {
                 try
@@ -1364,7 +1375,6 @@ SkipExtEnt2:
                     ClampWorldUp(ref impWc);
                     if (impWc.LengthSquared > ImpulseTinySqThreshold)
                     {
-                        WakeDynamicBody(ent);
                         if (_dEnt1 != null) _dEnt1(ent, impWc);
                         else               _ent1.Invoke(null, new object[] { ent, impWc });
                         Log("IMPULSE_USE ext ent1(world) fallback");
@@ -1383,7 +1393,7 @@ SkipExtEnt2:
                 Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
                 try
                 {
-                    if (hasEnt)
+                    if (hasEnt && dynOk) // AABB logging only when dynamic
                     {
                         var mn = ent.GetPhysicsBoundingBoxMin();
                         var mx = ent.GetPhysicsBoundingBoxMax();
