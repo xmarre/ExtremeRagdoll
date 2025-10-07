@@ -147,6 +147,30 @@ namespace ExtremeRagdoll
                 return scale;
             }
         }
+        public static float WorldImpulseCap
+        {
+            get
+            {
+                float cap = Settings.Instance?.WorldImpulseCap ?? 1200f;
+                if (float.IsNaN(cap) || float.IsInfinity(cap))
+                    return 1200f;
+                if (cap < 0f)
+                    return 0f;
+                return cap;
+            }
+        }
+        public static float LocalImpulseCap
+        {
+            get
+            {
+                float cap = Settings.Instance?.LocalImpulseCap ?? 1200f;
+                if (float.IsNaN(cap) || float.IsInfinity(cap))
+                    return 1200f;
+                if (cap < 0f)
+                    return 0f;
+                return cap;
+            }
+        }
         public static float CorpseLaunchMinUpFraction
         {
             get
