@@ -24,8 +24,8 @@ namespace ExtremeRagdoll
         private const float ContactTinySqThreshold = ER_Math.ContactTinySq;
         private const float ImpulseTinySqThreshold = ER_Math.ImpulseTinySq;
         // absolute safety caps to stop “teleport” speeds even if config is wild
-        private const float MaxWorldImpulse = 1800f;
-        private const float MaxLocalImpulse = 1800f;
+        private static float MaxWorldImpulse => MathF.Min(1800f, MathF.Max(200f, ER_Config.WorldImpulseCap));
+        private static float MaxLocalImpulse => MathF.Min(1800f, MathF.Max(200f, ER_Config.LocalImpulseCap));
         private const float Ent2WarmupSeconds = 0.12f;
         // drip-feed window for delayed ent2 when the body is still kinematic
         private const float PendingLife = 0.40f;
@@ -38,6 +38,8 @@ namespace ExtremeRagdoll
         private static MethodInfo _ent3Inst, _ent2Inst, _ent1Inst;
         private static MethodInfo _sk2, _sk1;
         private static MethodInfo _wake;
+        // skeleton -> entity resolver (built once)
+        private static Func<Skeleton, GameEntity> _skToEnt;
         private static Action<GameEntity, Vec3, Vec3, bool> _dEnt3;
         private static Action<GameEntity, Vec3, Vec3> _dEnt2;
         private static Action<GameEntity, Vec3> _dEnt1;
@@ -47,6 +49,7 @@ namespace ExtremeRagdoll
         private static Action<Skeleton, Vec3, Vec3> _dSk2;
         private static Action<Skeleton, Vec3> _dSk1;
         private static float _lastNoSkNote = float.NegativeInfinity;
+        private static bool _skEntLogged;
         private static Action<GameEntity> _dWake;
         private static Func<GameEntity, bool> _isDyn;
         private static float _lastImpulseLog = float.NegativeInfinity; // keep
@@ -92,6 +95,9 @@ namespace ExtremeRagdoll
                 _avCount[i] = 0;
             }
             _lastNoiseLog = float.NegativeInfinity;
+            _lastNoSkNote = float.NegativeInfinity;
+            _skEntLogged = false;
+            _skToEnt = null;
             _skCandLogCount = 0;
             _bindLogged = false;
             _sk1Name = _sk2Name = _ent1Name = _ent2Name = _ent3Name = null;
@@ -176,7 +182,6 @@ namespace ExtremeRagdoll
             }
 
             var preferred = new List<Assembly>();
-            var others = new List<Assembly>();
 
             foreach (var asm in all)
             {
@@ -184,22 +189,17 @@ namespace ExtremeRagdoll
                     continue;
 
                 var name = asm.FullName ?? asm.GetName().Name ?? string.Empty;
-                // Be strict: only Engine + our mod. Avoid Starter.Library noise.
-                if (name.StartsWith("TaleWorlds.Engine", StringComparison.Ordinal) ||
+                if (name.StartsWith("TaleWorlds.Core", StringComparison.Ordinal) ||
+                    name.StartsWith("TaleWorlds.Engine", StringComparison.Ordinal) ||
+                    name.StartsWith("TaleWorlds.MountAndBlade", StringComparison.Ordinal) ||
+                    name.StartsWith("TaleWorlds.Library", StringComparison.Ordinal) ||
                     name.IndexOf("ExtremeRagdoll", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     preferred.Add(asm);
                 }
-                else
-                {
-                    others.Add(asm);
-                }
             }
 
             foreach (var asm in preferred)
-                yield return asm;
-
-            foreach (var asm in others)
                 yield return asm;
         }
 
@@ -438,12 +438,16 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool AabbSane(GameEntity ent)
+        private static bool TryGetSaneAabb(GameEntity ent, out Vec3 mn, out Vec3 mx)
         {
+            mn = default;
+            mx = default;
+            if (ent == null)
+                return false;
             try
             {
-                var mn = ent.GetPhysicsBoundingBoxMin();
-                var mx = ent.GetPhysicsBoundingBoxMax();
+                mn = ent.GetPhysicsBoundingBoxMin();
+                mx = ent.GetPhysicsBoundingBoxMax();
                 // Fail-closed: if junk/zero, DO NOT touch native physics.
                 if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx))
                     return false;
@@ -463,8 +467,16 @@ namespace ExtremeRagdoll
             catch
             {
                 // Also fail-closed on exceptions.
+                mn = default;
+                mx = default;
                 return false;
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool AabbSane(GameEntity ent)
+        {
+            return TryGetSaneAabb(ent, out _, out _);
         }
 
         private static bool TryWorldToLocalSafe(GameEntity ent, Vec3 worldImpulse, Vec3 contact, out Vec3 impLocal, out Vec3 posLocal)
@@ -491,6 +503,46 @@ namespace ExtremeRagdoll
             return Mission.Current?.CurrentTime ?? unchecked((uint)Environment.TickCount) * 0.001f;
         }
 
+        // ---------- skeleton -> entity resolver ----------
+        private static void EnsureSkToEntResolver()
+        {
+            if (_skToEnt != null)
+                return;
+            var resolver = _skToEnt ?? BuildSkToEnt();
+            Interlocked.CompareExchange(ref _skToEnt, resolver, null);
+        }
+
+        private static Func<Skeleton, GameEntity> BuildSkToEnt()
+        {
+            var skType = typeof(Skeleton);
+            try
+            {
+                // 1) property returning GameEntity
+                var prop = skType.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                                 .FirstOrDefault(p => typeof(GameEntity).IsAssignableFrom(p.PropertyType) && p.GetIndexParameters().Length == 0);
+                if (prop != null)
+                    return sk => { try { return (GameEntity)prop.GetValue(sk); } catch { return null; } };
+
+                // 2) field returning GameEntity
+                var fld = skType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                                .FirstOrDefault(f => typeof(GameEntity).IsAssignableFrom(f.FieldType));
+                if (fld != null)
+                    return sk => { try { return (GameEntity)fld.GetValue(sk); } catch { return null; } };
+
+                // 3) method with no args returning GameEntity
+                var m = skType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                              .FirstOrDefault(mi => mi.GetParameters().Length == 0 && typeof(GameEntity).IsAssignableFrom(mi.ReturnType));
+                if (m != null)
+                    return sk => { try { return (GameEntity)m.Invoke(sk, null); } catch { return null; } };
+            }
+            catch
+            {
+            }
+
+            // last resort
+            return _ => null;
+        }
+
         // call this from your MissionBehavior.OnMissionTick()
         internal static void Tick()
         {
@@ -501,8 +553,20 @@ namespace ExtremeRagdoll
             float now = TimeNow();
             while (_pending.TryDequeue(out var p))
             {
-                if (p.ent == null || now > p.expires)
+                if (now > p.expires)
                     continue;
+
+                if (p.ent == null)
+                {
+                    if (p.sk != null)
+                    {
+                        EnsureSkToEntResolver();
+                        try { p.ent = _skToEnt?.Invoke(p.sk); }
+                        catch { p.ent = null; }
+                    }
+                    if (p.ent == null)
+                        continue;
+                }
 
                 bool dyn = LooksDynamic(p.ent);
                 bool warm = RagWarm(p.sk, Ent2WarmupSeconds);
@@ -558,6 +622,18 @@ namespace ExtremeRagdoll
 
             for (int i = 0; i < _carry.Count; i++)
                 _pending.Enqueue(_carry[i]);
+
+            if (ER_Config.DebugLogging)
+            {
+                try
+                {
+                    int pendingCount = _pending.Count;
+                    int carryCount = _carry.Count;
+                    if (pendingCount > 0 || carryCount > 0)
+                        ER_Log.Info($"IMP_TICK pending={pendingCount} carry={carryCount}");
+                }
+                catch { }
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1380,9 +1456,60 @@ namespace ExtremeRagdoll
                 return false;
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            private static bool TryFallbackContact(GameEntity ent, Skeleton skel, ref Vec3 contact)
+            {
+                if (ent == null)
+                    return false;
+
+                _ = skel;
+
+                try
+                {
+                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    var mx = ent.GetPhysicsBoundingBoxMax();
+                    if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
+                    {
+                        var d = mx - mn;
+                        if (d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f)
+                        {
+                            var c = (mn + mx) * 0.5f;
+                            c.z += ER_Config.CorpseLaunchContactHeight;
+                            contact = c;
+                            LiftContactFloor(ent, ref contact);
+                            return true;
+                        }
+                    }
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    MatrixFrame f;
+                    try { f = ent.GetGlobalFrame(); }
+                    catch { f = ent.GetFrame(); }
+                    var origin = f.origin;
+                    if (ER_Math.IsFinite(in origin))
+                    {
+                        origin.z += ER_Config.CorpseLaunchContactHeight;
+                        contact = origin;
+                        LiftContactFloor(ent, ref contact);
+                        return true;
+                    }
+                }
+                catch
+                {
+                }
+
+                return false;
+            }
+
             public static bool TryImpulse(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos)
             {
                 Ensure();
+                EnsureSkToEntResolver();
                 MaybeReEnable();
                 // show every exception for this attempt (disable throttling)
                 _lastImpulseLog = float.NegativeInfinity;
@@ -1403,6 +1530,24 @@ namespace ExtremeRagdoll
                 }
                 var contact = worldPos;
                 bool hasEnt = ent != null;
+                // If we only have a Skeleton, try to recover its GameEntity and use entity routes.
+                if (!hasEnt && skel != null)
+                {
+                    var fromSk = _skToEnt?.Invoke(skel);
+                    if (fromSk != null)
+                    {
+                        ent = fromSk;
+                        hasEnt = true;
+                        if (ER_Config.DebugLogging && !_skEntLogged)
+                        {
+                            ER_Log.Info($"SK→ENT ok: {ent?.Name ?? "<unnamed>"}");
+                            _skEntLogged = true;
+                        }
+                    }
+                }
+                Vec3 bboxMin = default;
+                Vec3 bboxMax = default;
+                bool aabbOk = hasEnt && TryGetSaneAabb(ent, out bboxMin, out bboxMax);
                 bool dynOk = hasEnt && LooksDynamic(ent);
 
                 if (!_bindLogged)
@@ -1459,57 +1604,51 @@ namespace ExtremeRagdoll
                     catch { }
                 }
 
-                LiftContactFloor(ent, ref contact);
-                bool haveContact = TryResolveContact(ent, ref contact);
-                // If no contact, try AABB center first (safer than origin), then origin.
-                if (!haveContact && ent != null)
+                bool haveContact = false;
+                if (ER_Math.IsFinite(in contact) && aabbOk)
                 {
                     try
                     {
-                        var mn = ent.GetPhysicsBoundingBoxMin();
-                        var mx = ent.GetPhysicsBoundingBoxMax();
-                        if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
-                        {
-                            var d = mx - mn;
-                            if (d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f)
-                            {
-                                var c = (mn + mx) * 0.5f;
-                                c.z += ER_Config.CorpseLaunchContactHeight;
-                                contact = c;
-                                LiftContactFloor(ent, ref contact);
-                                haveContact = true;
-                            }
-                        }
-                    }
-                    catch { }
-                }
-
-                if (!haveContact && ent != null)
-                {
-                    try
-                    {
-                        MatrixFrame f;
-                        try { f = ent.GetGlobalFrame(); } catch { f = ent.GetFrame(); }
-                        var o = f.origin;
-                        if (o.IsValid)
-                        {
-                            o.z += ER_Config.CorpseLaunchContactHeight;
-                            contact = o;
+                        var mn = bboxMin;
+                        var mx = bboxMax;
+                        haveContact = contact.x >= mn.x - 0.5f && contact.x <= mx.x + 0.5f &&
+                                      contact.y >= mn.y - 0.5f && contact.y <= mx.y + 0.5f &&
+                                      contact.z >= mn.z - 0.5f && contact.z <= mx.z + 0.5f;
+                        if (haveContact)
                             LiftContactFloor(ent, ref contact);
-                            haveContact = true;
-                        }
                     }
-                    catch { }
+                    catch
+                    {
+                        haveContact = false;
+                    }
                 }
+                if (!haveContact)
+                {
+                    contact = default;
+                    haveContact = TryResolveContact(ent, ref contact);
+                }
+                if (!haveContact && hasEnt)
+                    haveContact = TryFallbackContact(ent, skel, ref contact);
 
                 // If we still don't have a contact but we do have an entity, synth one.
                 if (!haveContact && ent != null)
                 {
                     try
                     {
-                        var mn = ent.GetPhysicsBoundingBoxMin();
-                        var mx = ent.GetPhysicsBoundingBoxMax();
-                        var c = (mn + mx) * 0.5f;
+                        Vec3 c;
+                        Vec3 mx;
+                        if (aabbOk)
+                        {
+                            var mn = bboxMin;
+                            mx = bboxMax;
+                            c = (mn + mx) * 0.5f;
+                        }
+                        else
+                        {
+                            var mn = ent.GetPhysicsBoundingBoxMin();
+                            mx = ent.GetPhysicsBoundingBoxMax();
+                            c = (mn + mx) * 0.5f;
+                        }
                         if (ER_Math.IsFinite(in c))
                         {
                             c.z = MathF.Max(c.z, mx.z - 0.05f);
@@ -1531,6 +1670,12 @@ namespace ExtremeRagdoll
                                 Log("IMP_CONTACT synth=com");
                         }
                     }
+                }
+
+                if (!ER_Math.IsFinite(in contact))
+                {
+                    contact = default;
+                    haveContact = false;
                 }
 
                 // Do NOT early-return here: ent1 (COM) and skel1 don't need contact.
@@ -1559,6 +1704,7 @@ namespace ExtremeRagdoll
                             float extra = want - side;
                             if (extra > 0f) { impW.x += away.x * extra; impW.y += away.y * extra; }
                             ClampWorldUp(ref impW);                   // respect up cone
+                            CapMagnitude(ref impW, MaxWorldImpulse);
                         }
                     }
                     catch { }
@@ -1574,16 +1720,11 @@ namespace ExtremeRagdoll
                 if (!skApis)
                 {
                     allowSkeletonNow = false;
-                    // throttle noise
-                    float now = TimeNow();
-                    if (now - _lastNoSkNote > 1.5f)
-                    {
-                        _lastNoSkNote = now;
-                        Log("IMPULSE_NOTE: no skeleton API bound");
-                        Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
-                    }
+                    // quiet: we’ll push through entity routes after resolving ent from skel
                 }
-                bool aabbOk = hasEnt && AabbSane(ent);
+                // recompute if entity became invalid after earlier checks
+                if (hasEnt && !aabbOk)
+                    aabbOk = TryGetSaneAabb(ent, out bboxMin, out bboxMax);
                 try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
                 catch { ragActive = ragActive || skel != null; }
                 if (hasEnt && !dynOk && ragActive && aabbOk && ER_Config.DebugLogging)
@@ -1609,8 +1750,8 @@ namespace ExtremeRagdoll
                 {
                     try
                     {
-                        var mn = ent.GetPhysicsBoundingBoxMin();
-                        var mx = ent.GetPhysicsBoundingBoxMax();
+                        var mn = bboxMin;
+                        var mx = bboxMax;
                         var c = (mn + mx) * 0.5f;
                         var half = mx - c;
                         var r2 = half.LengthSquared;
@@ -2131,7 +2272,7 @@ namespace ExtremeRagdoll
 
                 if (ER_Config.DebugLogging)
                 {
-                    Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={(hasEnt && AabbSane(ent))} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
+                    Log($"IMPULSE_CTX hasEnt={hasEnt} haveContact={haveContact} entDyn={(hasEnt && LooksDynamic(ent))} entAabb={aabbOk} sk2={(_dSk2 != null || _sk2 != null)} sk1={(_dSk1 != null || _sk1 != null)}");
                     try
                     {
                         if (hasEnt && dynOk) // AABB logging only when dynamic

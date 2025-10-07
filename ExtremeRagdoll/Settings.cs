@@ -264,5 +264,15 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow ent1(world) fallback when ent2 unavailable", Order = 145, RequireRestart = false)]
         public bool AllowEnt1WorldFallback { get; set; } = true;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("World Impulse Cap", 200f, 1800f, "0.0",
+            Order = 146, RequireRestart = false)]
+        public float WorldImpulseCap { get; set; } = 1200f;
+
+        [SettingPropertyGroup("Advanced")]
+        [SettingPropertyFloatingInteger("Local Impulse Cap", 200f, 1800f, "0.0",
+            Order = 147, RequireRestart = false)]
+        public float LocalImpulseCap { get; set; } = 1200f;
     }
 }

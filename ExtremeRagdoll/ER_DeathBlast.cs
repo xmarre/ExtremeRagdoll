@@ -1032,8 +1032,8 @@ namespace ExtremeRagdoll
                 ER_ImpulseRouter.ResetUnsafeState();
                 _missionRouterResetDone = true;
             }
-            if (IsPausedFast()) return;
             ER_ImpulseRouter.Tick();
+            if (IsPausedFast()) return;
             float now = mission.CurrentTime;
             TickCorpseQueue(now);
             // Gentle ramp after UI resume
