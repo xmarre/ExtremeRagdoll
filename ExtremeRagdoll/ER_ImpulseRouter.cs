@@ -23,6 +23,14 @@ namespace ExtremeRagdoll
     {
         private const float ContactTinySqThreshold = ER_Math.ContactTinySq;
         private const float ImpulseTinySqThreshold = ER_Math.ImpulseTinySq;
+        // absolute safety caps to stop “teleport” speeds even if config is wild
+        private const float MaxWorldImpulse = 1800f;
+        private const float MaxLocalImpulse = 1800f;
+        private const float Ent2WarmupSeconds = 0.12f;
+        // drip-feed window for delayed ent2 when the body is still kinematic
+        private const float PendingLife = 0.40f;
+        private const int PendingBursts = 3;
+        private const float BurstScale = 1f / PendingBursts;
         private static bool _ensured;
         private static readonly object _ensureLock = new object();
         private static bool _ent1Unsafe, _ent2Unsafe, _ent3Unsafe, _sk1Unsafe, _sk2Unsafe;
@@ -50,12 +58,24 @@ namespace ExtremeRagdoll
         // AV throttling state: indexes 1..5 map to routes.
         private static readonly float[] _disableUntil = new float[6];
         private static readonly int[] _avCount = new int[6];
-        private const float Ent2WarmupSeconds = 0.0f;
         private sealed class Rag
         {
             public float t;
             public int root = -1;
         }
+
+        private struct Pending
+        {
+            public GameEntity ent;
+            public Skeleton sk;
+            public Vec3 wImp;
+            public Vec3 wPos;
+            public float expires;
+            public int remaining;
+        }
+
+        private static readonly ConcurrentQueue<Pending> _pending = new ConcurrentQueue<Pending>();
+        private static readonly List<Pending> _carry = new List<Pending>(64);
 
         private static readonly ConditionalWeakTable<Skeleton, Rag> _rag = new ConditionalWeakTable<Skeleton, Rag>();
         private static readonly ConcurrentDictionary<Type, MethodInfo> _boneCountCache = new ConcurrentDictionary<Type, MethodInfo>();
@@ -75,6 +95,10 @@ namespace ExtremeRagdoll
             _skCandLogCount = 0;
             _bindLogged = false;
             _sk1Name = _sk2Name = _ent1Name = _ent2Name = _ent3Name = null;
+            while (_pending.TryDequeue(out _))
+            {
+            }
+            _carry.Clear();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -160,7 +184,8 @@ namespace ExtremeRagdoll
                     continue;
 
                 var name = asm.FullName ?? asm.GetName().Name ?? string.Empty;
-                if (name.StartsWith("TaleWorlds.", StringComparison.Ordinal) ||
+                // Be strict: only Engine + our mod. Avoid Starter.Library noise.
+                if (name.StartsWith("TaleWorlds.Engine", StringComparison.Ordinal) ||
                     name.IndexOf("ExtremeRagdoll", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     preferred.Add(asm);
@@ -466,6 +491,75 @@ namespace ExtremeRagdoll
             return Mission.Current?.CurrentTime ?? unchecked((uint)Environment.TickCount) * 0.001f;
         }
 
+        // call this from your MissionBehavior.OnMissionTick()
+        internal static void Tick()
+        {
+            if (_pending.IsEmpty)
+                return;
+
+            _carry.Clear();
+            float now = TimeNow();
+            while (_pending.TryDequeue(out var p))
+            {
+                if (p.ent == null || now > p.expires)
+                    continue;
+
+                bool dyn = LooksDynamic(p.ent);
+                bool warm = RagWarm(p.sk, Ent2WarmupSeconds);
+                if (!dyn && !warm)
+                {
+                    _carry.Add(p);
+                    continue;
+                }
+
+                var imp = p.wImp;
+                CapMagnitude(ref imp, MaxWorldImpulse);
+                if (!TryWorldToLocalSafe(p.ent, imp, p.wPos, out var impL, out var posL))
+                {
+                    _carry.Add(p);
+                    continue;
+                }
+                if (!ER_Math.IsFinite(in impL) || !ER_Math.IsFinite(in posL))
+                {
+                    _carry.Add(p);
+                    continue;
+                }
+
+                ClampLocalUp(ref impL);
+                CapMagnitude(ref impL, MaxLocalImpulse);
+                impL *= BurstScale;
+                if (impL.LengthSquared < ImpulseTinySqThreshold)
+                {
+                    if (p.remaining > 0 && now <= p.expires)
+                        _carry.Add(p);
+                    continue;
+                }
+
+                WakeDynamicBody(p.ent);
+                try
+                {
+                    if (_dEnt2Inst != null)
+                        _dEnt2Inst(p.ent, impL, posL);
+                    else if (_ent2Inst != null)
+                        _ent2Inst.Invoke(p.ent, new object[] { impL, posL });
+                    else if (_dEnt2 != null)
+                        _dEnt2(p.ent, impL, posL);
+                    else if (_ent2 != null)
+                        _ent2.Invoke(null, new object[] { p.ent, impL, posL });
+                }
+                catch
+                {
+                }
+
+                p.remaining--;
+                if (p.remaining > 0 && now <= p.expires)
+                    _carry.Add(p);
+            }
+
+            for (int i = 0; i < _carry.Count; i++)
+                _pending.Enqueue(_carry[i]);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WakeDynamicBody(GameEntity ent)
         {
@@ -522,6 +616,22 @@ namespace ExtremeRagdoll
             if (!IsValidVec(in v))
                 return;
             ClampUpCone(ref v, ER_Config.CorpseLaunchMinUpFraction, ER_Config.CorpseLaunchMaxUpFraction);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void CapMagnitude(ref Vec3 v, float cap)
+        {
+            if (!IsValidVec(in v) || cap <= 0f)
+                return;
+            float l2 = v.LengthSquared;
+            float c2 = cap * cap;
+            if (l2 > c2)
+            {
+                float s = cap / MathF.Sqrt(l2);
+                v.x *= s;
+                v.y *= s;
+                v.z *= s;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1283,6 +1393,7 @@ namespace ExtremeRagdoll
                     Log("IMPULSE_SKIP invalid impulse");
                     return false;
                 }
+                CapMagnitude(ref impW, MaxWorldImpulse);
                 ClampWorldUp(ref impW);
                 float l2 = impW.LengthSquared;
                 if (l2 < ImpulseTinySqThreshold)
@@ -1472,7 +1583,6 @@ namespace ExtremeRagdoll
                         Log("IMPULSE_NOTE: ext ent2 will be gated by dyn/AABB instead");
                     }
                 }
-                bool requireRagdollForEnt2 = skApis; // only warmup-gate if skeleton routes exist
                 bool aabbOk = hasEnt && AabbSane(ent);
                 try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
                 catch { ragActive = ragActive || skel != null; }
@@ -1542,6 +1652,7 @@ namespace ExtremeRagdoll
                         if (okLocal)
                         {
                             ClampLocalUp(ref impL);
+                            CapMagnitude(ref impL, MaxLocalImpulse);
                             if (impL.LengthSquared < ImpulseTinySqThreshold)
                                 okLocal = false;
                         }
@@ -1583,6 +1694,7 @@ namespace ExtremeRagdoll
                     {
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared >= ImpulseTinySqThreshold)
                         {
                             if (_dSk1 != null)
@@ -1676,6 +1788,7 @@ namespace ExtremeRagdoll
                             float spin = 0.05f * MathF.Sqrt(MathF.Max(impW.LengthSquared, 1e-12f));
                             impW += tangent * spin;
                             ClampWorldUp(ref impW);
+                            CapMagnitude(ref impW, MaxWorldImpulse);
                         }
                     }
                     catch { }
@@ -1692,6 +1805,7 @@ namespace ExtremeRagdoll
                     {
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared <= ImpulseTinySqThreshold)
                             return false;
                         if (_dEnt3Inst != null) _dEnt3Inst(ent, impWc, contact, false);
@@ -1712,6 +1826,7 @@ namespace ExtremeRagdoll
                     {
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared <= ImpulseTinySqThreshold)
                             return false;
                         if (_dEnt3 != null)
@@ -1732,15 +1847,25 @@ namespace ExtremeRagdoll
                 {
                     try
                     {
-                        if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
+                        if (!dynOk && !RagWarm(skel, Ent2WarmupSeconds))
                         {
                             if (ER_Config.DebugLogging)
                                 Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
-                            goto SkipInstEnt2;
+                            _pending.Enqueue(new Pending
+                            {
+                                ent = ent,
+                                sk = skel,
+                                wImp = impW,
+                                wPos = contact,
+                                expires = TimeNow() + PendingLife,
+                                remaining = PendingBursts
+                            });
+                            return true;
                         }
 
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared <= ImpulseTinySqThreshold)
                         {
                             Log("IMPULSE_SKIP ent2: tiny after world clamp");
@@ -1800,6 +1925,7 @@ namespace ExtremeRagdoll
 
                             // keep impulse inside the local up cone, then cap magnitude
                             ClampLocalUp(ref impL);
+                            CapMagnitude(ref impL, MaxLocalImpulse);
                             float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                             if (maxMag > 0f)
                             {
@@ -1839,15 +1965,25 @@ namespace ExtremeRagdoll
                 {
                     try
                     {
-                        if (requireRagdollForEnt2 && !RagWarm(skel, Ent2WarmupSeconds))
+                        if (!dynOk && !RagWarm(skel, Ent2WarmupSeconds))
                         {
                             if (ER_Config.DebugLogging)
                                 Log($"ENT2_DEFER: warm={RagWarmSeconds(skel):0.000}s");
-                            goto SkipExtEnt2;
+                            _pending.Enqueue(new Pending
+                            {
+                                ent = ent,
+                                sk = skel,
+                                wImp = impW,
+                                wPos = contact,
+                                expires = TimeNow() + PendingLife,
+                                remaining = PendingBursts
+                            });
+                            return true;
                         }
 
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared <= ImpulseTinySqThreshold)
                         {
                             Log("IMPULSE_SKIP ent2: tiny after world clamp");
@@ -1900,6 +2036,7 @@ namespace ExtremeRagdoll
 
                             // keep impulse inside the local up cone, then cap magnitude
                             ClampLocalUp(ref impL);
+                            CapMagnitude(ref impL, MaxLocalImpulse);
                             float maxMag = MathF.Max(0f, ER_Config.CorpseImpulseHardCap);
                             if (maxMag > 0f)
                             {
@@ -1942,6 +2079,7 @@ namespace ExtremeRagdoll
                     {
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared > ImpulseTinySqThreshold)
                         {
                             if (_dEnt3 != null)
@@ -1975,6 +2113,7 @@ namespace ExtremeRagdoll
                     {
                         var impWc = impW;
                         ClampWorldUp(ref impWc);
+                        CapMagnitude(ref impWc, MaxWorldImpulse);
                         if (impWc.LengthSquared > ImpulseTinySqThreshold)
                         {
                             if (_dEnt1 != null) _dEnt1(ent, impWc);
