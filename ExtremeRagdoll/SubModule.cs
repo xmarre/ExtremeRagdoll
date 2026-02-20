@@ -26,8 +26,7 @@ namespace ExtremeRagdoll
             try
             {
                 _ = Settings.Instance; // ensure discovery at main menu when available
-                Settings.Instance.DebugLogging = true;
-                ER_Log.Info("Debug logging forced ON at menu");
+                ER_Log.Info("Settings initialized at menu");
             }
             catch
             {
@@ -92,7 +91,7 @@ namespace ExtremeRagdoll
 
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
-            ER_Amplify_RegisterBlowPatch._pending.Clear();
+            ER_Amplify_RegisterBlowPatch.ClearPending();
             mission.AddMissionBehavior(new ER_DeathBlastBehavior());
             if (!_adapted)
             {
