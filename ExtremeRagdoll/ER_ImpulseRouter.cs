@@ -570,7 +570,16 @@ namespace ExtremeRagdoll
 
                 bool dyn = LooksDynamic(p.ent);
                 bool warm = RagWarm(p.sk, Ent2WarmupSeconds);
-                if (!dyn && !warm)
+                bool rag = false;
+                try { rag = p.sk != null && ER_DeathBlastBehavior.IsRagdollActiveFast(p.sk); } catch { }
+
+                if (rag && warm && !dyn)
+                {
+                    try { WakeDynamicBody(p.ent); } catch { }
+                    try { dyn = LooksDynamic(p.ent); } catch { dyn = false; }
+                }
+
+                if (!(rag && warm && dyn))
                 {
                     _carry.Add(p);
                     continue;
@@ -1565,20 +1574,15 @@ namespace ExtremeRagdoll
                 }
 
                 bool wasRag = false;
-                try { wasRag = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); }
-                catch { }
+                try { wasRag = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { }
                 bool ragActive = wasRag;
                 if (!wasRag)
                     MarkRagStart(skel);
-                try
-                {
-                    skel?.ActivateRagdoll();
-                    ragActive = (ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive || skel != null);
-                }
-                catch
-                {
-                    ragActive = ragActive || skel != null;
-                }
+
+                // Do NOT assume ragdoll just because we have a Skeleton reference.
+                // Applying impulses to a non-ragdolled skeleton can slide a frozen pose through the world.
+                try { skel?.ActivateRagdoll(); } catch { }
+                try { ragActive = ragActive || ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { }
                 if (ragActive)
                 {
                     try { skel?.ForceUpdateBoneFrames(); } catch { }
@@ -1714,7 +1718,7 @@ namespace ExtremeRagdoll
                 bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
                 bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
                 bool skeletonAvailable = skel != null;
-                bool allowSkeletonNow = skeletonAvailable && (!forceEntity || allowFallbackWhenInvalid);
+                bool allowSkeletonNow = skeletonAvailable && ragActive && (!forceEntity || allowFallbackWhenInvalid);
                 bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
                 bool extEnt2Available = (_dEnt2 != null || _ent2 != null); // don’t blanket block; gate below
                 if (!skApis)
@@ -1726,7 +1730,7 @@ namespace ExtremeRagdoll
                 if (hasEnt && !aabbOk)
                     aabbOk = TryGetSaneAabb(ent, out bboxMin, out bboxMax);
                 try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel) || ragActive; }
-                catch { ragActive = ragActive || skel != null; }
+                catch { /* keep ragActive as-is */ }
                 if (hasEnt && !dynOk && ragActive && aabbOk && ER_Config.DebugLogging)
                 {
                     try { LogNoiseOncePer(1.0f, "DYN_UNKNOWN: proceeding due to ragActive/AABB"); }
