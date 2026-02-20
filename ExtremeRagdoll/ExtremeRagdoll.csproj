@@ -13,6 +13,8 @@
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
     <TargetFrameworkProfile />
+    <!-- Ensure C# 8.0 even when building Debug|AnyCPU in Visual Studio. -->
+    <LangVersion Condition="'$(LangVersion)' == ''">8.0</LangVersion>
 
     <!--
       Bannerlord reference path handling
@@ -21,6 +23,7 @@
     -->
     <BannerlordGameDir Condition="'$(BannerlordGameDir)' == ''">$(BANNERLORD_GAME_DIR)</BannerlordGameDir>
     <BannerlordBinPath Condition="'$(BannerlordBinPath)' == ''">$(BANNERLORD_BIN_PATH)</BannerlordBinPath>
+    <BannerlordModulesDir Condition="'$(BannerlordModulesDir)' == ''">$(BANNERLORD_MODULES_DIR)</BannerlordModulesDir>
     <BannerlordBinPath Condition="'$(BannerlordBinPath)' == '' and '$(BannerlordGameDir)' != ''">$(BannerlordGameDir)\bin\Win64_Shipping_Client</BannerlordBinPath>
     <BannerlordModulesDir Condition="'$(BannerlordModulesDir)' == '' and '$(BannerlordGameDir)' != ''">$(BannerlordGameDir)\Modules</BannerlordModulesDir>
   </PropertyGroup>
