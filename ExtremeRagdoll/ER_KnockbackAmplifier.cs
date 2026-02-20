@@ -486,6 +486,7 @@ namespace ExtremeRagdoll
 
                 var parameters = candidate.GetParameters();
                 if (parameters.Length < 2) continue;
+                if (parameters[0].IsIn) continue;
 
                 var p0 = parameters[0].ParameterType;
                 if (p0 != blow && !(p0.IsByRef && p0.GetElementType() == blow)) continue;
@@ -691,7 +692,7 @@ namespace ExtremeRagdoll
                     // Safe lethal boost (low) to avoid vertical pop while impulses are validated
                     float mult    = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
                     float desired = (6000f + blow.InflictedDamage * 150f + missileSpeed * 4f) * mult;
-                    desired       = Cap(desired, ER_Config.MaxBlowBaseMagnitude, 20000f);
+                    desired       = Cap(desired, ER_Config.MaxBlowBaseMagnitude, 6000f);
                     if (desired > 0f && !float.IsNaN(desired) && !float.IsInfinity(desired) && blow.BaseMagnitude < desired)
                     {
                         if (ER_Config.DebugLogging)
@@ -700,7 +701,7 @@ namespace ExtremeRagdoll
                             if (nowLog - _lastAnyLog > 0.5f)
                             {
                                 _lastAnyLog = nowLog;
-                                ER_Log.Info($"[ER] LethalBoost -> {desired:0}");
+                                ER_Log.Info($"[ER] LethalBoost(clamped) -> {desired:0}");
                             }
                         }
                         blow.BaseMagnitude = desired;
@@ -710,9 +711,30 @@ namespace ExtremeRagdoll
 
             if (lethal)
             {
-                // Let physics impulses drive motion; keep ragdoll/no-sound only.
-                blow.BlowFlag &= ~BlowFlags.KnockBack;
-                blow.BlowFlag |= BlowFlags.KnockDown | BlowFlags.NoSound;
+                // IMPORTANT: keep the engine's ragdoll transition intact.
+                // If we fully zero out BaseMagnitude / remove KnockBack, Bannerlord can keep the corpse in an animated
+                // (frozen) pose. We clamp engine magnitude to a modest range and let our own CorpseLaunch impulse
+                // provide the *real* punch a few frames later.
+
+                blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound;
+
+                // lethal: keep direction planar; avoid any upward bias
+                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, 1f, 0f);
+                lethalDir.z = 0f;
+                lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
+                blow.SwingDirection = lethalDir;
+
+                // ensure non-zero magnitude so the engine actually switches into ragdoll
+                const float engineMin = 1200f;
+                const float engineMax = 6000f;
+                float baseMag = blow.BaseMagnitude;
+                if (float.IsNaN(baseMag) || float.IsInfinity(baseMag) || baseMag < 0f)
+                    baseMag = 0f;
+                if (baseMag < engineMin)
+                    baseMag = engineMin;
+                if (baseMag > engineMax)
+                    baseMag = engineMax;
+                blow.BaseMagnitude = baseMag;
 
                 if (ER_Config.DebugLogging)
                 {
@@ -720,17 +742,10 @@ namespace ExtremeRagdoll
                     if (nowLog - _lastAnyLog > 0.5f)
                     {
                         _lastAnyLog = nowLog;
-                        ER_Log.Info("[ER] LethalKeep: engine KB stripped");
+                        ER_Log.Info($"[ER] LethalKeep: engine ragdoll mag={baseMag:0}");
                     }
                 }
 
-                // Let impulses drive motion; neutralize engine KB
-                // lethal: keep corpse impulses flat; avoid any upward bias
-                var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, 1f, 0f);
-                lethalDir.z = 0f;
-                blow.BaseMagnitude = 0f;
-                lethalDir = ER_DeathBlastBehavior.FinalizeImpulseDir(lethalDir);
-                blow.SwingDirection = lethalDir;
                 // ensure pending corpse-launch uses the same (flattened) direction
                 dir = lethalDir;
             }
