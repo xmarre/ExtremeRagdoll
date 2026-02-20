@@ -22,6 +22,7 @@
     <BannerlordGameDir Condition="'$(BannerlordGameDir)' == ''">$(BANNERLORD_GAME_DIR)</BannerlordGameDir>
     <BannerlordBinPath Condition="'$(BannerlordBinPath)' == ''">$(BANNERLORD_BIN_PATH)</BannerlordBinPath>
     <BannerlordBinPath Condition="'$(BannerlordBinPath)' == '' and '$(BannerlordGameDir)' != ''">$(BannerlordGameDir)\bin\Win64_Shipping_Client</BannerlordBinPath>
+    <BannerlordModulesDir Condition="'$(BannerlordModulesDir)' == '' and '$(BannerlordGameDir)' != ''">$(BannerlordGameDir)\Modules</BannerlordModulesDir>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -47,7 +48,7 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <DebugType>full</DebugType>
     <PlatformTarget>x64</PlatformTarget>
-    <LangVersion>7.3</LangVersion>
+    <LangVersion>8.0</LangVersion>
     <ErrorReport>prompt</ErrorReport>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
@@ -56,12 +57,13 @@
     <Optimize>true</Optimize>
     <DebugType>pdbonly</DebugType>
     <PlatformTarget>x64</PlatformTarget>
-    <LangVersion>7.3</LangVersion>
+    <LangVersion>8.0</LangVersion>
     <ErrorReport>prompt</ErrorReport>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="0Harmony">
-      <HintPath>$(BannerlordBinPath)\0Harmony.dll</HintPath>
+      <HintPath Condition="Exists('$(BannerlordModulesDir)\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll')">$(BannerlordModulesDir)\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll</HintPath>
+      <HintPath Condition="!Exists('$(BannerlordModulesDir)\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll')">$(BannerlordBinPath)\0Harmony.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="System" />
