@@ -443,8 +443,18 @@ namespace ExtremeRagdoll
         [HarmonyPrepare]
         static bool Prepare()
         {
-            var method = TargetMethod();
-            if (method == null)
+            var targets = new List<MethodBase>();
+            try
+            {
+                foreach (var m in TargetMethods())
+                    targets.Add(m);
+            }
+            catch
+            {
+                // ignore
+            }
+
+            if (targets.Count == 0)
             {
                 foreach (var cand in AccessTools.GetDeclaredMethods(typeof(Agent)))
                 {
@@ -452,23 +462,23 @@ namespace ExtremeRagdoll
                     var sig = string.Join(", ", Array.ConvertAll(cand.GetParameters(), p => p.ParameterType.FullName));
                     ER_Log.Info("RegisterBlow overload: (" + sig + ")");
                 }
-                ER_Log.Error("Harmony target not found: Agent.RegisterBlow with byref AttackCollisionData");
+                ER_Log.Error("Harmony target not found: Agent.RegisterBlow (expected Blow + AttackCollisionData / ref AttackCollisionData)");
                 return false;
             }
 
-            ER_Log.Info("Patching: " + method);
+            foreach (var m in targets)
+                ER_Log.Info("Patching: " + m);
+
             return true;
         }
 
-        [HarmonyTargetMethod]
-        private static MethodBase TargetMethod()
+        [HarmonyTargetMethods]
+        private static IEnumerable<MethodBase> TargetMethods()
         {
             var agent = typeof(Agent);
             var want = typeof(AttackCollisionData);
-            var byRef = want.MakeByRefType();
-
-            var method = AccessTools.Method(agent, nameof(Agent.RegisterBlow), new[] { typeof(Blow), byRef });
-            if (method != null) return method;
+            var wantByRef = want.MakeByRefType();
+            var blow = typeof(Blow);
 
             foreach (var candidate in AccessTools.GetDeclaredMethods(agent))
             {
@@ -476,16 +486,68 @@ namespace ExtremeRagdoll
 
                 var parameters = candidate.GetParameters();
                 if (parameters.Length < 2) continue;
-                if (parameters[0].ParameterType != typeof(Blow)) continue;
 
-                var second = parameters[1].ParameterType;
-                if (!second.IsByRef) continue;
-                if (second.GetElementType() != want) continue;
+                var p0 = parameters[0].ParameterType;
+                if (p0 != blow && !(p0.IsByRef && p0.GetElementType() == blow)) continue;
 
-                return candidate;
+                bool hasAcd = false;
+                for (int i = 1; i < parameters.Length; i++)
+                {
+                    var pt = parameters[i].ParameterType;
+                    if (pt == want || pt == wantByRef || (pt.IsByRef && pt.GetElementType() == want))
+                    {
+                        hasAcd = true;
+                        break;
+                    }
+                }
+                if (!hasAcd) continue;
+
+                yield return candidate;
+            }
+        }
+
+        private static bool TryExtractAttackCollisionData(object[] args, out AttackCollisionData data)
+        {
+            data = default;
+            if (args == null) return false;
+
+            for (int i = 0; i < args.Length; i++)
+            {
+                var a = args[i];
+                if (a == null) continue;
+
+                if (a is AttackCollisionData acd)
+                {
+                    data = acd;
+                    return true;
+                }
+
+                // Harmony can wrap ref structs in StrongBox<T> / similar; try common "Value" carrier pattern.
+                try
+                {
+                    var t = a.GetType();
+
+                    var f = t.GetField("Value", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                    if (f != null && f.FieldType == typeof(AttackCollisionData))
+                    {
+                        data = (AttackCollisionData)f.GetValue(a);
+                        return true;
+                    }
+
+                    var p = t.GetProperty("Value", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                    if (p != null && p.PropertyType == typeof(AttackCollisionData))
+                    {
+                        data = (AttackCollisionData)p.GetValue(a, null);
+                        return true;
+                    }
+                }
+                catch
+                {
+                    // ignore
+                }
             }
 
-            return null;
+            return false;
         }
 
         [HarmonyPrefix]
@@ -494,7 +556,7 @@ namespace ExtremeRagdoll
         private static void Prefix(
             Agent __instance,
             [HarmonyArgument(0)] ref Blow blow,
-            [HarmonyArgument(1)] ref AttackCollisionData attackCollisionData)
+            object[] __args)
         {
             if (__instance == null) return;
 
@@ -514,8 +576,11 @@ namespace ExtremeRagdoll
 
             // Zero-Damage-Spells können tödlich sein → nur aussteigen, wenn auch keine Projektil-Geschwindigkeit.
             // (ResolveMissileSpeed ist dank gecachtem Reflection-Zugriff günstig.)
+            AttackCollisionData acd = default;
+            bool hasAcd = TryExtractAttackCollisionData(__args, out acd);
+
             float missileSpeed = 0f;
-            try { missileSpeed = ResolveMissileSpeed(attackCollisionData); }
+            try { missileSpeed = hasAcd ? ResolveMissileSpeed(acd) : 0f; }
             catch { missileSpeed = 0f; }
             if (float.IsNaN(missileSpeed) || float.IsInfinity(missileSpeed)) missileSpeed = 0f;
             float minPushSpeed = ER_Config.MinMissileSpeedForPush;
@@ -525,7 +590,7 @@ namespace ExtremeRagdoll
             bool lethal = hp - blow.InflictedDamage <= 0f;
             bool missileBlocked = !lethal && missileSpeed > 0f && blow.InflictedDamage <= 0f;
             bool allowBlockedPush = ER_Config.BlockedMissilesCanPush;
-            bool isExplosion = GuessExplosion(attackCollisionData, blow, missileSpeed);
+            bool isExplosion = hasAcd && GuessExplosion(acd, blow, missileSpeed);
 
             // bail gate: only truly trivial taps
             if (!lethal && blow.InflictedDamage <= 0f && missileSpeed <= 0f && blow.BaseMagnitude <= 1f)
@@ -544,19 +609,22 @@ namespace ExtremeRagdoll
 
             Vec3 dir = fallbackDir;
             Vec3 missileV = Vec3.Zero;
-            try
+            if (hasAcd)
             {
-                object boxed = attackCollisionData;
-                object raw = MissileVelocityProperty?.GetValue(boxed, null)
-                             ?? MissileVelocityField?.GetValue(boxed)
-                             ?? VelocityProperty?.GetValue(boxed, null)
-                             ?? VelocityField?.GetValue(boxed);
-                if (raw is Vec3 vec && ER_Math.IsFinite(in vec))
-                    missileV = vec;
-            }
-            catch
-            {
-                missileV = Vec3.Zero;
+                try
+                {
+                    object boxed = acd;
+                    object raw = MissileVelocityProperty?.GetValue(boxed, null)
+                                 ?? MissileVelocityField?.GetValue(boxed)
+                                 ?? VelocityProperty?.GetValue(boxed, null)
+                                 ?? VelocityField?.GetValue(boxed);
+                    if (raw is Vec3 vec && ER_Math.IsFinite(in vec))
+                        missileV = vec;
+                }
+                catch
+                {
+                    missileV = Vec3.Zero;
+                }
             }
 
             if (missileSpeed > 0f && missileV.LengthSquared > 1e-6f)
