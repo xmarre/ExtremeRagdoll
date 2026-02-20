@@ -915,10 +915,17 @@ namespace ExtremeRagdoll
                                         }
 
                                         bool ok = false;
-                                        if (skWake != null)
-                                            ok = ER_DeathBlastBehavior.TryImpulseDirect(null, skWake, flat * impMag, c, __instance.Index);
-                                        if (!ok && entWake != null)
-                                            ok = ER_DeathBlastBehavior.TryImpulseDirect(entWake, skWake, flat * impMag, c, __instance.Index);
+                                        bool ragNow = false;
+                                        try { ragNow = skWake != null && ER_DeathBlastBehavior.IsRagdollActiveFast(skWake); }
+                                        catch { ragNow = false; }
+
+                                        if (ragNow)
+                                        {
+                                            if (skWake != null)
+                                                ok = ER_DeathBlastBehavior.TryImpulseDirect(null, skWake, flat * impMag, c, __instance.Index, timeNow);
+                                            if (!ok && entWake != null)
+                                                ok = ER_DeathBlastBehavior.TryImpulseDirect(entWake, skWake, flat * impMag, c, __instance.Index, timeNow);
+                                        }
                                         if (ok && ER_Config.DebugLogging)
                                         {
                                             float nowLog = timeNow;
