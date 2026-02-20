@@ -139,21 +139,7 @@ namespace ExtremeRagdoll
             try
             {
                 var t = sk.GetType();
-                Func<object, bool> eval = _ragdollStateCache.GetOrAdd(t, type =>
-                {
-                    var pi = type.GetProperty("IsRagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                             ?? type.GetProperty("IsRagdollModeActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
-                             ?? type.GetProperty("RagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-                    if (pi == null)
-                        return _ => false;
-
-                    return obj =>
-                    {
-                        try { return (bool)pi.GetValue(obj); }
-                        catch { return false; }
-                    };
-                });
+                Func<object, bool> eval = _ragdollStateCache.GetOrAdd(t, CreateRagdollStateEvaluator);
                 return eval?.Invoke(sk) ?? false;
             }
             catch
@@ -292,6 +278,26 @@ namespace ExtremeRagdoll
 
         private static Func<object, bool> CreateRagdollStateEvaluator(Type type)
         {
+            static bool IsActiveRagdollLabel(string label)
+            {
+                if (string.IsNullOrEmpty(label))
+                    return false;
+
+                bool hasRagdoll = label.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (!hasRagdoll)
+                    return false;
+
+                if (label.IndexOf("inactive", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    label.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    label.IndexOf("off", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;
+
+                return label.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       label.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       label.IndexOf("on", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       label.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+
             if (type == null)
                 return _ => false;
             MethodInfo getter = null;
@@ -301,7 +307,32 @@ namespace ExtremeRagdoll
             }
             catch { }
             if (getter == null)
+            {
+                var pi = type.GetProperty("IsRagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                         ?? type.GetProperty("IsRagdollModeActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                         ?? type.GetProperty("RagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (pi != null && pi.PropertyType == typeof(bool))
+                {
+                    return target =>
+                    {
+                        try { return (bool)pi.GetValue(target, null); }
+                        catch { return false; }
+                    };
+                }
+
+                var fi = type.GetField("IsRagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                         ?? type.GetField("RagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (fi != null && fi.FieldType == typeof(bool))
+                {
+                    return target =>
+                    {
+                        try { return (bool)fi.GetValue(target); }
+                        catch { return false; }
+                    };
+                }
+
                 return _ => false;
+            }
 
             object activeValue = null;
             bool activeValueResolved = false;
@@ -321,9 +352,7 @@ namespace ExtremeRagdoll
                         {
                             foreach (var name in Enum.GetNames(stType))
                             {
-                                if (name.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    name.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                    name.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0)
+                                if (IsActiveRagdollLabel(name))
                                 {
                                     try { activeValue = Enum.Parse(stType, name); }
                                     catch { activeValue = null; }
@@ -335,14 +364,10 @@ namespace ExtremeRagdoll
                         if (activeValue != null)
                             return Equals(state, activeValue);
                         var enumText = state.ToString();
-                        return enumText.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                               enumText.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                               enumText.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0;
+                        return IsActiveRagdollLabel(enumText);
                     }
                     var text = state.ToString();
-                    return text.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           text.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           text.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0;
+                    return IsActiveRagdollLabel(text);
                 }
                 catch
                 {
@@ -353,7 +378,7 @@ namespace ExtremeRagdoll
 
         // Small wrapper so other patches can nudge immediately via the router.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static bool TryImpulseDirect(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos, int agentId = -1)
+        internal static bool TryImpulseDirect(GameEntity ent, Skeleton skel, in Vec3 worldImpulse, in Vec3 worldPos, int agentId = -1, float timeNow = float.NaN)
         {
             if ((ent == null && skel == null) || !ER_Math.IsFinite(in worldImpulse) || !ER_Math.IsFinite(in worldPos))
                 return false;
@@ -386,7 +411,9 @@ namespace ExtremeRagdoll
 
                         if (rag && !dyn)
                         {
-                            float now = behavior.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
+                            float now = (!float.IsNaN(timeNow) && !float.IsInfinity(timeNow))
+                                ? timeNow
+                                : (behavior.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f);
                             float delay = ApplyDelayJitter(ER_Config.CorpseLaunchRetryDelay);
                             behavior.EnqueueCorpseLaunch(agent, worldPos, worldImpulse, 0, now + delay);
                         }
