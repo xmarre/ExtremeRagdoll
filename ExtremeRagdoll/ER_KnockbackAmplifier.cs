@@ -324,6 +324,47 @@ namespace ExtremeRagdoll
         private static FieldInfo _weaponRecordWeaponClassField;
         private static PropertyInfo _weaponRecordWeaponClassProperty;
 
+        private static bool TryGetWeaponClassName(in Blow blow, out string name)
+        {
+            name = null;
+            try
+            {
+                object weaponRecord = blow.WeaponRecord;
+                if (weaponRecord == null) return false;
+
+                var recordType = weaponRecord.GetType();
+                const BindingFlags bind = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+                if (_weaponRecordWeaponClassField == null && _weaponRecordWeaponClassProperty == null)
+                {
+                    _weaponRecordWeaponClassField = recordType.GetField("WeaponClass", bind);
+                    _weaponRecordWeaponClassProperty = recordType.GetProperty("WeaponClass", bind);
+                }
+
+                object weaponClassObj = null;
+                if (_weaponRecordWeaponClassField != null)
+                    weaponClassObj = _weaponRecordWeaponClassField.GetValue(weaponRecord);
+                if (weaponClassObj == null && _weaponRecordWeaponClassProperty != null)
+                    weaponClassObj = _weaponRecordWeaponClassProperty.GetValue(weaponRecord, null);
+
+                if (weaponClassObj == null) return false;
+                name = weaponClassObj.ToString();
+                return !string.IsNullOrEmpty(name);
+            }
+            catch { return false; }
+        }
+
+        private static bool IsRangedWeaponClassName(string n)
+        {
+            if (string.IsNullOrEmpty(n)) return false;
+            // Bannerlord WeaponClass enum names commonly include these tokens
+            return n.IndexOf("Bow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   n.IndexOf("Crossbow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   n.IndexOf("Throw", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   n.IndexOf("Javelin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   n.IndexOf("Dagger", StringComparison.OrdinalIgnoreCase) >= 0 && n.IndexOf("Throw", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         private static float ResolveMissileSpeed(AttackCollisionData data)
         {
             try
@@ -415,6 +456,32 @@ namespace ExtremeRagdoll
             }
 
             return 0f;
+        }
+
+        private static bool TryResolveMissileVelocity(AttackCollisionData data, out Vec3 v)
+        {
+            v = Vec3.Zero;
+            try
+            {
+                object boxed = data;
+                object raw = null;
+                if (MissileVelocityField != null)
+                    raw = MissileVelocityField.GetValue(boxed);
+                if (raw == null && MissileVelocityProperty != null)
+                    raw = MissileVelocityProperty.GetValue(boxed, null);
+                if (raw == null && VelocityField != null)
+                    raw = VelocityField.GetValue(boxed);
+                if (raw == null && VelocityProperty != null)
+                    raw = VelocityProperty.GetValue(boxed, null);
+
+                if (raw is Vec3 vec && ER_Math.IsFinite(in vec))
+                {
+                    v = vec;
+                    return vec.LengthSquared > 1e-6f;
+                }
+            }
+            catch { }
+            return false;
         }
         private static float Cap(float value, float settingCap, float hardCap)
         {
@@ -615,6 +682,49 @@ namespace ExtremeRagdoll
             if (missileSpeed < minPushSpeed)
                 missileSpeed = 0f;
 
+            // Fallback #1: some builds return MissileSpeed=0 for arrows, but Velocity/MissileVelocity is present.
+            // If we can see a missile velocity vector, treat it as a missile so we never enter BigShove.
+            if (missileSpeed <= 0f && hasAcd)
+            {
+                try
+                {
+                    if (TryResolveMissileVelocity(acd, out var mv))
+                    {
+                        float mvLen = mv.Length;
+                        if (!float.IsNaN(mvLen) && !float.IsInfinity(mvLen) && mvLen > 1e-3f)
+                        {
+                            missileSpeed = (minPushSpeed > 0f) ? MathF.Max(minPushSpeed, mvLen) : mvLen;
+                            if (ER_Config.DebugLogging && timeNow - _lastAnyLog > 0.5f)
+                            {
+                                _lastAnyLog = timeNow;
+                                ER_Log.Info($"[ER] ForcedMissileFromVelocity -> {missileSpeed:0.0}");
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // IMPORTANT: on some builds/modpacks, AttackCollisionData.MissileSpeed resolves to 0 for arrows.
+            // If the weapon class is ranged, treat it as a missile anyway; otherwise the hit goes through BigShove
+            // and we end up forcing ~10k engine BaseMagnitude → fling/teleport.
+            if (missileSpeed <= 0f)
+            {
+                try
+                {
+                    if (TryGetWeaponClassName(in blow, out var wc) && IsRangedWeaponClassName(wc))
+                    {
+                        missileSpeed = (minPushSpeed > 0f) ? minPushSpeed : 1f;
+                        if (ER_Config.DebugLogging && timeNow - _lastAnyLog > 0.5f)
+                        {
+                            _lastAnyLog = timeNow;
+                            ER_Log.Info($"[ER] ForcedMissileFromWeaponClass wc={wc}");
+                        }
+                    }
+                }
+                catch { }
+            }
+
             bool lethal = hp - blow.InflictedDamage <= 0f;
             bool missileBlocked = !lethal && missileSpeed > 0f && blow.InflictedDamage <= 0f;
             bool allowBlockedPush = ER_Config.BlockedMissilesCanPush;
@@ -638,22 +748,7 @@ namespace ExtremeRagdoll
             Vec3 dir = fallbackDir;
             Vec3 missileV = Vec3.Zero;
             if (hasAcd)
-            {
-                try
-                {
-                    object boxed = acd;
-                    object raw = MissileVelocityProperty?.GetValue(boxed, null)
-                                 ?? MissileVelocityField?.GetValue(boxed)
-                                 ?? VelocityProperty?.GetValue(boxed, null)
-                                 ?? VelocityField?.GetValue(boxed);
-                    if (raw is Vec3 vec && ER_Math.IsFinite(in vec))
-                        missileV = vec;
-                }
-                catch
-                {
-                    missileV = Vec3.Zero;
-                }
-            }
+                TryResolveMissileVelocity(acd, out missileV);
 
             if (missileSpeed > 0f && missileV.LengthSquared > 1e-6f)
             {
@@ -778,7 +873,8 @@ namespace ExtremeRagdoll
 
                 // ensure non-zero magnitude so the engine actually switches into ragdoll
                 const float engineMin = 1200f;
-                const float engineMax = 6000f;
+                // Ranged lethals already have strong engine momentum; keep this low to avoid “teleport” pops.
+                float engineMax = (missileSpeed > 0f) ? 1800f : 6000f;
                 float baseMag = blow.BaseMagnitude;
                 if (float.IsNaN(baseMag) || float.IsInfinity(baseMag) || baseMag < 0f)
                     baseMag = 0f;
@@ -806,8 +902,9 @@ namespace ExtremeRagdoll
             {
                 if (missileSpeed > 0f && (!missileBlocked || allowBlockedPush))
                 {
-                    float floor = 3000f + missileSpeed * 25f;
-                    floor = Cap(floor, ER_Config.MaxBlowBaseMagnitude, 15000f);
+                    // Lower arrow floors drastically: prevents giant engine knockback that causes corpse “teleport”.
+                    float floor = 1200f + missileSpeed * 10f;
+                    floor = Cap(floor, ER_Config.MaxBlowBaseMagnitude, 4000f);
                     if (ER_Config.MaxNonLethalKnockback > 0f) floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
                     float origBase = blow.BaseMagnitude;
                     if (origBase + 500f < floor)

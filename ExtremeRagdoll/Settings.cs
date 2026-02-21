@@ -219,8 +219,8 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 136, RequireRestart = false)]
-        // Default to letting skeleton delivery handle most impulses.
-        public bool ForceEntityImpulse { get; set; } = false;  // entity routes only when skeleton rejects
+        // Prefer entity-space to avoid missile-kill bone-space misalignment.
+        public bool ForceEntityImpulse { get; set; } = true;   // prefer entity-space (avoids missile-kill bone misalign)
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
