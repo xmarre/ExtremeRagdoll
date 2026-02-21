@@ -65,6 +65,7 @@ namespace ExtremeRagdoll
         {
             public float t;
             public int root = -1;
+            public bool warmStarted;
         }
 
         private struct Pending
@@ -579,13 +580,20 @@ namespace ExtremeRagdoll
                 bool hasBody = false;
                 try { hasBody = p.ent.HasPhysicsBody(); } catch { hasBody = false; }
 
-                // If we haven't started the warm window yet, start it and force ragdoll/wake,
+                // If we haven't started the warm window yet, start it once,
                 // then ALWAYS wait one tick before attempting to apply impulses.
                 if (needRag && !warm)
                 {
-                    try { MarkRagStart(p.sk); } catch { }
-                    try { p.sk?.ActivateRagdoll(); } catch { }
-                    try { WakeDynamicBody(p.ent); } catch { }
+                    bool started = false;
+                    try { started = TryMarkRagStartOnce(p.sk); } catch { started = false; }
+
+                    // Only do the expensive forcing once; subsequent ticks just wait out the warm window.
+                    if (started)
+                    {
+                        try { p.sk?.ActivateRagdoll(); } catch { }
+                        try { WakeDynamicBody(p.ent); } catch { }
+                    }
+
                     _carry.Add(p);
                     continue;
                 }
@@ -767,8 +775,45 @@ namespace ExtremeRagdoll
                 var rag = _rag.GetValue(sk, _ => new Rag());
                 rag.t = TimeNow();
                 rag.root = -1;
+                rag.warmStarted = true;
             }
             catch { }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryMarkRagStartOnce(Skeleton sk)
+        {
+            if (sk == null)
+                return false;
+
+            var now = TimeNow();
+            try
+            {
+                if (!_rag.TryGetValue(sk, out var rag) || rag == null)
+                {
+                    try
+                    {
+                        _rag.Add(sk, new Rag { t = now, root = -1, warmStarted = true });
+                        return true;
+                    }
+                    catch (ArgumentException)
+                    {
+                        return false;
+                    }
+                }
+
+                if (rag.warmStarted)
+                    return false;
+
+                rag.t = now;
+                rag.root = -1;
+                rag.warmStarted = true;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -779,6 +824,8 @@ namespace ExtremeRagdoll
             try
             {
                 if (!_rag.TryGetValue(sk, out var rag) || rag == null)
+                    return false;
+                if (!rag.warmStarted)
                     return false;
                 return (TimeNow() - rag.t) >= minSeconds;
             }
@@ -795,7 +842,7 @@ namespace ExtremeRagdoll
                 return 0f;
             try
             {
-                if (_rag.TryGetValue(sk, out var rag) && rag != null)
+                if (_rag.TryGetValue(sk, out var rag) && rag != null && rag.warmStarted)
                 {
                     float delta = TimeNow() - rag.t;
                     return delta >= 0f ? delta : 0f;
