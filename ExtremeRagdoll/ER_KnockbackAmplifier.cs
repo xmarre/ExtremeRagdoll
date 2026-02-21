@@ -572,11 +572,11 @@ namespace ExtremeRagdoll
             MethodBase __originalMethod)
         {
             if (__instance == null) return;
+            float timeNow = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
             if (_suppressPrefix)
             {
                 if (ER_Config.DebugLogging)
                 {
-                    float timeNow = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
                     LogSuppressedPrefixOncePer(0.5f, timeNow);
                 }
                 return;
@@ -587,8 +587,6 @@ namespace ExtremeRagdoll
                 if (_loggedRegisterBlowOverloads.TryAdd(key, 1))
                     ER_Log.Info("RegisterBlow hit: " + key);
             }
-
-            float timeNow = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
             if (timeNow != _lastBigShoveTime)
             {
                 _lastBigShoveTime = timeNow;
