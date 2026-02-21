@@ -882,6 +882,21 @@ namespace ExtremeRagdoll
                     {
                         contact = __instance.Position;
                     }
+
+                    // Missiles often report impact points on equipment (quivers/bows). Clamp far-out contact points toward
+                    // the body so physics forces don't primarily hit gear.
+                    if (missileSpeed > 0f)
+                    {
+                        try
+                        {
+                            Vec3 body = __instance.Position;
+                            body.z += 0.9f;
+                            contact = body; // hard snap for missiles: avoids quiver/bow contacts entirely
+                        }
+                        catch { }
+                        try { blow.GlobalPosition = contact; } catch { }
+                    }
+
                     float recorded = __instance.Mission?.CurrentTime ?? 0f;
                     _pending[__instance.Index] = new PendingLaunch
                     {
