@@ -279,6 +279,7 @@ namespace ExtremeRagdoll
 
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _loggedRegisterBlowOverloads =
             new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+        private static float _lastSuppressedPrefixLog;
 
         [ThreadStatic] private static bool _suppressPrefix;
 
@@ -507,6 +508,8 @@ namespace ExtremeRagdoll
 
                 var parameters = candidate.GetParameters();
                 if (parameters.Length < 1) continue;
+                // Skip `in Blow` (readonly-ref) overloads; our prefix argument is `ref Blow`.
+                if (parameters[0].IsIn) continue;
 
                 var p0 = parameters[0].ParameterType;
                 if (p0 != blow && !(p0.IsByRef && p0.GetElementType() == blow)) continue;
@@ -569,7 +572,15 @@ namespace ExtremeRagdoll
             MethodBase __originalMethod)
         {
             if (__instance == null) return;
-            if (_suppressPrefix) return;
+            if (_suppressPrefix)
+            {
+                if (ER_Config.DebugLogging)
+                {
+                    float timeNow = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
+                    LogSuppressedPrefixOncePer(0.5f, timeNow);
+                }
+                return;
+            }
             if (ER_Config.DebugLogging && __originalMethod != null)
             {
                 var key = __originalMethod.ToString();
@@ -975,6 +986,18 @@ namespace ExtremeRagdoll
                 beh?.EnqueueKick(__instance, dir, kickMag, 0.10f);
                 _pending.Remove(__instance.Index);
             }
+        }
+
+        private static void LogSuppressedPrefixOncePer(float minDelta, float now)
+        {
+            if (minDelta < 0f)
+                minDelta = 0f;
+            if (float.IsNaN(now) || float.IsInfinity(now))
+                now = 0f;
+            if (now - _lastSuppressedPrefixLog < minDelta)
+                return;
+            _lastSuppressedPrefixLog = now;
+            ER_Log.Info("RegisterBlow suppressed");
         }
 
         private static bool GuessExplosion(AttackCollisionData data, Blow blow, float missileSpeed)

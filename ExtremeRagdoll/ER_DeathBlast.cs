@@ -308,6 +308,35 @@ namespace ExtremeRagdoll
             catch { }
             if (getter == null)
             {
+                MethodInfo mBool = null;
+                try
+                {
+                    foreach (var m in type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                    {
+                        if (m.ReturnType != typeof(bool)) continue;
+                        if (m.GetParameters().Length != 0) continue;
+
+                        var n = m.Name;
+                        if (n.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        if (n.IndexOf("active", StringComparison.OrdinalIgnoreCase) < 0 &&
+                            n.IndexOf("mode", StringComparison.OrdinalIgnoreCase) < 0)
+                            continue;
+
+                        mBool = m;
+                        break;
+                    }
+                }
+                catch { }
+
+                if (mBool != null)
+                {
+                    return target =>
+                    {
+                        try { return (bool)mBool.Invoke(target, Array.Empty<object>()); }
+                        catch { return false; }
+                    };
+                }
+
                 var pi = type.GetProperty("IsRagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
                          ?? type.GetProperty("IsRagdollModeActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
                          ?? type.GetProperty("RagdollActive", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -1175,7 +1204,7 @@ namespace ExtremeRagdoll
                             dir = FinalizeImpulseDir(dir);
 
                             // Warm ragdoll only. Do not shove pre-death.
-                            float warmBase = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f));
+                            float warmBase = MathF.Max(800f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 2500f));
                             var kb = new Blow(-1)
                             {
                                 DamageType      = DamageTypes.Blunt,
@@ -1429,9 +1458,9 @@ namespace ExtremeRagdoll
                     {
                         DamageType      = DamageTypes.Blunt,
                         // Include KnockBack: some builds won’t transition into ragdoll reliably with only KnockDown.
-                        // We keep BaseMagnitude low so the engine doesn’t add noticeable motion.
+                        // Keep warm-up subtle via direction shaping, but strong enough to reliably trigger ragdoll.
                         BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                        BaseMagnitude   = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f)),
+                        BaseMagnitude   = MathF.Max(800f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 2500f)),
                         SwingDirection  = dir,
                         GlobalPosition  = contactPoint,
                         InflictedDamage = 0
