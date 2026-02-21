@@ -569,20 +569,34 @@ namespace ExtremeRagdoll
                 }
 
                 bool dyn = LooksDynamic(p.ent);
-                bool warm = RagWarm(p.sk, Ent2WarmupSeconds);
+                bool needRag = p.sk != null;
+                bool warm = needRag ? RagWarm(p.sk, Ent2WarmupSeconds) : true;
+                bool rag = !needRag;
+                if (needRag)
+                {
+                    try { rag = ER_DeathBlastBehavior.IsRagdollActiveFast(p.sk); } catch { rag = false; }
+                }
                 bool hasBody = false;
                 try { hasBody = p.ent.HasPhysicsBody(); } catch { hasBody = false; }
 
+                if (needRag && !rag)
+                {
+                    try { if (!warm) { MarkRagStart(p.sk); warm = true; } } catch { }
+                    try { p.sk?.ActivateRagdoll(); } catch { }
+                    _carry.Add(p);
+                    continue;
+                }
+
                 // Never apply impulses into a kinematic body: that’s how you get a frozen pose sliding through the world.
                 // If we’re within the warm-up window but still kinematic, try a safe wake first.
-                if (warm && !dyn)
+                if ((warm || rag) && !dyn)
                 {
                     try { WakeDynamicBody(p.ent); } catch { }
                     try { dyn = LooksDynamic(p.ent); } catch { dyn = false; }
                     try { hasBody = p.ent.HasPhysicsBody(); } catch { hasBody = false; }
                 }
 
-                if (!warm || !dyn || !hasBody)
+                if ((needRag && !rag) || !dyn || !hasBody)
                 {
                     _carry.Add(p);
                     continue;
