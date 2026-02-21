@@ -119,12 +119,12 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Z Nudge", 0f, 0.5f, "0.000",
             Order = 116, RequireRestart = false)]
-        public float CorpseLaunchZNudge { get; set; } = 0.15f;
+        public float CorpseLaunchZNudge { get; set; } = 0.20f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Z Clamp Above", 0f, 1.0f, "0.000",
             Order = 117, RequireRestart = false)]
-        public float CorpseLaunchZClampAbove { get; set; } = 0.05f;
+        public float CorpseLaunchZClampAbove { get; set; } = 0.20f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Contact Height", 0f, 1.0f, "0.000",
@@ -159,7 +159,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Minimum Corpse Impulse", 0f, 500_000f, "0.0",
             Order = 124, RequireRestart = false)]
-        public float CorpseImpulseMinimum { get; set; } = 6f;   // guarantees visible nudge
+        public float CorpseImpulseMinimum { get; set; } = 3f;   // guarantees visible nudge
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Maximum Corpse Impulse", 0f, 2_000_000f, "0.0",
@@ -169,7 +169,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Impulse Hard Cap (physics units)", 0f, 1_000f, "0.0",
             Order = 126, RequireRestart = false)]
-        public float CorpseImpulseHardCap { get; set; } = 17f;
+        public float CorpseImpulseHardCap { get; set; } = 6f;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Corpse Launch Min Up Fraction", 0f, 1.0f, "0.00",
@@ -219,8 +219,8 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Force Entity-Space Impulses",
             Order = 136, RequireRestart = false)]
-        // Prefer entity-space to avoid missile-kill bone-space misalignment.
-        public bool ForceEntityImpulse { get; set; } = true;   // prefer entity-space (avoids missile-kill bone misalign)
+        // Keep default conservative; forcing entity-space everywhere can amplify bad contact edge-cases.
+        public bool ForceEntityImpulse { get; set; } = true;
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyBool("Allow Skeleton Fallback When Entity Missing/Invalid",
@@ -240,7 +240,7 @@ namespace ExtremeRagdoll
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Immediate Impulse Scale", 0f, 1f, "0.00",
             Order = 140, RequireRestart = false)]
-        public float ImmediateImpulseScale { get; set; } = 0.30f; // stronger wake-up nudge to keep ragdolls dynamic
+        public float ImmediateImpulseScale { get; set; } = 0.10f; // stronger wake-up nudge to keep ragdolls dynamic
 
         [SettingPropertyGroup("Advanced")]
         [SettingPropertyFloatingInteger("Schedule Direction Duplicate Threshold", 0f, 4f, "0.0000",

@@ -249,8 +249,13 @@ namespace ExtremeRagdoll
             }
             if (ent != null && WasRagdollPrepared(ent))
             {
-                prepared = true;
-                return;
+                bool ragActive = false;
+                try { ragActive = (skel == null) || ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = (skel == null); }
+                if (ragActive)
+                {
+                    prepared = true;
+                    return;
+                }
             }
             if (skel != null && SkeletonAlreadyRagdolled(skel))
             {
@@ -263,7 +268,6 @@ namespace ExtremeRagdoll
         private static bool TryApplyImpulse(GameEntity ent, Skeleton skel, Vec3 impulse, Vec3 pos, int agentId = -1)
         {
             _ = agentId;
-            ER_Log.Info($"IMP_ENTER ent={(ent!=null)} skel={(skel!=null)} imp2={impulse.LengthSquared:0} pos2={pos.LengthSquared:0} id={agentId}");
             if (!ER_Math.IsFinite(in impulse) || !ER_Math.IsFinite(in pos))
                 return false;
 
@@ -275,11 +279,14 @@ namespace ExtremeRagdoll
             if (!prepared)
             {
                 ER_RagdollPrep.Prep(ent, skel);
-                MarkRagdollPrepared(ent);
+                bool ragActive = false;
+                try { ragActive = (skel == null) || ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = (skel == null); }
+                // Only mark as prepared once ragdoll is truly active. Marking too early causes "frozen standing" corpses.
+                if (ragActive)
+                    MarkRagdollPrepared(ent);
             }
 
             bool ok = ER_ImpulseRouter.TryImpulse(ent, skel, impulse, pos);
-            if (!ok) ER_Log.Info("IMP_TRY_RETURN false");
             if (!ok && (ent != null || skel != null))
             {
                 WarmRagdoll(ent, skel);
@@ -296,22 +303,20 @@ namespace ExtremeRagdoll
         {
             static bool IsActiveRagdollLabel(string label)
             {
-                if (string.IsNullOrEmpty(label))
-                    return false;
+                if (label == null) return false;
+                label = label.Trim();
+                if (label.Length == 0) return false;
+                // Conservative: internal enum labels can contain "Ragdoll" even when NOT active.
+                // Only treat as active when explicitly enabled/active.
+                if (label.IndexOf("inactive", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (label.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (label.IndexOf("off", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+                if (label.IndexOf("none", StringComparison.OrdinalIgnoreCase) >= 0) return false;
 
-                bool hasRagdoll = label.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0;
-                if (!hasRagdoll)
-                    return false;
-
-                if (label.IndexOf("inactive", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    label.IndexOf("disabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    label.IndexOf("off", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return false;
-
-                return label.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                       label.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                       label.IndexOf("on", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                       label.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0;
+                return (label.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                       (label.IndexOf("enabled", StringComparison.OrdinalIgnoreCase) >= 0) ||
+                       (label.Equals("1", StringComparison.OrdinalIgnoreCase)) ||
+                       (label.Equals("true", StringComparison.OrdinalIgnoreCase));
             }
 
             if (type == null)
@@ -2015,7 +2020,7 @@ namespace ExtremeRagdoll
                 Skeleton sk = null;
                 try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
                 try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
-                try { ER_RagdollPrep.Prep(ent, sk); } catch { }
+                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); ER_AgentRagdollForce.TryForce(__instance); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             }
             catch { }
@@ -2054,7 +2059,7 @@ namespace ExtremeRagdoll
                 Skeleton sk = null;
                 try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
                 try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
-                try { ER_RagdollPrep.Prep(ent, sk); } catch { }
+                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); ER_AgentRagdollForce.TryForce(__instance); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             }
             catch { }
@@ -2069,6 +2074,104 @@ namespace ExtremeRagdoll
         }
     }
 
+    internal static class ER_AgentRagdollForce
+    {
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo> _forceByType =
+            new System.Collections.Concurrent.ConcurrentDictionary<Type, MethodInfo>();
+
+        private static MethodInfo FindForceMethod(Type t)
+        {
+            if (t == null) return null;
+            try
+            {
+                const BindingFlags bf = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                // Order matters: prefer explicit state/mode setters.
+                string[] names = { "SetRagdollMode", "SetRagdollState", "SetRagdoll", "SwitchToRagdoll", "StartRagdoll" };
+                foreach (var n in names)
+                {
+                    try
+                    {
+                        var m = t.GetMethod(n, bf);
+                        if (m == null) continue;
+                        var ps = m.GetParameters();
+                        if (ps.Length == 0) return m;
+                        if (ps.Length == 1)
+                        {
+                            var p0 = ps[0].ParameterType;
+                            if (p0 == typeof(bool) || p0 == typeof(int)) return m;
+                            if (p0.IsEnum) return m;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        internal static void TryForce(Agent agent)
+        {
+            if (agent == null) return;
+            try
+            {
+                var t = agent.GetType();
+                MethodInfo mi = null;
+                try { _forceByType.TryGetValue(t, out mi); } catch { mi = null; }
+
+                if (mi == null)
+                {
+                    mi = FindForceMethod(t);
+                    // Do NOT cache nulls (can throw on some runtime builds and also blocks later discovery).
+                    if (mi != null)
+                    {
+                        try { _forceByType.TryAdd(t, mi); } catch { }
+                    }
+                    else
+                    {
+                        return;
+                    }
+                }
+
+                var ps = mi.GetParameters();
+                if (ps.Length == 0)
+                {
+                    mi.Invoke(agent, null);
+                    return;
+                }
+
+                if (ps.Length == 1)
+                {
+                    var p0 = ps[0].ParameterType;
+                    if (p0 == typeof(bool)) mi.Invoke(agent, new object[] { true });
+                    else if (p0 == typeof(int)) mi.Invoke(agent, new object[] { 1 });
+                    else if (p0.IsEnum)
+                    {
+                        try
+                        {
+                            var names = Enum.GetNames(p0);
+                            foreach (var n in names)
+                            {
+                                if (n.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    n.IndexOf("enable", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                    n.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) >= 0)
+                                {
+                                    var v = Enum.Parse(p0, n);
+                                    mi.Invoke(agent, new object[] { v });
+                                    return;
+                                }
+                            }
+                            var one = Enum.ToObject(p0, 1);
+                            mi.Invoke(agent, new object[] { one });
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+    }
+
+
     internal static class ER_DeathScheduler
     {
         internal static void Schedule(Agent a, ER_Amplify_RegisterBlowPatch.PendingLaunch p, string tag)
@@ -2076,14 +2179,33 @@ namespace ExtremeRagdoll
             if (a == null) return;
             if (ER_DeathBlastBehavior.Instance == null || a.Mission == null) return;
             if (ER_Config.MaxCorpseLaunchMagnitude <= 0f) return;
+
             var dir = ER_DeathBlastBehavior.PrepDir(p.dir, 0.90f, 0.05f);
+            // Never drive corpses downward into the ground; negative Z causes tunneling / fall-through.
+            if (dir.z < 0f)
+            {
+                dir.z = 0f;
+                dir = ER_DeathBlastBehavior.FinalizeImpulseDir(dir);
+            }
+
+            float mag = p.mag;
+            // Keep scheduling/recording consistent with the actual caps applied in TryEnqueueLaunch/ToPhysicsImpulse.
+            float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
+            if (maxMag > 0f && mag > maxMag) mag = maxMag;
+            float hardImpulse = ER_Config.CorpseImpulseHardCap;
+            if (hardImpulse > 0f)
+            {
+                float magCap = hardImpulse * 1000f;
+                if (mag > magCap) mag = magCap;
+            }
+
             int postTries = ER_Config.CorpsePostDeathTries;
             int pulse2Tries = Math.Max(0, (int)MathF.Round(postTries * MathF.Max(0f, ER_Config.LaunchPulse2Scale)));
             bool queued = false;
-            queued |= ER_DeathBlastBehavior.Instance.TryEnqueueLaunch(a, dir, p.mag,                           p.pos, ER_Config.LaunchDelay1, retries: postTries);
-            queued |= ER_DeathBlastBehavior.Instance.TryEnqueueLaunch(a, dir, p.mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: pulse2Tries);
-            ER_DeathBlastBehavior.Instance.RecordBlast(a.Position, ER_Config.DeathBlastRadius, p.mag);
-            if (ER_Config.DebugLogging && queued) ER_Log.Info($"CorpseLaunch queued Agent#{a.Index} mag={p.mag} source={tag}");
+            queued |= ER_DeathBlastBehavior.Instance.TryEnqueueLaunch(a, dir, mag,                           p.pos, ER_Config.LaunchDelay1, retries: postTries);
+            queued |= ER_DeathBlastBehavior.Instance.TryEnqueueLaunch(a, dir, mag * ER_Config.LaunchPulse2Scale, p.pos, ER_Config.LaunchDelay2, retries: pulse2Tries);
+            ER_DeathBlastBehavior.Instance.RecordBlast(a.Position, ER_Config.DeathBlastRadius, mag);
+            if (ER_Config.DebugLogging && queued) ER_Log.Info($"CorpseLaunch queued Agent#{a.Index} mag={mag} source={tag}");
         }
     }
 }

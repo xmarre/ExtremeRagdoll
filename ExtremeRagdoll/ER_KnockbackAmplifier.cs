@@ -66,7 +66,7 @@ namespace ExtremeRagdoll
         {
             get
             {
-                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 17f;
+                float cap = Settings.Instance?.CorpseImpulseHardCap ?? 6f;
                 if (float.IsNaN(cap) || float.IsInfinity(cap) || cap <= 0f)
                     return 0f;
                 return cap;
@@ -132,14 +132,14 @@ namespace ExtremeRagdoll
                 return value;
             }
         }
-        public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.15f);
-        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.05f);
+        public static float CorpseLaunchZNudge                  => MathF.Max(0f, Settings.Instance?.CorpseLaunchZNudge ?? 0.20f);
+        public static float CorpseLaunchZClampAbove             => MathF.Max(0f, Settings.Instance?.CorpseLaunchZClampAbove ?? 0.20f);
         public static float DeathBlastTtl                       => MathF.Max(0f, Settings.Instance?.DeathBlastTtl ?? 0.75f);
         public static float ImmediateImpulseScale
         {
             get
             {
-                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.30f;
+                float scale = Settings.Instance?.ImmediateImpulseScale ?? 0.10f;
                 if (float.IsNaN(scale) || float.IsInfinity(scale))
                     return 0f;
                 if (scale < 0f) return 0f;
@@ -260,8 +260,11 @@ namespace ExtremeRagdoll
         // --- HARD SAFETY CAPS (always enforced, even if MCM says 0) ---
         private const float HARD_BASE_CAP           = 80_000f;
         private const float HARD_ARROW_FLOOR_CAP    = 25_000f;
-        private const float HARD_BIGSHOVE_FLOOR_CAP = 22_000f;
         private const float HARD_CORPSE_MAG_CAP     = 30_000f;
+        // Keep these conservative; the engine blow + our later impulse otherwise tunnels ragdolls through terrain.
+        // CorpseLaunch mag -> physics impulse is mag*1e-3, so scaling mag is the cleanest way to stay below HardCap.
+        private const float RANGED_CORPSE_MAG_SCALE = 0.25f;
+        private const float HARD_CORPSE_MAG_CAP_RANGED = 6_000f;
         private static float _lastAnyLog;
 
         internal struct PendingLaunch
@@ -361,8 +364,7 @@ namespace ExtremeRagdoll
             return n.IndexOf("Bow", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    n.IndexOf("Crossbow", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    n.IndexOf("Throw", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   n.IndexOf("Javelin", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                   n.IndexOf("Dagger", StringComparison.OrdinalIgnoreCase) >= 0 && n.IndexOf("Throw", StringComparison.OrdinalIgnoreCase) >= 0;
+                   n.IndexOf("Javelin", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static float ResolveMissileSpeed(AttackCollisionData data)
@@ -682,6 +684,8 @@ namespace ExtremeRagdoll
             if (missileSpeed < minPushSpeed)
                 missileSpeed = 0f;
 
+            bool rangedLike = missileSpeed > 0f;
+
             // Fallback #1: some builds return MissileSpeed=0 for arrows, but Velocity/MissileVelocity is present.
             // If we can see a missile velocity vector, treat it as a missile so we never enter BigShove.
             if (missileSpeed <= 0f && hasAcd)
@@ -694,6 +698,7 @@ namespace ExtremeRagdoll
                         if (!float.IsNaN(mvLen) && !float.IsInfinity(mvLen) && mvLen > 1e-3f)
                         {
                             missileSpeed = (minPushSpeed > 0f) ? MathF.Max(minPushSpeed, mvLen) : mvLen;
+                            rangedLike = missileSpeed > 0f;
                             if (ER_Config.DebugLogging && timeNow - _lastAnyLog > 0.5f)
                             {
                                 _lastAnyLog = timeNow;
@@ -715,10 +720,32 @@ namespace ExtremeRagdoll
                     if (TryGetWeaponClassName(in blow, out var wc) && IsRangedWeaponClassName(wc))
                     {
                         missileSpeed = (minPushSpeed > 0f) ? minPushSpeed : 1f;
+                        rangedLike = true;
                         if (ER_Config.DebugLogging && timeNow - _lastAnyLog > 0.5f)
                         {
                             _lastAnyLog = timeNow;
                             ER_Log.Info($"[ER] ForcedMissileFromWeaponClass wc={wc}");
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // Fallback #3: WeaponClass reflection can return numeric / non-enum strings on some modpacks.
+            // BlowFlag.ToString() typically includes "Missile" for arrows/bolts. This keeps arrows out of BigShove.
+            if (!rangedLike && missileSpeed <= 0f)
+            {
+                try
+                {
+                    var bf = blow.BlowFlag.ToString();
+                    if (!string.IsNullOrEmpty(bf) && bf.IndexOf("Missile", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        missileSpeed = (minPushSpeed > 0f) ? minPushSpeed : 1f;
+                        rangedLike = true;
+                        if (ER_Config.DebugLogging && timeNow - _lastAnyLog > 0.5f)
+                        {
+                            _lastAnyLog = timeNow;
+                            ER_Log.Info("[ER] ForcedMissileFromBlowFlag");
                         }
                     }
                 }
@@ -768,14 +795,17 @@ namespace ExtremeRagdoll
             // Bannerlord often reports missile impacts on equipment (quiver/bow), which makes knockback pivot on gear.
             // Clamp the contact point to the torso for missiles and for lethal blows so the engine ragdoll transition
             // and subsequent impulses act on the body instead of attached items.
-            bool isMissile = missileSpeed > 0f;
+            bool isMissile = rangedLike;
             if (!isMissile)
             {
                 try
                 {
                     float mv2 = missileV.LengthSquared;
                     if (!float.IsNaN(mv2) && !float.IsInfinity(mv2) && mv2 > 1e-3f)
+                    {
                         isMissile = true;
+                        rangedLike = true;
+                    }
                 }
                 catch { }
             }
@@ -806,7 +836,7 @@ namespace ExtremeRagdoll
             }
 
             // Horse/body shove fallback: strong non-missile hits should still knock back.
-            bool bigShove = !lethal && missileSpeed <= 0f && blow.BaseMagnitude >= 3000f;
+            bool bigShove = !lethal && !rangedLike && missileSpeed <= 0f && blow.BaseMagnitude >= 3000f;
             bool canBoostBigShove = false;
             if (bigShove)
             {
@@ -873,8 +903,8 @@ namespace ExtremeRagdoll
 
                 // ensure non-zero magnitude so the engine actually switches into ragdoll
                 const float engineMin = 1200f;
-                // Ranged lethals already have strong engine momentum; keep this low to avoid “teleport” pops.
-                float engineMax = (missileSpeed > 0f) ? 1800f : 6000f;
+                // Ranged lethals already carry strong engine momentum; keep this low to avoid tunneling/teleport pops.
+                float engineMax = (missileSpeed > 0f) ? 1800f : 4500f;
                 float baseMag = blow.BaseMagnitude;
                 if (float.IsNaN(baseMag) || float.IsInfinity(baseMag) || baseMag < 0f)
                     baseMag = 0f;
@@ -924,8 +954,9 @@ namespace ExtremeRagdoll
                 else if (bigShove)
                 {
                     float origBase   = blow.BaseMagnitude;
-                    float shoveFloor = MathF.Max(10000f, 7000f + origBase * 0.20f);
-                    shoveFloor       = Cap(shoveFloor, ER_Config.MaxBlowBaseMagnitude, HARD_BIGSHOVE_FLOOR_CAP);
+                    // BigShove is for genuinely heavy melee impacts. Keep it below tunneling levels.
+                    float shoveFloor = MathF.Max(3500f, 2500f + origBase * 0.15f);
+                    shoveFloor       = Cap(shoveFloor, ER_Config.MaxBlowBaseMagnitude, 6500f);
                     if (ER_Config.MaxNonLethalKnockback > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
                     if (canBoostBigShove && origBase + 800f < shoveFloor) // ignore tiny nudges
                     {
@@ -986,7 +1017,16 @@ namespace ExtremeRagdoll
                 {
                     float extraMult = MathF.Max(1f, ER_Config.ExtraForceMultiplier);
                     float mag = (10000f + blow.InflictedDamage * 120f) * extraMult * 0.25f;
-                    if (missileSpeed > 0f) mag += missileSpeed * 50f;
+                    if (missileSpeed > 0f)
+                        mag += missileSpeed * 50f;
+
+                    // Ranged lethals: keep impulse below CorpseImpulseHardCap to prevent tunneling/falling through ground.
+                    if (rangedLike)
+                    {
+                        mag *= RANGED_CORPSE_MAG_SCALE;
+                        if (mag > HARD_CORPSE_MAG_CAP_RANGED) mag = HARD_CORPSE_MAG_CAP_RANGED;
+                    }
+
                     if (mag > HARD_CORPSE_MAG_CAP) mag = HARD_CORPSE_MAG_CAP;
                     float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
                     if (mag > maxMag)
