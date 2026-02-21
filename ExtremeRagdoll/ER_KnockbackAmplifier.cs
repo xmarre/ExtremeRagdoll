@@ -670,6 +670,31 @@ namespace ExtremeRagdoll
             // Grund-Normalisierung ohne starke Up-Bias
             dir = ER_DeathBlastBehavior.PrepDir(dir, 0.98f, 0.02f);
 
+            // Bannerlord often reports missile impacts on equipment (quiver/bow), which makes knockback pivot on gear.
+            // Clamp the contact point to the torso for missiles and for lethal blows so the engine ragdoll transition
+            // and subsequent impulses act on the body instead of attached items.
+            bool isMissile = missileSpeed > 0f;
+            if (!isMissile)
+            {
+                try
+                {
+                    float mv2 = missileV.LengthSquared;
+                    if (!float.IsNaN(mv2) && !float.IsInfinity(mv2) && mv2 > 1e-3f)
+                        isMissile = true;
+                }
+                catch { }
+            }
+            if (lethal || isMissile)
+            {
+                try
+                {
+                    Vec3 body = __instance.Position;
+                    body.z += 0.9f;
+                    blow.GlobalPosition = body;
+                }
+                catch { }
+            }
+
             // ensure flags so lethal always ragdolls; missiles shove
             if (lethal)
             {
@@ -883,19 +908,16 @@ namespace ExtremeRagdoll
                         contact = __instance.Position;
                     }
 
-                    // Missiles often report impact points on equipment (quivers/bows). Clamp far-out contact points toward
-                    // the body so physics forces don't primarily hit gear.
-                    if (missileSpeed > 0f)
+                    // Always snap lethal contact to the torso (even for melee) so pending corpse impulses and the engine
+                    // ragdoll transition don't pivot on equipment bodies.
+                    try
                     {
-                        try
-                        {
-                            Vec3 body = __instance.Position;
-                            body.z += 0.9f;
-                            contact = body; // hard snap for missiles: avoids quiver/bow contacts entirely
-                        }
-                        catch { }
-                        try { blow.GlobalPosition = contact; } catch { }
+                        Vec3 body = __instance.Position;
+                        body.z += 0.9f;
+                        contact = body;
+                        blow.GlobalPosition = contact;
                     }
+                    catch { }
 
                     float recorded = __instance.Mission?.CurrentTime ?? 0f;
                     _pending[__instance.Index] = new PendingLaunch

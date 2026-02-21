@@ -1070,7 +1070,9 @@ namespace ExtremeRagdoll
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
             float agentZ = nudgedPos.z;
             try { agentZ = a.Position.z; } catch { }
-            nudgedPos.z = MathF.Min(nudgedPos.z + zNudge, agentZ + zClamp);
+            // CorpseLaunchZClampAbove is a *minimum* height above the agent origin.
+            // Using Min() here clamps the contact down to near-ground and causes huge torque/teleport-like launches.
+            nudgedPos.z = MathF.Max(nudgedPos.z + zNudge, agentZ + zClamp);
             float scheduleTime = mission.CurrentTime + delaySec;
             float window = MathF.Max(0f, ER_Config.CorpseLaunchScheduleWindow);
             if (window > 0f && agentIndex >= 0)
@@ -1243,7 +1245,8 @@ namespace ExtremeRagdoll
                         }
                         try
                         {
-                            contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
+                            // Keep warm-up contact above ground/origin (do not clamp down).
+                            contact.z = MathF.Max(contact.z, agent.Position.z + zClamp);
                         }
                         catch
                         {
@@ -1506,7 +1509,8 @@ namespace ExtremeRagdoll
                 Vec3 hit = XYJitter(baseContact);
                 Vec3 contactPoint = hit;
                 contactPoint.z += contactHeight;
-                contactPoint.z = MathF.Min(contactPoint.z, agent.Position.z + zClamp);
+                // Keep impulse application above ground/origin (do not clamp down).
+                contactPoint.z = MathF.Max(contactPoint.z, agent.Position.z + zClamp);
                 // direction already sanitized when the launch was queued
 
                 if (!ConsumeLaunchBudget())
@@ -1730,7 +1734,8 @@ namespace ExtremeRagdoll
                 {
                     float nextTime = now + ApplyDelayJitter(retryDelay);
                     Vec3 retryPos = XYJitter(agent.Position);
-                    retryPos.z = MathF.Min(retryPos.z + zNudge, agent.Position.z + zClamp);
+                    // Keep retry contact above ground/origin (do not clamp down).
+                    retryPos.z = MathF.Max(retryPos.z + zNudge, agent.Position.z + zClamp);
 
                     if (!L.Boosted)
                     {
@@ -2012,6 +2017,8 @@ namespace ExtremeRagdoll
                 try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
                 try { sk?.ActivateRagdoll(); } catch { }
                 try { ent?.ActivateRagdoll(); } catch { }
+                try { sk?.ForceUpdateBoneFrames(); } catch { }
+                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             }
             catch { }
@@ -2052,6 +2059,8 @@ namespace ExtremeRagdoll
                 try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
                 try { sk?.ActivateRagdoll(); } catch { }
                 try { ent?.ActivateRagdoll(); } catch { }
+                try { sk?.ForceUpdateBoneFrames(); } catch { }
+                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             }
             catch { }
