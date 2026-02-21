@@ -598,19 +598,22 @@ namespace ExtremeRagdoll
                     continue;
                 }
 
-                // Never apply impulses into a kinematic body: that’s how you get a frozen pose sliding through the world.
-                // If we are not ready yet, do a guarded ragdoll activation + wake and retry later.
+                // Past the warm window: keep trying to force ragdoll/wake, but don't hard-require dyn before attempting.
+                // If there's no physics body at all yet, just retry later.
                 if (needRag && (!dyn || !hasBody))
                 {
                     try { p.sk?.ActivateRagdoll(); } catch { }
                     try { WakeDynamicBody(p.ent); } catch { }
                     try { dyn = LooksDynamic(p.ent); } catch { dyn = false; }
                     try { hasBody = p.ent.HasPhysicsBody(); } catch { hasBody = false; }
-                    // Always wait one tick after forcing ragdoll/wake before applying impulses.
-                    _carry.Add(p);
-                    continue;
+
+                    if (!hasBody)
+                    {
+                        _carry.Add(p);
+                        continue;
+                    }
                 }
-                else if (!dyn || !hasBody)
+                else if (!needRag && (!dyn || !hasBody))
                 {
                     _carry.Add(p);
                     continue;
@@ -689,6 +692,12 @@ namespace ExtremeRagdoll
                     _wake?.Invoke(null, new object[] { ent });
             }
             catch { }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void WakeDynamicBodyPublic(GameEntity ent)
+        {
+            WakeDynamicBody(ent);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1788,7 +1797,8 @@ namespace ExtremeRagdoll
                 bool forceEntity = ER_ImpulsePrefs.ForceEntityImpulse;
                 bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
                 bool skeletonAvailable = skel != null;
-                bool allowSkeletonNow = skeletonAvailable && ragActive && (!forceEntity || allowFallbackWhenInvalid);
+                bool warmOk = skeletonAvailable && RagWarm(skel, Ent2WarmupSeconds);
+                bool allowSkeletonNow = skeletonAvailable && (ragActive || warmOk) && (!forceEntity || allowFallbackWhenInvalid);
                 bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
                 bool extEnt2Available = (_dEnt2 != null || _ent2 != null); // don’t blanket block; gate below
                 if (!skApis)
@@ -2011,7 +2021,7 @@ namespace ExtremeRagdoll
 
                 bool entHasBody = false;
                 try { entHasBody = hasEnt && ent.HasPhysicsBody(); } catch { entHasBody = false; }
-                bool canFireEnt = hasEnt && haveContact && entHasBody && (dynOk || ragActive);
+                bool canFireEnt = hasEnt && haveContact && entHasBody && (dynOk || ragActive || warmOk);
 
                 if (ER_Config.DebugLogging)
                     Log($"ENT3_CHECK canFireEnt={canFireEnt} haveContact={haveContact} dynOk={dynOk} ragActive={ragActive} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
@@ -2323,7 +2333,7 @@ namespace ExtremeRagdoll
                                        || extEnt2Available
                                      );
                 Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} dynOk={dynOk} ragActive={ragActive} canFireEnt={canFireEnt} aabbOk={aabbOk} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
-                if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && entHasBody && (dynOk || ragActive) && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+                if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && entHasBody && (dynOk || ragActive || warmOk) && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
                     && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
                 {
                     try

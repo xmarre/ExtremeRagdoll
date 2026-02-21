@@ -29,6 +29,8 @@ namespace ExtremeRagdoll
         private const float DirectionTinySqThreshold = ER_Math.DirectionTinySq;
         private const float PositionTinySqThreshold = ER_Math.PositionTinySq;
         private const float HitPosMaxDistSq = 400f; // 20m sanity clamp
+        private const float BodyContactZ = 0.9f;
+        private const float GearClampHorizDistSq = 0.06f; // ~0.245m
         private static float ScheduleDirDuplicateSqThreshold => MathF.Max(0f, ER_Config.ScheduleDirDuplicateSqThreshold);
         private static float SchedulePosDuplicateSqThreshold => MathF.Max(0f, ER_Config.SchedulePosDuplicateSqThreshold);
         private static float ScheduleMagDuplicateFraction => MathF.Max(0f, ER_Config.ScheduleMagDuplicateFraction);
@@ -838,7 +840,9 @@ namespace ExtremeRagdoll
                 bool ok = false;
                 try
                 {
-                    ok = ER_ImpulseRouter.TryImpulse(ent, skel, entry.Imp, entry.Pos);
+                    var impulsePos = ClampHitToBody(agent, entry.Pos);
+                    ok = ER_ImpulseRouter.TryImpulse(ent, skel, entry.Imp, impulsePos);
+                    entry.Pos = impulsePos;
                 }
                 catch
                 {
@@ -855,18 +859,13 @@ namespace ExtremeRagdoll
                     continue;
                 }
 
-                bool rag = false;
-                bool dyn = false;
-                try { rag = IsRagdollActiveFast(skel); } catch { rag = false; }
-                try { dyn = ent != null && ER_ImpulseRouter.LooksDynamic(ent); } catch { dyn = false; }
-
                 int maxRetries = Math.Max(0, ER_Config.CorpseLaunchRetryMaxTries);
-                if (rag && !dyn && entry.Tries < maxRetries)
+                if (entry.Tries < maxRetries)
                 {
                     float delay = ApplyDelayJitter(ER_Config.CorpseLaunchRetryDelay);
                     EnqueueCorpseLaunch(agent, entry.Pos, entry.Imp, entry.Tries + 1, now + delay);
                     if (ER_Config.DebugLogging)
-                        ER_Log.Info($"DEFER corpse: rag={rag} dyn={dyn} tries={entry.Tries + 1}");
+                        ER_Log.Info($"DEFER corpse: tries={entry.Tries + 1}");
                 }
                 else
                 {
@@ -877,6 +876,32 @@ namespace ExtremeRagdoll
                     }
                 }
             }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vec3 BodyContact(Agent a)
+        {
+            Vec3 p = a?.Position ?? Vec3.Zero;
+            p.z += BodyContactZ;
+            return p;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vec3 ClampHitToBody(Agent a, Vec3 pos)
+        {
+            var body = BodyContact(a);
+            if (!ER_Math.IsFinite(in pos))
+                return body;
+
+            var d = pos - body;
+            d.z = 0f;
+            float h2 = d.LengthSquared;
+            if (float.IsNaN(h2) || float.IsInfinity(h2) || h2 > GearClampHorizDistSq)
+                return body;
+
+            pos.x = body.x;
+            pos.y = body.y;
+            return pos;
         }
 
         public static ER_DeathBlastBehavior Instance;
@@ -1977,6 +2002,24 @@ namespace ExtremeRagdoll
             if (__instance == null) return;
             if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p))
                 p = BuildFallbackPending(__instance);
+
+            // Force ragdoll activation on death to avoid "frozen standing" corpses on some builds.
+            try
+            {
+                GameEntity ent = null;
+                Skeleton sk = null;
+                try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
+                try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
+                try { sk?.ActivateRagdoll(); } catch { }
+                try { ent?.ActivateRagdoll(); } catch { }
+                try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
+            }
+            catch { }
+
+            // Clamp pending hit position to body center so downstream corpse impulses do not target gear bodies.
+            try { p.pos = ClampHitToBody(__instance, p.pos); }
+            catch { }
+
             float now = __instance.Mission?.CurrentTime ?? 0f;
             if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
             ER_DeathScheduler.Schedule(__instance, p, tag: "MakeDead");
@@ -1999,6 +2042,24 @@ namespace ExtremeRagdoll
             if (__instance == null) return;
             if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p))
                 p = ER_Probe_MakeDead.BuildFallbackPending(__instance);
+
+            // Force ragdoll activation on death to avoid "frozen standing" corpses on some builds.
+            try
+            {
+                GameEntity ent = null;
+                Skeleton sk = null;
+                try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
+                try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
+                try { sk?.ActivateRagdoll(); } catch { }
+                try { ent?.ActivateRagdoll(); } catch { }
+                try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
+            }
+            catch { }
+
+            // Clamp pending hit position to body center so downstream corpse impulses do not target gear bodies.
+            try { p.pos = ClampHitToBody(__instance, p.pos); }
+            catch { }
+
             float now = __instance.Mission?.CurrentTime ?? 0f;
             if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
             ER_DeathScheduler.Schedule(__instance, p, tag: "Die");
