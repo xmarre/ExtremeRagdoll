@@ -2015,10 +2015,7 @@ namespace ExtremeRagdoll
                 Skeleton sk = null;
                 try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
                 try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
-                try { sk?.ActivateRagdoll(); } catch { }
-                try { ent?.ActivateRagdoll(); } catch { }
-                try { sk?.ForceUpdateBoneFrames(); } catch { }
-                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); } catch { }
+                try { ER_RagdollPrep.Prep(ent, sk); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             }
             catch { }
@@ -2057,10 +2054,7 @@ namespace ExtremeRagdoll
                 Skeleton sk = null;
                 try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
                 try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
-                try { sk?.ActivateRagdoll(); } catch { }
-                try { ent?.ActivateRagdoll(); } catch { }
-                try { sk?.ForceUpdateBoneFrames(); } catch { }
-                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); } catch { }
+                try { ER_RagdollPrep.Prep(ent, sk); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             }
             catch { }
