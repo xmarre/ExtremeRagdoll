@@ -570,33 +570,39 @@ namespace ExtremeRagdoll
 
                 bool dyn = LooksDynamic(p.ent);
                 bool needRag = p.sk != null;
-                bool warm = needRag ? RagWarm(p.sk, Ent2WarmupSeconds) : true;
-                bool rag = !needRag;
+                bool warm = !needRag;
                 if (needRag)
                 {
-                    try { rag = ER_DeathBlastBehavior.IsRagdollActiveFast(p.sk); } catch { rag = false; }
+                    try { warm = RagWarm(p.sk, Ent2WarmupSeconds); }
+                    catch { warm = false; }
                 }
                 bool hasBody = false;
                 try { hasBody = p.ent.HasPhysicsBody(); } catch { hasBody = false; }
 
-                if (needRag && !rag)
+                // If we haven't started the warm window yet, start it and force ragdoll/wake,
+                // then ALWAYS wait one tick before attempting to apply impulses.
+                if (needRag && !warm)
                 {
-                    try { if (!warm) { MarkRagStart(p.sk); warm = true; } } catch { }
+                    try { MarkRagStart(p.sk); } catch { }
                     try { p.sk?.ActivateRagdoll(); } catch { }
+                    try { WakeDynamicBody(p.ent); } catch { }
                     _carry.Add(p);
                     continue;
                 }
 
                 // Never apply impulses into a kinematic body: that’s how you get a frozen pose sliding through the world.
-                // If we’re within the warm-up window but still kinematic, try a safe wake first.
-                if ((warm || rag) && !dyn)
+                // If we are not ready yet, do a guarded ragdoll activation + wake and retry later.
+                if (needRag && (!dyn || !hasBody))
                 {
+                    try { p.sk?.ActivateRagdoll(); } catch { }
                     try { WakeDynamicBody(p.ent); } catch { }
                     try { dyn = LooksDynamic(p.ent); } catch { dyn = false; }
                     try { hasBody = p.ent.HasPhysicsBody(); } catch { hasBody = false; }
+                    // Always wait one tick after forcing ragdoll/wake before applying impulses.
+                    _carry.Add(p);
+                    continue;
                 }
-
-                if ((needRag && !rag) || !dyn || !hasBody)
+                else if (!dyn || !hasBody)
                 {
                     _carry.Add(p);
                     continue;
@@ -1956,7 +1962,9 @@ namespace ExtremeRagdoll
                     catch { }
                 }
 
-                bool canFireEnt = hasEnt && haveContact && (dynOk || ragActive);
+                bool entHasBody = false;
+                try { entHasBody = hasEnt && ent.HasPhysicsBody(); } catch { entHasBody = false; }
+                bool canFireEnt = hasEnt && haveContact && entHasBody && (dynOk || ragActive);
 
                 if (ER_Config.DebugLogging)
                     Log($"ENT3_CHECK canFireEnt={canFireEnt} haveContact={haveContact} dynOk={dynOk} ragActive={ragActive} ent3Inst={_dEnt3Inst != null || _ent3Inst != null} ent3Ext={_dEnt3 != null || _ent3 != null}");
@@ -2268,7 +2276,7 @@ namespace ExtremeRagdoll
                                        || extEnt2Available
                                      );
                 Log($"ENT1_CHECK allow={ER_Config.AllowEnt1WorldFallback} dynOk={dynOk} ragActive={ragActive} canFireEnt={canFireEnt} aabbOk={aabbOk} ent1Bound={_dEnt1 != null || _ent1 != null} ent1Unsafe={_ent1Unsafe} ent2Ready={ent2Ready} ent3Ready={ent3WorldReady} skReady={skeletonRouteReady}");
-                if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && (dynOk || ragActive) && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
+                if (ER_Config.AllowEnt1WorldFallback && hasEnt && aabbOk && entHasBody && (dynOk || ragActive) && !skeletonRouteReady && !ent3WorldReady && !ent2Ready
                     && !_ent1Unsafe && (_dEnt1 != null || _ent1 != null))
                 {
                     try
