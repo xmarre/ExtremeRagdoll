@@ -1175,18 +1175,22 @@ namespace ExtremeRagdoll
                             dir = FinalizeImpulseDir(dir);
 
                             // Warm ragdoll only. Do not shove pre-death.
-                            float warmBase = ER_Config.WarmupBlowBaseMagnitude;
+                            float warmBase = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f));
                             var kb = new Blow(-1)
                             {
                                 DamageType      = DamageTypes.Blunt,
-                                BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
+                                // Include KnockBack: some builds won’t transition into ragdoll reliably with only KnockDown.
+                                BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
                                 BaseMagnitude   = warmBase,
                                 SwingDirection  = dir,
                                 GlobalPosition  = contact,
                                 InflictedDamage = 0
                             };
                             AttackCollisionData acd = default;
-                            agent.RegisterBlow(kb, in acd);
+                            using (ER_Amplify_RegisterBlowPatch.SuppressPrefixScope())
+                            {
+                                agent.RegisterBlow(kb, in acd);
+                            }
 
                             if (AgentRemoved(agent))
                             {
@@ -1424,15 +1428,19 @@ namespace ExtremeRagdoll
                     var blow = new Blow(-1)
                     {
                         DamageType      = DamageTypes.Blunt,
-                        // Enable ragdoll without strong engine knockback; physics impulse adds motion.
-                        BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
+                        // Include KnockBack: some builds won’t transition into ragdoll reliably with only KnockDown.
+                        // We keep BaseMagnitude low so the engine doesn’t add noticeable motion.
+                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
                         BaseMagnitude   = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f)),
                         SwingDirection  = dir,
                         GlobalPosition  = contactPoint,
                         InflictedDamage = 0
                     };
                     AttackCollisionData acd = default;
-                    agent.RegisterBlow(blow, in acd);
+                    using (ER_Amplify_RegisterBlowPatch.SuppressPrefixScope())
+                    {
+                        agent.RegisterBlow(blow, in acd);
+                    }
                     L.Warmed = true;
                     L.T = now + MathF.Max(0.05f, retryDelay); // small settle time
                     L.Pos = agent.Position;
