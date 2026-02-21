@@ -579,6 +579,8 @@ namespace ExtremeRagdoll
                 {
                     LogSuppressedPrefixOncePer(0.5f, timeNow);
                 }
+                // Suppression only skips our capture/amplify path.
+                // Harmony continues to the original Agent.RegisterBlow implementation.
                 return;
             }
             if (ER_Config.DebugLogging && __originalMethod != null)

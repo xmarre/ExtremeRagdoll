@@ -1019,10 +1019,10 @@ namespace ExtremeRagdoll
                 if (queued >= queueCap) return false;
             }
 
-            float maxMag = ER_Config.MaxCorpseLaunchMagnitude;
-            if (maxMag > 0f && mag > maxMag)
+            float hard = MathF.Max(0f, ER_Config.MaxCorpseLaunchMagnitude);
+            if (hard > 0f && mag > hard)
             {
-                mag = maxMag;
+                mag = hard;
             }
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 return false;
@@ -1030,6 +1030,17 @@ namespace ExtremeRagdoll
             if (!TryClampAndNormalizeUp(ref safeDir, ER_Config.CorpseLaunchMaxUpFraction))
                 return false;
             Vec3 nudgedPos = pos;
+            // Apply impulse at torso/center to avoid equipment-hit contacts
+            // (e.g. quiver/bow) causing large angular torque.
+            try
+            {
+                nudgedPos = a.Position;
+                nudgedPos.z += 0.9f;
+            }
+            catch
+            {
+                // keep provided hit position as fallback
+            }
             float zNudge = ER_Config.CorpseLaunchZNudge;
             float zClamp = ER_Config.CorpseLaunchZClampAbove;
             float agentZ = nudgedPos.z;
@@ -1194,10 +1205,17 @@ namespace ExtremeRagdoll
                     }
                     else
                     {
-                        Vec3 fallbackContact = entry.Pos;
-                        try { fallbackContact = agent.Position; }
-                        catch { fallbackContact = entry.Pos; }
-                        Vec3 contact = ResolveHitPosition(entry.Pos, ent, fallbackContact);
+                        // Warm-up should target body center rather than stored hit contact
+                        // (which can be on equipment for missiles).
+                        Vec3 contact = entry.Pos;
+                        try
+                        {
+                            contact = agent.Position;
+                            contact.z += 0.9f;
+                        }
+                        catch
+                        {
+                        }
                         try
                         {
                             contact.z = MathF.Min(contact.z, agent.Position.z + zClamp);
@@ -1218,12 +1236,11 @@ namespace ExtremeRagdoll
                             dir = FinalizeImpulseDir(dir);
 
                             // Warm ragdoll only. Do not shove pre-death.
-                            float warmBase = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f));
+                            float warmBase = MathF.Max(350f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 900f));
                             var kb = new Blow(-1)
                             {
                                 DamageType      = DamageTypes.Blunt,
-                                // Include KnockBack: some builds won’t transition into ragdoll reliably with only KnockDown.
-                                BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                                BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
                                 BaseMagnitude   = warmBase,
                                 SwingDirection  = dir,
                                 GlobalPosition  = contact,
@@ -1451,10 +1468,16 @@ namespace ExtremeRagdoll
                     DecOnce();
                     continue;
                 }
-                Vec3 fallbackPos = L.Pos;
-                try { fallbackPos = agent.Position; }
-                catch { fallbackPos = L.Pos; }
-                Vec3 baseContact = ResolveHitPosition(L.Pos, ent, fallbackPos);
+                // Warm-up should use body center, not potentially gear-biased impact contacts.
+                Vec3 baseContact = L.Pos;
+                try
+                {
+                    baseContact = agent.Position;
+                    baseContact.z += 0.9f;
+                }
+                catch
+                {
+                }
                 Vec3 hit = XYJitter(baseContact);
                 Vec3 contactPoint = hit;
                 contactPoint.z += contactHeight;
@@ -1471,10 +1494,8 @@ namespace ExtremeRagdoll
                     var blow = new Blow(-1)
                     {
                         DamageType      = DamageTypes.Blunt,
-                        // Include KnockBack: some builds won’t transition into ragdoll reliably with only KnockDown.
-                        // Keep warm-up subtle via direction shaping, but strong enough to reliably trigger ragdoll.
-                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                        BaseMagnitude   = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f)),
+                        BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
+                        BaseMagnitude   = MathF.Max(350f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 900f)),
                         SwingDirection  = dir,
                         GlobalPosition  = contactPoint,
                         InflictedDamage = 0
