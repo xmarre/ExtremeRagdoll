@@ -28,6 +28,7 @@ namespace ExtremeRagdoll
         }
         private const float DirectionTinySqThreshold = ER_Math.DirectionTinySq;
         private const float PositionTinySqThreshold = ER_Math.PositionTinySq;
+        private const float HitPosMaxDistSq = 400f; // 20m sanity clamp
         private static float ScheduleDirDuplicateSqThreshold => MathF.Max(0f, ER_Config.ScheduleDirDuplicateSqThreshold);
         private static float SchedulePosDuplicateSqThreshold => MathF.Max(0f, ER_Config.SchedulePosDuplicateSqThreshold);
         private static float ScheduleMagDuplicateFraction => MathF.Max(0f, ER_Config.ScheduleMagDuplicateFraction);
@@ -156,6 +157,14 @@ namespace ExtremeRagdoll
                 float lenSq = candidate.LengthSquared;
                 if (lenSq < PositionTinySqThreshold || float.IsNaN(lenSq) || float.IsInfinity(lenSq))
                     invalid = true;
+
+                if (!invalid)
+                {
+                    var delta = candidate - fallback;
+                    float distSq = delta.LengthSquared;
+                    if (float.IsNaN(distSq) || float.IsInfinity(distSq) || distSq > HitPosMaxDistSq)
+                        invalid = true;
+                }
             }
 
             if (invalid)
@@ -197,6 +206,11 @@ namespace ExtremeRagdoll
 
             float candLenSq = candidate.LengthSquared;
             if (candLenSq < PositionTinySqThreshold || float.IsNaN(candLenSq) || float.IsInfinity(candLenSq))
+                candidate = fallback;
+
+            var finalDelta = candidate - fallback;
+            float finalDistSq = finalDelta.LengthSquared;
+            if (float.IsNaN(finalDistSq) || float.IsInfinity(finalDistSq) || finalDistSq > HitPosMaxDistSq)
                 candidate = fallback;
 
             return candidate;
@@ -1204,7 +1218,7 @@ namespace ExtremeRagdoll
                             dir = FinalizeImpulseDir(dir);
 
                             // Warm ragdoll only. Do not shove pre-death.
-                            float warmBase = MathF.Max(800f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 2500f));
+                            float warmBase = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f));
                             var kb = new Blow(-1)
                             {
                                 DamageType      = DamageTypes.Blunt,
@@ -1460,7 +1474,7 @@ namespace ExtremeRagdoll
                         // Include KnockBack: some builds won’t transition into ragdoll reliably with only KnockDown.
                         // Keep warm-up subtle via direction shaping, but strong enough to reliably trigger ragdoll.
                         BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
-                        BaseMagnitude   = MathF.Max(800f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 2500f)),
+                        BaseMagnitude   = MathF.Max(1f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 100f)),
                         SwingDirection  = dir,
                         GlobalPosition  = contactPoint,
                         InflictedDamage = 0
@@ -1914,6 +1928,22 @@ namespace ExtremeRagdoll
     [HarmonyPatch(typeof(Agent))]
     internal static class ER_Probe_MakeDead
     {
+        internal static ER_Amplify_RegisterBlowPatch.PendingLaunch BuildFallbackPending(Agent agent)
+        {
+            var pos = agent?.Position ?? Vec3.Zero;
+            var dir = agent?.LookDirection ?? new Vec3(0f, 1f, 0f);
+            if (!ER_Math.IsFinite(in dir) || dir.LengthSquared < ER_Math.DirectionTinySq)
+                dir = new Vec3(0f, 1f, 0f);
+            dir = ER_DeathBlastBehavior.PrepDir(dir, 0.35f, 0.00f);
+            return new ER_Amplify_RegisterBlowPatch.PendingLaunch
+            {
+                dir = dir,
+                pos = pos,
+                mag = 6000f,
+                time = agent?.Mission?.CurrentTime ?? 0f
+            };
+        }
+
         static IEnumerable<MethodBase> TargetMethods()
         {
             foreach (var m in AccessTools.GetDeclaredMethods(typeof(Agent)))
@@ -1924,7 +1954,8 @@ namespace ExtremeRagdoll
         static void Post(Agent __instance)
         {
             if (__instance == null) return;
-            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p)) return;
+            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p))
+                p = BuildFallbackPending(__instance);
             float now = __instance.Mission?.CurrentTime ?? 0f;
             if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
             ER_DeathScheduler.Schedule(__instance, p, tag: "MakeDead");
@@ -1945,7 +1976,8 @@ namespace ExtremeRagdoll
         static void Post(Agent __instance)
         {
             if (__instance == null) return;
-            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p)) return;
+            if (!ER_Amplify_RegisterBlowPatch.TryTakePending(__instance.Index, out var p))
+                p = ER_Probe_MakeDead.BuildFallbackPending(__instance);
             float now = __instance.Mission?.CurrentTime ?? 0f;
             if (!ER_Amplify_RegisterBlowPatch.TryMarkScheduled(__instance.Index, now)) return;
             ER_DeathScheduler.Schedule(__instance, p, tag: "Die");
