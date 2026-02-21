@@ -1798,7 +1798,30 @@ namespace ExtremeRagdoll
                 bool allowFallbackWhenInvalid = ER_ImpulsePrefs.AllowSkeletonFallbackForInvalidEntity;
                 bool skeletonAvailable = skel != null;
                 bool warmOk = skeletonAvailable && RagWarm(skel, Ent2WarmupSeconds);
-                bool allowSkeletonNow = skeletonAvailable && (ragActive || warmOk) && (!forceEntity || allowFallbackWhenInvalid);
+
+                // Skeleton/bone-space impulses can misalign on missile kills and look like "teleport" flings.
+                // If we have a sane entity target, prefer entity-space routes and only fall back to skeleton
+                // when the entity is missing/invalid and fallback is allowed.
+                bool allowSkeletonNow = skeletonAvailable && (ragActive || warmOk);
+                bool entityValidForImpulse = hasEnt && aabbOk && haveContact;
+                if (forceEntity)
+                {
+                    if (entityValidForImpulse)
+                    {
+                        allowSkeletonNow = false;
+                    }
+                    else if (!allowFallbackWhenInvalid)
+                    {
+                        allowSkeletonNow = false;
+                    }
+                }
+
+                if (ER_Config.DebugLogging && forceEntity)
+                {
+                    try { Log($"FORCE_ENTITY forceEntity={forceEntity} entValid={entityValidForImpulse} allowSk={allowSkeletonNow}"); }
+                    catch { }
+                }
+
                 bool skApis = (_dSk1 != null || _sk1 != null || _dSk2 != null || _sk2 != null);
                 bool extEnt2Available = (_dEnt2 != null || _ent2 != null); // don’t blanket block; gate below
                 if (!skApis)
