@@ -767,7 +767,15 @@ namespace ExtremeRagdoll
             try
             {
                 var mn = ent.GetPhysicsBoundingBoxMin();
-                float zMin = mn.z + ER_Config.CorpseLaunchZNudge;
+                float zNudge = ER_Config.CorpseLaunchZNudge;
+                float zClamp = ER_Config.CorpseLaunchZClampAbove;
+
+                // AABB min can end up below the terrain (feet / penetration). Clamp to a safer baseline above the agent origin.
+                float baseZ = 0f;
+                try { baseZ = ent.GlobalPosition.z + zClamp; } catch { baseZ = mn.z + zNudge; }
+
+                float zMin = mn.z + zNudge;
+                if (zMin < baseZ) zMin = baseZ;
                 if (c.z < zMin)
                     c.z = zMin;
             }
@@ -1668,6 +1676,19 @@ namespace ExtremeRagdoll
                 }
 
                 try { ent?.ActivateRagdoll(); } catch { }
+
+                // Never apply impulses onto a non-ragdoll skeleton: it looks like a rigid "statue" sliding/teleporting.
+                // If ragdoll is not active yet, force a heavier prep and let the caller retry next frame.
+                if (skel != null && !ragActive)
+                {
+                    try { ER_RagdollPrep.Prep(ent, skel); } catch { }
+                    try { ragActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = false; }
+                    if (!ragActive)
+                    {
+                        if (ER_Config.DebugLogging) { try { Log("IMPULSE_DEFER: ragdoll not active"); } catch { } }
+                        return false;
+                    }
+                }
 
                 // If ragdoll is (now) active but the body stayed kinematic, nudge it awake safely.
                 if (hasEnt && ragActive && !dynOk)
