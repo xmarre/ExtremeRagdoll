@@ -887,7 +887,7 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static Vec3 ClampHitToBody(Agent a, Vec3 pos)
+        internal static Vec3 ClampHitToBody(Agent a, Vec3 pos)
         {
             var body = BodyContact(a);
             if (!ER_Math.IsFinite(in pos))
@@ -2017,7 +2017,7 @@ namespace ExtremeRagdoll
             catch { }
 
             // Clamp pending hit position to body center so downstream corpse impulses do not target gear bodies.
-            try { p.pos = ClampHitToBody(__instance, p.pos); }
+            try { p.pos = ER_DeathBlastBehavior.ClampHitToBody(__instance, p.pos); }
             catch { }
 
             float now = __instance.Mission?.CurrentTime ?? 0f;
@@ -2057,7 +2057,7 @@ namespace ExtremeRagdoll
             catch { }
 
             // Clamp pending hit position to body center so downstream corpse impulses do not target gear bodies.
-            try { p.pos = ClampHitToBody(__instance, p.pos); }
+            try { p.pos = ER_DeathBlastBehavior.ClampHitToBody(__instance, p.pos); }
             catch { }
 
             float now = __instance.Mission?.CurrentTime ?? 0f;
