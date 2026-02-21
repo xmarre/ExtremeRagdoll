@@ -276,6 +276,29 @@ namespace ExtremeRagdoll
             new Dictionary<int, PendingLaunch>();
         private static readonly Dictionary<int, float> _lastScheduled = new Dictionary<int, float>();
         private static float _lastBigShoveTime;
+
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _loggedRegisterBlowOverloads =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+
+        [ThreadStatic] private static bool _suppressPrefix;
+
+        internal static PrefixSuppression SuppressPrefixScope() => new PrefixSuppression(true);
+
+        internal readonly struct PrefixSuppression : IDisposable
+        {
+            private readonly bool _prev;
+
+            public PrefixSuppression(bool set)
+            {
+                _prev = _suppressPrefix;
+                _suppressPrefix = set;
+            }
+
+            public void Dispose()
+            {
+                _suppressPrefix = _prev;
+            }
+        }
         private static readonly Dictionary<int, float> _lastImmediateImpulse = new Dictionary<int, float>();
         // BigShove aggregation to avoid per-agent spam
         private static float _bsAggUntil = 0f;
@@ -462,7 +485,7 @@ namespace ExtremeRagdoll
                     var sig = string.Join(", ", Array.ConvertAll(cand.GetParameters(), p => p.ParameterType.FullName));
                     ER_Log.Info("RegisterBlow overload: (" + sig + ")");
                 }
-                ER_Log.Error("Harmony target not found: Agent.RegisterBlow (expected Blow + AttackCollisionData / ref AttackCollisionData)");
+                ER_Log.Error("Harmony target not found: Agent.RegisterBlow (expected any overload whose first parameter is Blow or ref Blow)");
                 return false;
             }
 
@@ -476,8 +499,6 @@ namespace ExtremeRagdoll
         private static IEnumerable<MethodBase> TargetMethods()
         {
             var agent = typeof(Agent);
-            var want = typeof(AttackCollisionData);
-            var wantByRef = want.MakeByRefType();
             var blow = typeof(Blow);
 
             foreach (var candidate in AccessTools.GetDeclaredMethods(agent))
@@ -485,23 +506,10 @@ namespace ExtremeRagdoll
                 if (candidate.Name != nameof(Agent.RegisterBlow)) continue;
 
                 var parameters = candidate.GetParameters();
-                if (parameters.Length < 2) continue;
-                if (parameters[0].IsIn) continue;
+                if (parameters.Length < 1) continue;
 
                 var p0 = parameters[0].ParameterType;
                 if (p0 != blow && !(p0.IsByRef && p0.GetElementType() == blow)) continue;
-
-                bool hasAcd = false;
-                for (int i = 1; i < parameters.Length; i++)
-                {
-                    var pt = parameters[i].ParameterType;
-                    if (pt == want || pt == wantByRef || (pt.IsByRef && pt.GetElementType() == want))
-                    {
-                        hasAcd = true;
-                        break;
-                    }
-                }
-                if (!hasAcd) continue;
 
                 yield return candidate;
             }
@@ -557,9 +565,17 @@ namespace ExtremeRagdoll
         private static void Prefix(
             Agent __instance,
             [HarmonyArgument(0)] ref Blow blow,
-            object[] __args)
+            object[] __args,
+            MethodBase __originalMethod)
         {
             if (__instance == null) return;
+            if (_suppressPrefix) return;
+            if (ER_Config.DebugLogging && __originalMethod != null)
+            {
+                var key = __originalMethod.ToString();
+                if (_loggedRegisterBlowOverloads.TryAdd(key, 1))
+                    ER_Log.Info("RegisterBlow hit: " + key);
+            }
 
             float timeNow = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
             if (timeNow != _lastBigShoveTime)
