@@ -631,6 +631,7 @@ namespace ExtremeRagdoll
 
         [HarmonyPrefix]
         [HarmonyAfter(new[] { "TOR", "TOR_Core" })]
+        // Run late so other mods can finalize Blow data before our capture/amplify path reads it.
         [HarmonyPriority(HarmonyLib.Priority.Last)]
         private static void Prefix(
             Agent __instance,
@@ -899,7 +900,8 @@ namespace ExtremeRagdoll
                 // (frozen) pose. We clamp engine magnitude to a modest range and let our own CorpseLaunch impulse
                 // provide the *real* punch a few frames later.
 
-                blow.BlowFlag |= BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound;
+                blow.BlowFlag |= BlowFlags.KnockDown | BlowFlags.NoSound;
+                try { blow.BlowFlag &= ~BlowFlags.KnockBack; } catch { }
 
                 // lethal: keep direction planar; avoid any upward bias
                 var lethalDir = ER_DeathBlastBehavior.PrepDir(dir, 1f, 0f);
@@ -908,9 +910,9 @@ namespace ExtremeRagdoll
                 blow.SwingDirection = lethalDir;
 
                 // ensure non-zero magnitude so the engine actually switches into ragdoll
-                const float engineMin = 1200f;
+                const float engineMin = 500f;
                 // Ranged lethals already carry strong engine momentum; keep this low to avoid tunneling/teleport pops.
-                float engineMax = (missileSpeed > 0f) ? 1800f : 4500f;
+                float engineMax = (missileSpeed > 0f) ? 700f : 900f;
                 float baseMag = blow.BaseMagnitude;
                 if (float.IsNaN(baseMag) || float.IsInfinity(baseMag) || baseMag < 0f)
                     baseMag = 0f;
@@ -941,6 +943,9 @@ namespace ExtremeRagdoll
                     // Lower arrow floors drastically: prevents giant engine knockback that causes corpse “teleport”.
                     float floor = 1200f + missileSpeed * 10f;
                     floor = Cap(floor, ER_Config.MaxBlowBaseMagnitude, 4000f);
+                    // Absolute safety cap (even if config is mis-set)
+                    const float ABS_FLOOR_MAX = 2200f;
+                    if (floor > ABS_FLOOR_MAX) floor = ABS_FLOOR_MAX;
                     if (ER_Config.MaxNonLethalKnockback > 0f) floor = MathF.Min(floor, ER_Config.MaxNonLethalKnockback);
                     float origBase = blow.BaseMagnitude;
                     if (origBase + 500f < floor)
@@ -963,6 +968,9 @@ namespace ExtremeRagdoll
                     // BigShove is for genuinely heavy melee impacts. Keep it below tunneling levels.
                     float shoveFloor = MathF.Max(3500f, 2500f + origBase * 0.15f);
                     shoveFloor       = Cap(shoveFloor, ER_Config.MaxBlowBaseMagnitude, 6500f);
+                    // Absolute safety cap (even if config is mis-set)
+                    const float ABS_SHOVE_MAX = 3000f;
+                    if (shoveFloor > ABS_SHOVE_MAX) shoveFloor = ABS_SHOVE_MAX;
                     if (ER_Config.MaxNonLethalKnockback > 0f) shoveFloor = MathF.Min(shoveFloor, ER_Config.MaxNonLethalKnockback);
                     if (canBoostBigShove && origBase + 800f < shoveFloor) // ignore tiny nudges
                     {
@@ -1111,6 +1119,9 @@ namespace ExtremeRagdoll
                                     if (soft > 0f && impMag > soft) impMag = soft;
                                     float hard   = ER_Config.CorpseImpulseHardCap;
                                     if (hard > 0f && impMag > hard) impMag = hard;
+
+                                    const float ABS_IMPULSE_HARD = 6f;
+                                    if (impMag > ABS_IMPULSE_HARD) impMag = ABS_IMPULSE_HARD;
                                     if (impMag > 0f && !float.IsNaN(impMag) && !float.IsInfinity(impMag))
                                     {
                                         Vec3 c = contact;
@@ -1166,6 +1177,37 @@ namespace ExtremeRagdoll
                 beh?.EnqueueKick(__instance, dir, kickMag, 0.10f);
                 _pending.Remove(__instance.Index);
             }
+        }
+
+        [HarmonyPostfix]
+        [HarmonyAfter(new[] { "TOR", "TOR_Core" })]
+        [HarmonyPriority(HarmonyLib.Priority.Last)]
+        private static void Postfix(Agent __instance)
+        {
+            if (__instance == null) return;
+
+            float hp = __instance.Health;
+            if (float.IsNaN(hp) || float.IsInfinity(hp)) return;
+            if (hp > 0f) return;
+
+            // Ensure we never leave a dead agent standing without physics.
+            try { ER_Probe_MakeDead.ForceRagdollNow(__instance); } catch { }
+
+            // Some builds/modpacks never route through MakeDead/Die after a lethal RegisterBlow.
+            // Schedule our corpse impulse directly here as a fallback.
+            try
+            {
+                float now = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f;
+                if (!TryMarkScheduled(__instance.Index, now)) return;
+
+                if (!TryTakePending(__instance.Index, out var p))
+                    p = ER_Probe_MakeDead.BuildFallbackPending(__instance);
+
+                try { p.pos = ER_DeathBlastBehavior.ClampHitToBody(__instance, p.pos); } catch { }
+
+                ER_DeathScheduler.Schedule(__instance, p, tag: "RegisterBlow");
+            }
+            catch { }
         }
 
         private static void LogSuppressedPrefixOncePer(float minDelta, float now)
