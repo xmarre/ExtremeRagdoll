@@ -906,6 +906,8 @@ namespace ExtremeRagdoll
 
             pos.x = body.x;
             pos.y = body.y;
+            // Keep impulses centered on the torso; preserving a low Z (feet/ground) can drive ragdolls into the floor.
+            pos.z = body.z;
             return pos;
         }
 
@@ -2006,6 +2008,28 @@ namespace ExtremeRagdoll
                 if (m.Name == nameof(Agent.MakeDead)) yield return m;
         }
 
+        internal static void ForceRagdollNow(Agent a)
+        {
+            if (a == null) return;
+            try
+            {
+                GameEntity ent = null;
+                Skeleton sk = null;
+                try { ent = a.AgentVisuals?.GetEntity(); } catch { ent = null; }
+                try { sk = a.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
+                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); } catch { }
+                try { ER_AgentRagdollForce.TryForce(a); } catch { }
+                try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
+            }
+            catch { }
+        }
+
+        [HarmonyPrefix, HarmonyAfter(new[] { "TOR", "TOR_Core" }), HarmonyPriority(HarmonyLib.Priority.First)]
+        static void Pre(Agent __instance)
+        {
+            ForceRagdollNow(__instance);
+        }
+
         [HarmonyPostfix, HarmonyAfter(new[] { "TOR", "TOR_Core" }), HarmonyPriority(HarmonyLib.Priority.Last)]
         static void Post(Agent __instance)
         {
@@ -2014,16 +2038,7 @@ namespace ExtremeRagdoll
                 p = BuildFallbackPending(__instance);
 
             // Force ragdoll activation on death to avoid "frozen standing" corpses on some builds.
-            try
-            {
-                GameEntity ent = null;
-                Skeleton sk = null;
-                try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
-                try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
-                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); ER_AgentRagdollForce.TryForce(__instance); } catch { }
-                try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
-            }
-            catch { }
+            try { ForceRagdollNow(__instance); } catch { }
 
             // Clamp pending hit position to body center so downstream corpse impulses do not target gear bodies.
             try { p.pos = ER_DeathBlastBehavior.ClampHitToBody(__instance, p.pos); }
@@ -2045,6 +2060,12 @@ namespace ExtremeRagdoll
                 if (m.Name == "Die") yield return m;
         }
 
+        [HarmonyPrefix, HarmonyAfter(new[] { "TOR", "TOR_Core" }), HarmonyPriority(HarmonyLib.Priority.First)]
+        static void Pre(Agent __instance)
+        {
+            ER_Probe_MakeDead.ForceRagdollNow(__instance);
+        }
+
         [HarmonyPostfix, HarmonyAfter(new[] { "TOR", "TOR_Core" }), HarmonyPriority(HarmonyLib.Priority.Last)]
         static void Post(Agent __instance)
         {
@@ -2053,16 +2074,7 @@ namespace ExtremeRagdoll
                 p = ER_Probe_MakeDead.BuildFallbackPending(__instance);
 
             // Force ragdoll activation on death to avoid "frozen standing" corpses on some builds.
-            try
-            {
-                GameEntity ent = null;
-                Skeleton sk = null;
-                try { ent = __instance.AgentVisuals?.GetEntity(); } catch { ent = null; }
-                try { sk = __instance.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
-                try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); ER_AgentRagdollForce.TryForce(__instance); } catch { }
-                try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
-            }
-            catch { }
+            try { ER_Probe_MakeDead.ForceRagdollNow(__instance); } catch { }
 
             // Clamp pending hit position to body center so downstream corpse impulses do not target gear bodies.
             try { p.pos = ER_DeathBlastBehavior.ClampHitToBody(__instance, p.pos); }
@@ -2085,24 +2097,106 @@ namespace ExtremeRagdoll
             try
             {
                 const BindingFlags bf = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var all = t.GetMethods(bf);
+
                 // Order matters: prefer explicit state/mode setters.
-                string[] names = { "SetRagdollMode", "SetRagdollState", "SetRagdoll", "SwitchToRagdoll", "StartRagdoll" };
-                foreach (var n in names)
+                string[] preferred = { "SetRagdollMode", "SetRagdollState", "SetRagdoll", "SwitchToRagdoll", "StartRagdoll", "ActivateRagdoll" };
+
+                // Pick best overload by simple scoring (no GetMethod() => no AmbiguousMatchException).
+                for (int pi = 0; pi < preferred.Length; pi++)
                 {
-                    try
+                    var want = preferred[pi];
+                    MethodInfo best = null;
+                    int bestScore = int.MinValue;
+
+                    for (int i = 0; i < all.Length; i++)
                     {
-                        var m = t.GetMethod(n, bf);
+                        var m = all[i];
                         if (m == null) continue;
+                        if (!string.Equals(m.Name, want, StringComparison.OrdinalIgnoreCase)) continue;
+
                         var ps = m.GetParameters();
-                        if (ps.Length == 0) return m;
-                        if (ps.Length == 1)
+                        if (ps.Length > 2) continue;
+
+                        int score = 0;
+                        if (ps.Length == 0)
+                        {
+                            score += 10;
+                        }
+                        else
                         {
                             var p0 = ps[0].ParameterType;
-                            if (p0 == typeof(bool) || p0 == typeof(int)) return m;
-                            if (p0.IsEnum) return m;
+                            if (p0 == typeof(bool)) score += 9;
+                            else if (p0.IsEnum) score += 8;
+                            else if (p0 == typeof(int)) score += 6;
+                            else continue;
+
+                            if (ps.Length == 2)
+                            {
+                                var p1 = ps[1].ParameterType;
+                                if (p1 == typeof(float) || p1 == typeof(double) || p1 == typeof(int)) score += 1;
+                                else continue;
+                            }
+                        }
+
+                        var n = m.Name ?? string.Empty;
+                        if (n.IndexOf("set", StringComparison.OrdinalIgnoreCase) >= 0) score += 4;
+                        if (n.IndexOf("mode", StringComparison.OrdinalIgnoreCase) >= 0) score += 3;
+                        if (n.IndexOf("state", StringComparison.OrdinalIgnoreCase) >= 0) score += 3;
+                        if (n.IndexOf("activate", StringComparison.OrdinalIgnoreCase) >= 0) score += 3;
+                        if (n.IndexOf("start", StringComparison.OrdinalIgnoreCase) >= 0) score += 2;
+                        if (n.IndexOf("switch", StringComparison.OrdinalIgnoreCase) >= 0) score += 2;
+
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            best = m;
                         }
                     }
-                    catch { }
+
+                    if (best != null) return best;
+                }
+
+                // Fallback: any method containing "ragdoll" that isn't an obvious getter.
+                {
+                    MethodInfo best = null;
+                    int bestScore = int.MinValue;
+                    for (int i = 0; i < all.Length; i++)
+                    {
+                        var m = all[i];
+                        if (m == null) continue;
+                        var name = m.Name ?? string.Empty;
+                        if (name.IndexOf("ragdoll", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        if (name.StartsWith("get_", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (name.StartsWith("is", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        var ps = m.GetParameters();
+                        if (ps.Length > 2) continue;
+
+                        int score = 0;
+                        if (ps.Length == 0) score += 10;
+                        else
+                        {
+                            var p0 = ps[0].ParameterType;
+                            if (p0 == typeof(bool)) score += 9;
+                            else if (p0.IsEnum) score += 8;
+                            else if (p0 == typeof(int)) score += 6;
+                            else continue;
+                            if (ps.Length == 2)
+                            {
+                                var p1 = ps[1].ParameterType;
+                                if (p1 == typeof(float) || p1 == typeof(double) || p1 == typeof(int)) score += 1;
+                                else continue;
+                            }
+                        }
+
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            best = m;
+                        }
+                    }
+                    if (best != null) return best;
                 }
             }
             catch { }

@@ -577,9 +577,7 @@ namespace ExtremeRagdoll
 
                 var parameters = candidate.GetParameters();
                 if (parameters.Length < 1) continue;
-                // Skip `in Blow` (readonly-ref) overloads; our prefix argument is `ref Blow`.
-                if (parameters[0].IsIn) continue;
-
+                // Include `in Blow` overloads too; Harmony will still bind our `ref Blow` prefix.
                 var p0 = parameters[0].ParameterType;
                 if (p0 != blow && !(p0.IsByRef && p0.GetElementType() == blow)) continue;
 
@@ -633,7 +631,7 @@ namespace ExtremeRagdoll
 
         [HarmonyPrefix]
         [HarmonyAfter(new[] { "TOR", "TOR_Core" })]
-        [HarmonyPriority(HarmonyLib.Priority.First)]
+        [HarmonyPriority(HarmonyLib.Priority.Last)]
         private static void Prefix(
             Agent __instance,
             [HarmonyArgument(0)] ref Blow blow,
@@ -665,11 +663,12 @@ namespace ExtremeRagdoll
             }
 
             float hp = __instance.Health;
-            if (hp <= 0f)
-            {
-                _pending.Remove(__instance.Index);
-                return;
-            }
+            if (float.IsNaN(hp) || float.IsInfinity(hp) || hp < 0f) hp = 0f;
+
+            // Some game builds/modpacks call RegisterBlow after health has already been reduced to <= 0.
+            // Do NOT early-return in that case, otherwise we miss the chance to force a proper ragdoll transition.
+            bool hpAlreadyDead = hp <= 0f;
+            if (hpAlreadyDead) hp = 0f;
 
             // Zero-Damage-Spells können tödlich sein → nur aussteigen, wenn auch keine Projektil-Geschwindigkeit.
             // (ResolveMissileSpeed ist dank gecachtem Reflection-Zugriff günstig.)
@@ -752,7 +751,14 @@ namespace ExtremeRagdoll
                 catch { }
             }
 
-            bool lethal = hp - blow.InflictedDamage <= 0f;
+            bool lethal = hpAlreadyDead || (hp - blow.InflictedDamage <= 0f);
+            if (lethal)
+            {
+                // Some builds call MakeDead/Die too late (or after visuals are half-detached).
+                // Force ragdoll right here while visuals/skeleton are still most likely valid.
+                try { ER_Probe_MakeDead.ForceRagdollNow(__instance); } catch { }
+            }
+
             bool missileBlocked = !lethal && missileSpeed > 0f && blow.InflictedDamage <= 0f;
             bool allowBlockedPush = ER_Config.BlockedMissilesCanPush;
             bool isExplosion = hasAcd && GuessExplosion(acd, blow, missileSpeed);
