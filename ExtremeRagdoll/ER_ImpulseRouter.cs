@@ -762,20 +762,29 @@ namespace ExtremeRagdoll
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void LiftContactFloor(GameEntity ent, ref Vec3 c)
         {
-            if (ent == null || !LooksDynamic(ent))
+            if (ent == null)
                 return;
             try
             {
-                var mn = ent.GetPhysicsBoundingBoxMin();
                 float zNudge = ER_Config.CorpseLaunchZNudge;
                 float zClamp = ER_Config.CorpseLaunchZClampAbove;
 
-                // AABB min can end up below the terrain (feet / penetration). Clamp to a safer baseline above the agent origin.
-                float baseZ = 0f;
-                try { baseZ = ent.GlobalPosition.z + zClamp; } catch { baseZ = mn.z + zNudge; }
+                // Clamp to a baseline above the entity origin; AABB mins can dip below terrain due to penetration.
+                float baseZ = c.z;
+                try { baseZ = ent.GlobalPosition.z + zClamp; } catch { }
 
-                float zMin = mn.z + zNudge;
-                if (zMin < baseZ) zMin = baseZ;
+                float zMin = baseZ;
+                try
+                {
+                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    zMin = mn.z + zNudge;
+                    if (zMin < baseZ) zMin = baseZ;
+                }
+                catch
+                {
+                    zMin = baseZ;
+                }
+
                 if (c.z < zMin)
                     c.z = zMin;
             }
