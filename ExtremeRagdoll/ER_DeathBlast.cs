@@ -38,12 +38,22 @@ namespace ExtremeRagdoll
         private float _lastTickT;
         private static int _impulseLogCount;
         private bool _missionRouterResetDone;
+        private int _deadSweepCursor;
+        private float _deadSweepLastT;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static float CapImpulse(float imp)
         {
+            if (float.IsNaN(imp) || float.IsInfinity(imp) || imp <= 0f)
+                return 0f;
+
+            // Always enforce a safety cap to prevent tunneling / floor fall-through on modded values.
+            const float ABS_HARD = 6f;
+
             float hard = ER_Config.CorpseImpulseHardCap;
-            return (hard > 0f && !float.IsNaN(imp) && !float.IsInfinity(imp)) ? MathF.Min(imp, hard) : imp;
+            float cap = (hard > 0f) ? MathF.Min(hard, ABS_HARD) : ABS_HARD;
+
+            return (imp > cap) ? cap : imp;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -496,6 +506,11 @@ namespace ExtremeRagdoll
             // Make corpse nudges visible. Old: 25k → 6.3. New: 25k → 25.
             float imp = mag * 1.0e-3f;
 
+            // Boost very small magnitudes (often caused by MaxCorpseLaunchMagnitude caps)
+            // so corpse-launch can still provide visible motion when we reduce engine knockback.
+            if (mag < 2000f) imp *= 4f;
+            else if (mag < 4000f) imp *= 2f;
+
             float minImpulse = ER_Config.CorpseImpulseMinimum;
             if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
                 minImpulse = 0f;
@@ -514,7 +529,11 @@ namespace ExtremeRagdoll
             }
 
             if (imp < minImpulse)
-                imp = minImpulse;
+            {
+                // Do not force a minimum impulse for very small magnitudes; that can turn tiny hits into big shoves.
+                if (mag >= 4000f && imp < minImpulse)
+                    imp = minImpulse;
+            }
             if (maxImpulse > 0f && imp > maxImpulse)
                 imp = maxImpulse;
             // hard safety to prevent “rocket” corpses if config is mis-set
@@ -528,6 +547,10 @@ namespace ExtremeRagdoll
 
             if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp))
                 return 0f;
+
+            const float ABS_HARD = 6f;
+            if (imp > ABS_HARD)
+                imp = ABS_HARD;
 
             if (ER_Config.DebugLogging && _impulseLogCount < 16)
             {
@@ -928,12 +951,16 @@ namespace ExtremeRagdoll
             ER_Amplify_RegisterBlowPatch.ClearPending();
             ER_ImpulseRouter.ResetUnsafeState();
             _missionRouterResetDone = false;
+            _deadSweepCursor = 0;
+            _deadSweepLastT = 0f;
         }
 
         public override void OnRemoveBehavior()
         {
             Instance = null;
             _missionRouterResetDone = false;
+            _deadSweepCursor = 0;
+            _deadSweepLastT = 0f;
             _recent.Clear();
             _kicks.Clear();
             _preLaunches.Clear();
@@ -984,6 +1011,7 @@ namespace ExtremeRagdoll
             contact.z += lift;
 
             float now = mission.CurrentTime;
+            SweepDeadRagdolls(mission, now);
             var entry = new PreLaunch
             {
                 Agent   = agent,
@@ -1128,12 +1156,71 @@ namespace ExtremeRagdoll
 
         private static void WarmRagdoll(GameEntity ent, Skeleton skel)
         {
+            try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
             try { ent?.ActivateRagdoll(); } catch { }
             try { skel?.ActivateRagdoll(); } catch { }
             // For perf, don't force LOD=0 globally; it’s heavy on crowds.
             // try { ent?.SetEnforcedMaximumLodLevel(0); } catch { }
             try { skel?.ForceUpdateBoneFrames(); } catch { }
             // Do NOT heavy-tick here; just ensure bones exist and are dynamic.
+        }
+
+        private void SweepDeadRagdolls(Mission mission, float now)
+        {
+            if (mission == null)
+                return;
+
+            // cheap throttle to avoid work when time is not advancing / in menus
+            float dtSweep = now - _deadSweepLastT;
+            if (dtSweep < 0.10f)
+                return;
+            _deadSweepLastT = now;
+
+            const int budget = 24;
+
+            try
+            {
+                var agents = mission.Agents;
+                int count = agents?.Count ?? 0;
+                if (count <= 0)
+                    return;
+
+                int start = _deadSweepCursor;
+                if (start < 0) start = 0;
+                if (start >= count) start %= count;
+
+                int checkedDead = 0;
+                int advance = 0;
+                for (int i = 0; i < count && checkedDead < budget; i++)
+                {
+                    int idx2 = start + i;
+                    if (idx2 >= count) idx2 -= count;
+                    advance = i + 1;
+
+                    Agent a = null;
+                    try { a = agents[idx2]; } catch { a = null; }
+                    if (a == null) continue;
+
+                    float hp = 1f;
+                    try { hp = a.Health; } catch { hp = 1f; }
+                    if (float.IsNaN(hp) || float.IsInfinity(hp) || hp > 0f) continue;
+                    checkedDead++;
+
+                    Skeleton sk = null;
+                    try { sk = a.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
+
+                    bool rag = false;
+                    try { rag = sk != null && IsRagdollActiveFast(sk); } catch { rag = false; }
+                    if (rag) continue;
+
+                    // Heavy recovery path: force ragdoll while visuals/skeleton are still present.
+                    try { ER_Probe_MakeDead.ForceRagdollNow(a); } catch { }
+                }
+
+                _deadSweepCursor = start + advance;
+                if (_deadSweepCursor >= count) _deadSweepCursor %= count;
+            }
+            catch { }
         }
 
         public override void OnMissionTick(float dt)
@@ -1150,6 +1237,7 @@ namespace ExtremeRagdoll
             ER_ImpulseRouter.Tick();
             if (IsPausedFast()) return;
             float now = mission.CurrentTime;
+            SweepDeadRagdolls(mission, now);
             TickCorpseQueue(now);
             // Gentle ramp after UI resume
             if (_lastTickT == 0f) _lastTickT = now;
@@ -1164,6 +1252,7 @@ namespace ExtremeRagdoll
             float tookVertical = ER_Config.CorpseLaunchVerticalDelta;
             float tookDisplacement = ER_Config.CorpseLaunchDisplacement;
             float contactHeight = ER_Config.CorpseLaunchContactHeight;
+            if (contactHeight < 0.25f) contactHeight = 0.25f;
             float retryDelay = ER_Config.CorpseLaunchRetryDelay;
             float preRetryDelay = MathF.Max(0.02f, ER_Config.CorpseLaunchRetryDelay);
             int queueCap = ER_Config.CorpseLaunchQueueCap;
@@ -1461,7 +1550,9 @@ namespace ExtremeRagdoll
                         {
                             var contactMiss = XYJitter(ResolveHitPosition(L.Pos, ent, L.Pos));
                             contactMiss.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactMiss, agentIndex);
+                            var impulse = dir * impMag;
+                            if (impulse.z < 0f) impulse.z = 0f;
+                            bool ok = TryApplyImpulse(ent, skel, impulse, contactMiss, agentIndex);
                             nudged |= ok;
                             if (ok)
                                 MarkLaunched(agentIndex);   // ensure one-shot across retries
@@ -1605,7 +1696,9 @@ namespace ExtremeRagdoll
                                     skel?.TickAnimationsAndForceUpdate(0.001f, f2, true);
                                 }
                                 catch { }
-                                bool ok2 = TryApplyImpulse(ent2, skel, dir * impMag2, contactPoint, agentIndex);
+                                var impulse2 = dir * impMag2;
+                                if (impulse2.z < 0f) impulse2.z = 0f;
+                                bool ok2 = TryApplyImpulse(ent2, skel, impulse2, contactPoint, agentIndex);
                                 nudged |= ok2;
                                 if (ok2)
                                 {
@@ -1644,7 +1737,9 @@ namespace ExtremeRagdoll
                             catch { fallbackEntity = L.Pos; }
                             var contactEntity = XYJitter(ResolveHitPosition(L.Pos, ent, fallbackEntity));
                             contactEntity.z += contactHeight;
-                            bool ok = TryApplyImpulse(ent, skel, dir * impMag, contactEntity, agentIndex);
+                            var impulse = dir * impMag;
+                            if (impulse.z < 0f) impulse.z = 0f;
+                            bool ok = TryApplyImpulse(ent, skel, impulse, contactEntity, agentIndex);
                             nudged |= ok;
                             if (ok)
                             {
@@ -1702,6 +1797,7 @@ namespace ExtremeRagdoll
                     if ((entLocal != null || skelLocal != null) && impMag > 0f)
                     {
                         var impulse = dir * impMag;
+                        if (impulse.z < 0f) impulse.z = 0f;
                         try { skelLocal?.ActivateRagdoll(); } catch { }
                         try { skelLocal?.ForceUpdateBoneFrames(); } catch { }
                         try
@@ -2017,6 +2113,9 @@ namespace ExtremeRagdoll
                 Skeleton sk = null;
                 try { ent = a.AgentVisuals?.GetEntity(); } catch { ent = null; }
                 try { sk = a.AgentVisuals?.GetSkeleton(); } catch { sk = null; }
+
+                // Wake first so ActivateRagdoll has a dynamic body to bind to on some builds/modpacks.
+                try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
                 try { ER_RagdollPrep.PrepareIfNeeded(ent, sk); } catch { }
                 try { ER_AgentRagdollForce.TryForce(a); } catch { }
                 try { ER_ImpulseRouter.WakeDynamicBodyPublic(ent); } catch { }
