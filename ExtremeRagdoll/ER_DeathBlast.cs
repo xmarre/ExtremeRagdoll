@@ -48,7 +48,7 @@ namespace ExtremeRagdoll
                 return 0f;
 
             // Always enforce a safety cap to prevent tunneling / floor fall-through on modded values.
-            const float ABS_HARD = 6f;
+            const float ABS_HARD = 1.25f;
 
             float hard = ER_Config.CorpseImpulseHardCap;
             float cap = (hard > 0f) ? MathF.Min(hard, ABS_HARD) : ABS_HARD;
@@ -260,7 +260,7 @@ namespace ExtremeRagdoll
             if (ent != null && WasRagdollPrepared(ent))
             {
                 bool ragActive = false;
-                try { ragActive = (skel == null) || ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = (skel == null); }
+                try { ragActive = (skel != null) && ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = false; }
                 if (ragActive)
                 {
                     prepared = true;
@@ -285,15 +285,24 @@ namespace ExtremeRagdoll
             if (impulseSq < ER_Math.ImpulseTinySq || float.IsNaN(impulseSq) || float.IsInfinity(impulseSq))
                 return false;
 
+            // Avoid "flying statue" corpses: only impulse when we have a real ragdoll skeleton.
+            if (skel == null)
+                return false;
+
+            // Never push downward into the ground.
+            if (impulse.z < 0f) impulse.z = 0f;
+
             PrepareRagdoll(ent, skel, out bool prepared);
             if (!prepared)
             {
                 ER_RagdollPrep.Prep(ent, skel);
                 bool ragActive = false;
-                try { ragActive = (skel == null) || ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = (skel == null); }
+                try { ragActive = (skel != null) && ER_DeathBlastBehavior.IsRagdollActiveFast(skel); } catch { ragActive = false; }
                 // Only mark as prepared once ragdoll is truly active. Marking too early causes "frozen standing" corpses.
                 if (ragActive)
                     MarkRagdollPrepared(ent);
+                if (!ragActive)
+                    return false;
             }
 
             bool ok = ER_ImpulseRouter.TryImpulse(ent, skel, impulse, pos);
@@ -443,7 +452,7 @@ namespace ExtremeRagdoll
             if ((ent == null && skel == null) || !ER_Math.IsFinite(in worldImpulse) || !ER_Math.IsFinite(in worldPos))
                 return false;
 
-            bool ok = ER_ImpulseRouter.TryImpulse(ent, skel, worldImpulse, worldPos);
+            bool ok = TryApplyImpulse(ent, skel, worldImpulse, worldPos, agentId);
             if (!ok && agentId >= 0)
             {
                 var behavior = Instance;
@@ -504,12 +513,9 @@ namespace ExtremeRagdoll
         {
             // Convert RegisterBlow magnitude to a reasonable physics impulse scale.
             // Make corpse nudges visible. Old: 25k → 6.3. New: 25k → 25.
-            float imp = mag * 1.0e-3f;
-
-            // Boost very small magnitudes (often caused by MaxCorpseLaunchMagnitude caps)
-            // so corpse-launch can still provide visible motion when we reduce engine knockback.
-            if (mag < 2000f) imp *= 4f;
-            else if (mag < 4000f) imp *= 2f;
+            // Physics impulse units are extremely strong; keep the mapping conservative.
+            const float MAG_TO_IMP = 1.0e-4f;
+            float imp = mag * MAG_TO_IMP;
 
             float minImpulse = ER_Config.CorpseImpulseMinimum;
             if (float.IsNaN(minImpulse) || float.IsInfinity(minImpulse))
@@ -531,7 +537,7 @@ namespace ExtremeRagdoll
             if (imp < minImpulse)
             {
                 // Do not force a minimum impulse for very small magnitudes; that can turn tiny hits into big shoves.
-                if (mag >= 4000f && imp < minImpulse)
+                if (mag >= 12000f && imp < minImpulse)
                     imp = minImpulse;
             }
             if (maxImpulse > 0f && imp > maxImpulse)
@@ -548,7 +554,7 @@ namespace ExtremeRagdoll
             if (imp < 0f || float.IsNaN(imp) || float.IsInfinity(imp))
                 return 0f;
 
-            const float ABS_HARD = 6f;
+            const float ABS_HARD = 1.25f;
             if (imp > ABS_HARD)
                 imp = ABS_HARD;
 
@@ -869,7 +875,7 @@ namespace ExtremeRagdoll
                 try
                 {
                     var impulsePos = ClampHitToBody(agent, entry.Pos);
-                    ok = ER_ImpulseRouter.TryImpulse(ent, skel, entry.Imp, impulsePos);
+                    ok = TryApplyImpulse(ent, skel, entry.Imp, impulsePos, agentId);
                     entry.Pos = impulsePos;
                 }
                 catch
@@ -997,7 +1003,7 @@ namespace ExtremeRagdoll
             if (mag <= 0f)
                 return;
 
-            Vec3 safeDir = FinalizeImpulseDir(PrepDir(dir, 1f, 0f));
+            Vec3 safeDir = FinalizeImpulseDir(PrepDir(dir, 1f, 0f), 0f);
             if (!ER_Math.IsFinite(in safeDir) || safeDir.LengthSquared < DirectionTinySqThreshold)
                 return;
 
@@ -1087,7 +1093,7 @@ namespace ExtremeRagdoll
             if (mag <= 0f || float.IsNaN(mag) || float.IsInfinity(mag))
                 return false;
             Vec3 safeDir = dir;
-            if (!TryClampAndNormalizeUp(ref safeDir, ER_Config.CorpseLaunchMaxUpFraction))
+            if (!TryClampAndNormalizeUp(ref safeDir, 0f))
                 return false;
             Vec3 nudgedPos = pos;
             // Apply impulse at torso/center to avoid equipment-hit contacts
@@ -1443,6 +1449,9 @@ namespace ExtremeRagdoll
                     mag = maxNonLethal;
                 }
 
+                // Absolute safety cap for engine RegisterBlow kicks (modded forces can be enormous).
+                const float KICK_ENGINE_MAX = 900f;
+                if (mag > KICK_ENGINE_MAX) mag = KICK_ENGINE_MAX;
                 if (mag <= 0f)
                 {
                     _kicks.RemoveAt(i);
@@ -1454,7 +1463,7 @@ namespace ExtremeRagdoll
                 var kb = new Blow(-1)
                 {
                     DamageType      = DamageTypes.Blunt,
-                    BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                    BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
                     BaseMagnitude   = mag,
                     SwingDirection  = dir,
                     GlobalPosition  = k.A.Position,
@@ -1618,20 +1627,12 @@ namespace ExtremeRagdoll
                 {
                     L.P0 = agent.Position;
                     L.V0 = agent.Velocity;
-                    var blow = new Blow(-1)
-                    {
-                        DamageType      = DamageTypes.Blunt,
-                        BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
-                        BaseMagnitude   = MathF.Max(350f, MathF.Min(ER_Config.WarmupBlowBaseMagnitude, 900f)),
-                        SwingDirection  = dir,
-                        GlobalPosition  = contactPoint,
-                        InflictedDamage = 0
-                    };
-                    AttackCollisionData acd = default;
-                    using (ER_Amplify_RegisterBlowPatch.SuppressPrefixScope())
-                    {
-                        agent.RegisterBlow(blow, in acd);
-                    }
+
+                    // Do NOT use RegisterBlow as a “warmup” here: some builds/modpacks turn that into a massive
+                    // engine knockback and you end up with “rocket corpses” / flying statues.
+                    WarmRagdoll(ent, skel);
+                    try { ER_AgentRagdollForce.TryForce(agent); } catch { }
+
                     L.Warmed = true;
                     L.T = now + MathF.Max(0.05f, retryDelay); // small settle time
                     L.Pos = agent.Position;
@@ -1920,6 +1921,10 @@ namespace ExtremeRagdoll
                     if (d > b.Radius) continue;
                     float force = (b.Force * ER_Config.DeathBlastForceMultiplier) * (1f / (1f + d));
                     if (force <= 0f) continue;
+                    // Engine blow magnitude can “yeet” agents/corpses into orbit on modded spell forces.
+                    // Use engine only to trip ragdoll; real punch is handled by our own corpse-impulse path.
+                    const float AOE_ENGINE_MAX = 900f;
+                    if (force > AOE_ENGINE_MAX) force = AOE_ENGINE_MAX;
                     Vec3 flat = pos - b.Pos; flat = new Vec3(flat.x, flat.y, 0f);
                     Vec3 dir = PrepDir(flat, 0.70f, 0.72f);
                     float maxForce = ER_Config.MaxAoEForce;
@@ -1936,7 +1941,7 @@ namespace ExtremeRagdoll
                     var aoe = new Blow(-1)
                     {
                         DamageType      = DamageTypes.Blunt,
-                        BlowFlag        = BlowFlags.KnockBack | BlowFlags.KnockDown | BlowFlags.NoSound,
+                        BlowFlag        = BlowFlags.KnockDown | BlowFlags.NoSound,
                         BaseMagnitude   = force,
                         SwingDirection  = dir,
                         GlobalPosition  = b.Pos,
@@ -2002,6 +2007,7 @@ namespace ExtremeRagdoll
                 if (d.LengthSquared < DirectionTinySqThreshold)
                     d = new Vec3(0f, 1f, 0f);
                 d = PrepDir(d, 0.35f, 0.00f);
+                d.z = 0f;
                 float m = MathF.Min(12000f, ER_Config.MaxBlowBaseMagnitude > 0f
                     ? ER_Config.MaxBlowBaseMagnitude : 12000f);
                 var pos0 = affected.Position;
@@ -2020,7 +2026,7 @@ namespace ExtremeRagdoll
             Vec3 dir = ER_Math.IsFinite(in p.dir) && p.dir.LengthSquared >= DirectionTinySqThreshold
                 ? p.dir
                 : fallbackDir;
-            float upCap = ER_Config.CorpseLaunchMaxUpFraction;
+            float upCap = 0f;
             if (!TryClampAndNormalizeUp(ref dir, upCap))
             {
                 Vec3 fallbackSafe = fallbackDir;

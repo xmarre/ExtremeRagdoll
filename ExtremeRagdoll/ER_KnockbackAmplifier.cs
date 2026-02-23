@@ -258,7 +258,7 @@ namespace ExtremeRagdoll
     internal static class ER_Amplify_RegisterBlowPatch
     {
         // --- HARD SAFETY CAPS (always enforced, even if MCM says 0) ---
-        private const float HARD_BASE_CAP           = 80_000f;
+        private const float HARD_BASE_CAP           = 12_000f;
         private const float HARD_ARROW_FLOOR_CAP    = 25_000f;
         private const float HARD_CORPSE_MAG_CAP     = 30_000f;
         // Keep these conservative; the engine blow + our later impulse otherwise tunnels ragdolls through terrain.
@@ -1000,19 +1000,40 @@ namespace ExtremeRagdoll
 
             // Global max cap (applies regardless of lethal state)
             blow.BaseMagnitude = Cap(blow.BaseMagnitude, ER_Config.MaxBlowBaseMagnitude, HARD_BASE_CAP);
+            // Absolute safety: modded spells can emit absurd magnitudes that fling agents/corpses out of the map.
+            // Keep engine knockback in a sane range; real punch is handled by our own impulse path.
+            const float ABS_ENGINE_MAX_MISSILE = 1400f;
+            const float ABS_ENGINE_MAX = 2200f;
+            float absCap = (missileSpeed > 0f) ? ABS_ENGINE_MAX_MISSILE : ABS_ENGINE_MAX;
+            if (blow.BaseMagnitude > absCap) blow.BaseMagnitude = absCap;
+
 
             // IMPORTANT: do NOT touch SwingDirection for non-missile, non-lethal blows (keeps horse charge intact)
+            // However, some modded spells feed extreme up-vectors; planarize those to avoid “rocket” launches / frozen corpses.
 
             float swingLenSq = blow.SwingDirection.LengthSquared;
-            if (swingLenSq <= 1e-6f)
+            bool forcePlanarSwing = isExplosion || blow.BaseMagnitude > 1200f || MathF.Abs(blow.SwingDirection.z) > 0.25f;
+            if (forcePlanarSwing)
+            {
+                var sd = blow.SwingDirection;
+                sd.z = 0f;
+                if (!ER_Math.IsFinite(in sd) || sd.LengthSquared < ER_Math.DirectionTinySq)
+                    sd = new Vec3(0f, 1f, 0f);
+                blow.SwingDirection = sd.NormalizedCopy();
+            }
+            else if (swingLenSq <= 1e-6f)
             {
                 // keep a valid push dir instead of zeroing it
                 if (lethal || missileSpeed > 0f || bigShove)
                     blow.SwingDirection = dir;
             }
-            else
+            else if (ER_Math.IsFinite(in blow.SwingDirection))
             {
                 blow.SwingDirection = blow.SwingDirection.NormalizedCopy();
+            }
+            else
+            {
+                blow.SwingDirection = dir;
             }
 
             if (ER_Config.DebugLogging && timeNow >= _bsAggUntil && _bsAggCount > 0)
@@ -1120,7 +1141,7 @@ namespace ExtremeRagdoll
                                     float hard   = ER_Config.CorpseImpulseHardCap;
                                     if (hard > 0f && impMag > hard) impMag = hard;
 
-                                    const float ABS_IMPULSE_HARD = 6f;
+                                    const float ABS_IMPULSE_HARD = 1.25f;
                                     if (impMag > ABS_IMPULSE_HARD) impMag = ABS_IMPULSE_HARD;
                                     if (impMag > 0f && !float.IsNaN(impMag) && !float.IsInfinity(impMag))
                                     {
