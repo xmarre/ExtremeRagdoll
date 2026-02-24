@@ -459,7 +459,10 @@ namespace ExtremeRagdoll
                 if (behavior != null)
                 {
                     var mission = behavior.Mission ?? Mission.Current;
-                    var agent = ResolveAgent(agentId, mission);
+                    float lookupTime = (!float.IsNaN(timeNow) && !float.IsInfinity(timeNow))
+                        ? timeNow
+                        : (mission?.CurrentTime ?? 0f);
+                    var agent = behavior.ResolveAgent(agentId, mission, lookupTime);
                     if (agent != null && !AgentRemoved(agent))
                     {
                         GameEntity entCheck = ent;
@@ -570,7 +573,7 @@ namespace ExtremeRagdoll
 
         private struct CorpseLaunch
         {
-            public Agent A;
+            public int AgentId;
             public Vec3 Pos;
             public Vec3 Imp;
             public int Tries;
@@ -582,14 +585,19 @@ namespace ExtremeRagdoll
 
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
-        private struct Launch { public Agent A; public GameEntity Ent; public Skeleton Skel; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public bool Boosted; public Vec3 P0; public Vec3 V0; }
-        private struct PreLaunch { public Agent Agent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; public bool Warmed; }
+        private struct Launch { public GameEntity Ent; public Skeleton Skel; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public bool Boosted; public Vec3 P0; public Vec3 V0; }
+        private struct PreLaunch { public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; public bool Warmed; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
         private readonly List<PreLaunch> _preLaunches = new List<PreLaunch>();
         private readonly List<Launch> _launches = new List<Launch>();
         private readonly HashSet<int> _launchFailLogged = new HashSet<int>();
         private readonly HashSet<int> _launchedOnce = new HashSet<int>();
+
+        // Per-tick cache to avoid repeated O(N) scans when resolving agent indices.
+        private readonly Dictionary<int, Agent> _agentByIndexCache = new Dictionary<int, Agent>(256);
+        private Mission _agentByIndexCacheMission;
+        private float _agentByIndexCacheNow = float.NaN;
 
         private void MarkLaunched(int agentId)
         {
@@ -604,14 +612,14 @@ namespace ExtremeRagdoll
         {
             if (agent == null && agentId < 0)
                 return;
+            if (agentId < 0 && agent != null)
+                try { agentId = agent.Index; } catch { agentId = -1; }
 
             for (int i = _launches.Count - 1; i >= 0; i--)
             {
                 var queued = _launches[i];
                 bool matches = false;
                 if (agentId >= 0 && queued.AgentId == agentId)
-                    matches = true;
-                else if (agent != null && queued.A == agent)
                     matches = true;
 
                 if (!matches)
@@ -632,8 +640,6 @@ namespace ExtremeRagdoll
                 bool matches = false;
                 if (agentId >= 0 && pre.AgentId == agentId)
                     matches = true;
-                else if (agent != null && pre.Agent == agent)
-                    matches = true;
 
                 if (matches)
                     _preLaunches.RemoveAt(i);
@@ -652,23 +658,56 @@ namespace ExtremeRagdoll
             return false;
         }
 
-        private static Agent ResolveAgent(int agentId, Mission mission)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnsureAgentIndexCache(Mission mission, float now)
         {
-            if (agentId < 0 || mission == null)
-                return null;
+            if (mission == null)
+            {
+                _agentByIndexCache.Clear();
+                _agentByIndexCacheMission = null;
+                _agentByIndexCacheNow = float.NaN;
+                return;
+            }
+
+            // Avoid exact float equality; multiple call sites may compute `now` slightly differently.
+            const float NOW_EPS = 1e-6f;
+            if (ReferenceEquals(mission, _agentByIndexCacheMission) &&
+                !float.IsNaN(_agentByIndexCacheNow) &&
+                MathF.Abs(now - _agentByIndexCacheNow) <= NOW_EPS)
+                return;
+
+            _agentByIndexCache.Clear();
             try
             {
                 foreach (var agent in mission.Agents)
                 {
-                    if (agent != null && agent.Index == agentId)
-                        return agent;
+                    if (agent == null)
+                        continue;
+                    int idx;
+                    try { idx = agent.Index; }
+                    catch { continue; }
+                    if (idx < 0)
+                        continue;
+                    // Overwrite is fine; indices should be unique.
+                    _agentByIndexCache[idx] = agent;
                 }
             }
             catch
             {
-                // ignore
+                _agentByIndexCache.Clear();
             }
-            return null;
+
+            _agentByIndexCacheMission = mission;
+            _agentByIndexCacheNow = now;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private Agent ResolveAgent(int agentId, Mission mission, float now)
+        {
+            if (agentId < 0 || mission == null)
+                return null;
+            EnsureAgentIndexCache(mission, now);
+            return _agentByIndexCache.TryGetValue(agentId, out var agent) ? agent : null;
         }
         private static PropertyInfo _ragdollProp;
         private static bool RagdollActive(Agent a, bool warmed)
@@ -759,13 +798,14 @@ namespace ExtremeRagdoll
             int agentId;
             try { agentId = agent.Index; }
             catch { agentId = -1; }
+            if (agentId < 0) return;
 
             if (float.IsNaN(nextAt) || float.IsInfinity(nextAt))
                 nextAt = 0f;
 
             var entry = new CorpseLaunch
             {
-                A      = agent,
+                AgentId = agentId,
                 Pos    = pos,
                 Imp    = impulse,
                 Tries  = tries,
@@ -817,16 +857,15 @@ namespace ExtremeRagdoll
             if (_corpseQueue.Count == 0)
                 return;
 
+            EnsureAgentIndexCache(Mission, now);
             var processedAgents = new HashSet<int>();
 
             int count = _corpseQueue.Count;
             for (int i = 0; i < count && _corpseQueue.Count > 0; i++)
             {
                 var entry = _corpseQueue.Dequeue();
-                var agent = entry.A;
-                int agentId;
-                try { agentId = agent?.Index ?? -1; }
-                catch { agentId = -1; }
+                int agentId = entry.AgentId;
+                var agent = ResolveAgent(agentId, Mission, now);
 
                 if (agent == null || AgentRemoved(agent))
                 {
@@ -839,7 +878,7 @@ namespace ExtremeRagdoll
                 }
 
                 if (agentId >= 0 && _corpseQueuePending.TryGetValue(agentId, out var pending) &&
-                    (!ReferenceEquals(pending.A, agent) || pending.Tries != entry.Tries || pending.NextAt != entry.NextAt))
+                    (pending.Tries != entry.Tries || pending.NextAt != entry.NextAt))
                 {
                     // Stale entry; a newer schedule replaced this one.
                     continue;
@@ -1020,7 +1059,6 @@ namespace ExtremeRagdoll
             SweepDeadRagdolls(mission, now);
             var entry = new PreLaunch
             {
-                Agent   = agent,
                 AgentId = agentId,
                 Dir     = safeDir,
                 Mag     = mag,
@@ -1155,7 +1193,7 @@ namespace ExtremeRagdoll
             GameEntity ent = null; Skeleton sk = null;
             try { ent = a.AgentVisuals?.GetEntity(); } catch { }
             try { sk = a.AgentVisuals?.GetSkeleton(); } catch { }
-            _launches.Add(new Launch { A = a, Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = scheduleTime, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
+            _launches.Add(new Launch { Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = scheduleTime, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
             IncQueue(agentIndex);
             return true;
         }
@@ -1271,6 +1309,7 @@ namespace ExtremeRagdoll
                 if (now - _recent[i].T > blastTtl) _recent.RemoveAt(i);
             int warmedThisTick = 0;
             const int warmCapPerTick = 8;
+            EnsureAgentIndexCache(mission, now);
             for (int i = _preLaunches.Count - 1; i >= 0; i--)
             {
                 var entry = _preLaunches[i];
@@ -1281,13 +1320,18 @@ namespace ExtremeRagdoll
                 }
                 if (now < entry.NextTry)
                     continue;
-                var agent = entry.Agent;
+                var agent = ResolveAgent(entry.AgentId, mission, now);
                 if (!entry.Warmed)
                 {
                     if (warmedThisTick >= warmCapPerTick)
                     {
                         entry.NextTry = now + preRetryDelay;
                         _preLaunches[i] = entry;
+                        continue;
+                    }
+                    if (agent == null || agent.Mission == null || agent.Mission != mission)
+                    {
+                        _preLaunches.RemoveAt(i);
                         continue;
                     }
                     GameEntity warmEnt = null;
@@ -1487,12 +1531,13 @@ namespace ExtremeRagdoll
                 launchesWorked++;
                 return true;
             }
+            EnsureAgentIndexCache(mission, now);
             for (int i = _launches.Count - 1; i >= 0; i--)
             {
                 var L = _launches[i];
                 if (now < L.T) continue;
-                var agent = L.A;
-                int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
+                int agentIndex = L.AgentId;
+                var agent = ResolveAgent(agentIndex, mission, now);
                 bool nudged = false;
                 bool queueDecremented = false;
                 void DecOnce()
