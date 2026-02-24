@@ -228,6 +228,89 @@ namespace ExtremeRagdoll
             return candidate;
         }
 
+        private static MethodInfo _miSceneGetGroundHeightAtPositionVec2OutFloat;
+        private static MethodInfo _miSceneGetGroundHeightAtPositionVec3OutFloat;
+        private static MethodInfo _miSceneGetHeightAtPointVec3;
+
+        private static bool TryGetGroundZ(Scene scene, in Vec3 pos, out float groundZ)
+        {
+            groundZ = pos.z;
+            if (scene == null)
+                return false;
+
+            try
+            {
+                _miSceneGetGroundHeightAtPositionVec2OutFloat ??= typeof(Scene).GetMethod(
+                    "GetGroundHeightAtPosition",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    types: new[] { typeof(Vec2), typeof(float).MakeByRefType() },
+                    modifiers: null);
+                if (_miSceneGetGroundHeightAtPositionVec2OutFloat != null)
+                {
+                    object[] args = { new Vec2(pos.x, pos.y), 0f };
+                    object ret = _miSceneGetGroundHeightAtPositionVec2OutFloat.Invoke(scene, args);
+                    groundZ = (float)args[1];
+                    return !(ret is bool ok) || ok;
+                }
+
+                _miSceneGetGroundHeightAtPositionVec3OutFloat ??= typeof(Scene).GetMethod(
+                    "GetGroundHeightAtPosition",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    types: new[] { typeof(Vec3), typeof(float).MakeByRefType() },
+                    modifiers: null);
+                if (_miSceneGetGroundHeightAtPositionVec3OutFloat != null)
+                {
+                    object[] args = { pos, 0f };
+                    object ret = _miSceneGetGroundHeightAtPositionVec3OutFloat.Invoke(scene, args);
+                    groundZ = (float)args[1];
+                    return !(ret is bool ok) || ok;
+                }
+
+                _miSceneGetHeightAtPointVec3 ??= typeof(Scene).GetMethod(
+                    "GetHeightAtPoint",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    binder: null,
+                    types: new[] { typeof(Vec3) },
+                    modifiers: null);
+                if (_miSceneGetHeightAtPointVec3 != null && _miSceneGetHeightAtPointVec3.ReturnType == typeof(float))
+                {
+                    groundZ = (float)_miSceneGetHeightAtPointVec3.Invoke(scene, new object[] { pos });
+                    return true;
+                }
+            }
+            catch
+            {
+            }
+
+            return false;
+        }
+
+        private static void ClampPosAboveGround(Scene scene, ref Vec3 pos, float clearance = 0.05f)
+        {
+            if (!ER_Math.IsFinite(in pos))
+                return;
+            if (TryGetGroundZ(scene, in pos, out float groundZ))
+            {
+                float minZ = groundZ + MathF.Max(0f, clearance);
+                if (pos.z < minZ)
+                    pos.z = minZ;
+            }
+        }
+
+        private static Agent FindAgentByIndex(Mission mission, int agentIndex)
+        {
+            if (mission == null || agentIndex < 0)
+                return null;
+            foreach (var a in mission.Agents)
+            {
+                if (a != null && a.Index == agentIndex)
+                    return a;
+            }
+            return null;
+        }
+
         private static void MarkRagdollPrepared(GameEntity ent)
         {
             if (ent == null)
@@ -570,7 +653,7 @@ namespace ExtremeRagdoll
 
         private struct CorpseLaunch
         {
-            public Agent A;
+            public int AgentId;
             public Vec3 Pos;
             public Vec3 Imp;
             public int Tries;
@@ -582,8 +665,8 @@ namespace ExtremeRagdoll
 
         private struct Blast { public Vec3 Pos; public float Radius; public float Force; public float T; }
         private struct Kick  { public Agent A; public Vec3 Dir; public float Force; public float T0; public float Dur; }
-        private struct Launch { public Agent A; public GameEntity Ent; public Skeleton Skel; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public bool Boosted; public Vec3 P0; public Vec3 V0; }
-        private struct PreLaunch { public Agent Agent; public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; public bool Warmed; }
+        private struct Launch { public GameEntity Ent; public Skeleton Skel; public Vec3 Dir; public float Mag; public Vec3 Pos; public float T; public int Tries; public int AgentId; public bool Warmed; public bool Boosted; public Vec3 P0; public Vec3 V0; }
+        private struct PreLaunch { public Vec3 Dir; public float Mag; public Vec3 Pos; public float NextTry; public int Tries; public int AgentId; public bool Warmed; }
         private readonly List<Blast> _recent = new List<Blast>();
         private readonly List<Kick>  _kicks  = new List<Kick>();
         private readonly List<PreLaunch> _preLaunches = new List<PreLaunch>();
@@ -611,8 +694,6 @@ namespace ExtremeRagdoll
                 bool matches = false;
                 if (agentId >= 0 && queued.AgentId == agentId)
                     matches = true;
-                else if (agent != null && queued.A == agent)
-                    matches = true;
 
                 if (!matches)
                     continue;
@@ -631,8 +712,6 @@ namespace ExtremeRagdoll
                 var pre = _preLaunches[i];
                 bool matches = false;
                 if (agentId >= 0 && pre.AgentId == agentId)
-                    matches = true;
-                else if (agent != null && pre.Agent == agent)
                     matches = true;
 
                 if (matches)
@@ -765,7 +844,7 @@ namespace ExtremeRagdoll
 
             var entry = new CorpseLaunch
             {
-                A      = agent,
+                AgentId = agentId,
                 Pos    = pos,
                 Imp    = impulse,
                 Tries  = tries,
@@ -823,10 +902,8 @@ namespace ExtremeRagdoll
             for (int i = 0; i < count && _corpseQueue.Count > 0; i++)
             {
                 var entry = _corpseQueue.Dequeue();
-                var agent = entry.A;
-                int agentId;
-                try { agentId = agent?.Index ?? -1; }
-                catch { agentId = -1; }
+                int agentId = entry.AgentId;
+                var agent = FindAgentByIndex(Mission, agentId);
 
                 if (agent == null || AgentRemoved(agent))
                 {
@@ -839,7 +916,7 @@ namespace ExtremeRagdoll
                 }
 
                 if (agentId >= 0 && _corpseQueuePending.TryGetValue(agentId, out var pending) &&
-                    (!ReferenceEquals(pending.A, agent) || pending.Tries != entry.Tries || pending.NextAt != entry.NextAt))
+                    (pending.Tries != entry.Tries || pending.NextAt != entry.NextAt))
                 {
                     // Stale entry; a newer schedule replaced this one.
                     continue;
@@ -875,8 +952,20 @@ namespace ExtremeRagdoll
                 try
                 {
                     var impulsePos = ClampHitToBody(agent, entry.Pos);
-                    ok = TryApplyImpulse(ent, skel, entry.Imp, impulsePos, agentId);
+                    var scene = Mission?.Scene ?? Mission.Current?.Scene;
+                    ClampPosAboveGround(scene, ref impulsePos, 0.05f);
+                    var impulse = entry.Imp;
+                    float impMag = MathF.Sqrt(MathF.Max(0f, impulse.LengthSquared));
+                    var impulseDir = FinalizeImpulseDir(impulse);
+                    if (impulseDir.z < 0.05f)
+                    {
+                        impulseDir.z = 0.05f;
+                        impulseDir = FinalizeImpulseDir(impulseDir);
+                    }
+                    impulse = impulseDir * impMag;
+                    ok = TryApplyImpulse(ent, skel, impulse, impulsePos, agentId);
                     entry.Pos = impulsePos;
+                    entry.Imp = impulse;
                 }
                 catch
                 {
@@ -1004,6 +1093,11 @@ namespace ExtremeRagdoll
                 return;
 
             Vec3 safeDir = FinalizeImpulseDir(PrepDir(dir, 1f, 0f), 0f);
+            if (safeDir.z < 0.05f)
+            {
+                safeDir.z = 0.05f;
+                safeDir = FinalizeImpulseDir(safeDir);
+            }
             if (!ER_Math.IsFinite(in safeDir) || safeDir.LengthSquared < DirectionTinySqThreshold)
                 return;
 
@@ -1015,12 +1109,12 @@ namespace ExtremeRagdoll
             }
             float lift = MathF.Max(ER_Config.CorpseLaunchZNudge, 0.04f);
             contact.z += lift;
+            ClampPosAboveGround(mission.Scene, ref contact, 0.05f);
 
             float now = mission.CurrentTime;
             SweepDeadRagdolls(mission, now);
             var entry = new PreLaunch
             {
-                Agent   = agent,
                 AgentId = agentId,
                 Dir     = safeDir,
                 Mag     = mag,
@@ -1095,6 +1189,11 @@ namespace ExtremeRagdoll
             Vec3 safeDir = dir;
             if (!TryClampAndNormalizeUp(ref safeDir, 0f))
                 return false;
+            if (safeDir.z < 0.05f)
+            {
+                safeDir.z = 0.05f;
+                safeDir = FinalizeImpulseDir(safeDir);
+            }
             Vec3 nudgedPos = pos;
             // Apply impulse at torso/center to avoid equipment-hit contacts
             // (e.g. quiver/bow) causing large angular torque.
@@ -1114,6 +1213,7 @@ namespace ExtremeRagdoll
             // CorpseLaunchZClampAbove is a *minimum* height above the agent origin.
             // Using Min() here clamps the contact down to near-ground and causes huge torque/teleport-like launches.
             nudgedPos.z = MathF.Max(nudgedPos.z + zNudge, agentZ + zClamp);
+            ClampPosAboveGround(mission.Scene, ref nudgedPos, 0.05f);
             float scheduleTime = mission.CurrentTime + delaySec;
             float window = MathF.Max(0f, ER_Config.CorpseLaunchScheduleWindow);
             if (window > 0f && agentIndex >= 0)
@@ -1155,7 +1255,7 @@ namespace ExtremeRagdoll
             GameEntity ent = null; Skeleton sk = null;
             try { ent = a.AgentVisuals?.GetEntity(); } catch { }
             try { sk = a.AgentVisuals?.GetSkeleton(); } catch { }
-            _launches.Add(new Launch { A = a, Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = scheduleTime, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
+            _launches.Add(new Launch { Ent = ent, Skel = sk, Dir = safeDir, Mag = mag, Pos = nudgedPos, T = scheduleTime, Tries = retries, AgentId = agentIndex, Warmed = false, Boosted = false });
             IncQueue(agentIndex);
             return true;
         }
@@ -1281,7 +1381,7 @@ namespace ExtremeRagdoll
                 }
                 if (now < entry.NextTry)
                     continue;
-                var agent = entry.Agent;
+                var agent = FindAgentByIndex(mission, entry.AgentId);
                 if (!entry.Warmed)
                 {
                     if (warmedThisTick >= warmCapPerTick)
@@ -1491,8 +1591,8 @@ namespace ExtremeRagdoll
             {
                 var L = _launches[i];
                 if (now < L.T) continue;
-                var agent = L.A;
-                int agentIndex = L.AgentId >= 0 ? L.AgentId : agent?.Index ?? -1;
+                int agentIndex = L.AgentId;
+                var agent = FindAgentByIndex(mission, agentIndex);
                 bool nudged = false;
                 bool queueDecremented = false;
                 void DecOnce()
@@ -1559,6 +1659,7 @@ namespace ExtremeRagdoll
                         {
                             var contactMiss = XYJitter(ResolveHitPosition(L.Pos, ent, L.Pos));
                             contactMiss.z += contactHeight;
+                            ClampPosAboveGround(mission.Scene, ref contactMiss, 0.05f);
                             var impulse = dir * impMag;
                             if (impulse.z < 0f) impulse.z = 0f;
                             bool ok = TryApplyImpulse(ent, skel, impulse, contactMiss, agentIndex);
@@ -1618,6 +1719,7 @@ namespace ExtremeRagdoll
                 contactPoint.z += contactHeight;
                 // Keep impulse application above ground/origin (do not clamp down).
                 contactPoint.z = MathF.Max(contactPoint.z, agent.Position.z + zClamp);
+                ClampPosAboveGround(mission.Scene, ref contactPoint, 0.05f);
                 // direction already sanitized when the launch was queued
 
                 if (!ConsumeLaunchBudget())
@@ -1738,6 +1840,7 @@ namespace ExtremeRagdoll
                             catch { fallbackEntity = L.Pos; }
                             var contactEntity = XYJitter(ResolveHitPosition(L.Pos, ent, fallbackEntity));
                             contactEntity.z += contactHeight;
+                            ClampPosAboveGround(mission.Scene, ref contactEntity, 0.05f);
                             var impulse = dir * impMag;
                             if (impulse.z < 0f) impulse.z = 0f;
                             bool ok = TryApplyImpulse(ent, skel, impulse, contactEntity, agentIndex);
@@ -1840,6 +1943,7 @@ namespace ExtremeRagdoll
                     Vec3 retryPos = XYJitter(agent.Position);
                     // Keep retry contact above ground/origin (do not clamp down).
                     retryPos.z = MathF.Max(retryPos.z + zNudge, agent.Position.z + zClamp);
+                    ClampPosAboveGround(mission.Scene, ref retryPos, 0.05f);
 
                     if (!L.Boosted)
                     {
@@ -2381,9 +2485,9 @@ namespace ExtremeRagdoll
 
             var dir = ER_DeathBlastBehavior.PrepDir(p.dir, 0.90f, 0.05f);
             // Never drive corpses downward into the ground; negative Z causes tunneling / fall-through.
-            if (dir.z < 0f)
+            if (dir.z < 0.05f)
             {
-                dir.z = 0f;
+                dir.z = 0.05f;
                 dir = ER_DeathBlastBehavior.FinalizeImpulseDir(dir);
             }
 
