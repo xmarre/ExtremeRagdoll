@@ -10,6 +10,34 @@ using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
 {
+    // The legacy evaluator caches the first enum name containing "active". Bannerlord declares
+    // ActiveFirstTick before Active, so the persistent Active state was incorrectly treated as inactive.
+    [HarmonyPatch(typeof(ER_DeathBlastBehavior), "IsRagdollActiveFast")]
+    internal static class ER_ExactRagdollStatePatch
+    {
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static bool Prefix(Skeleton sk, ref bool __result)
+        {
+            if (sk == null)
+            {
+                __result = false;
+                return false;
+            }
+
+            try
+            {
+                RagdollState state = sk.GetCurrentRagdollState();
+                __result = state == RagdollState.ActiveFirstTick || state == RagdollState.Active;
+            }
+            catch
+            {
+                __result = false;
+            }
+            return false;
+        }
+    }
+
     internal static class ER_SafeLegacyRegisterBlow
     {
         internal static void RestoreNonLethalPrefix(Harmony harmony)
