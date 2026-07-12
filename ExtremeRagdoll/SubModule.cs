@@ -19,6 +19,7 @@ namespace ExtremeRagdoll
             var harmony = new Harmony("extremeragdoll.patch");
             harmony.PatchAll();
             ER_SafeDeathPipeline.DisableLegacyDeathOverrides(harmony);
+            ER_SafeLegacyRegisterBlow.RestoreNonLethalPrefix(harmony);
             _patched = true;
             ER_Log.Info("OnSubModuleLoad: PatchAll requested");
         }
