@@ -164,17 +164,25 @@ namespace ExtremeRagdoll
     }
 
     /// <summary>
-    /// Applies one world-space impulse to a body that Bannerlord has already converted to ragdoll.
-    /// This class deliberately has no activation, wake-up, animation-tick, synthetic-blow, or retry logic.
+    /// Applies one impulse to a body that Bannerlord has already converted to ragdoll.
+    /// No route in this class activates, wakes, ticks, freezes, or otherwise changes ragdoll state.
     /// </summary>
     internal static class ER_ActiveRagdollImpulse
     {
         private static readonly object BindLock = new object();
         private static int _bound;
-        private static Action<GameEntity, Vec3, Vec3, bool> _instanceApplyWorld;
-        private static Action<GameEntity, Vec3, Vec3, bool> _extensionApplyWorld;
-        private static MethodInfo _instanceApplyWorldMethod;
-        private static MethodInfo _extensionApplyWorldMethod;
+
+        // Bannerlord 1.3.x: local contact + global force + ForceMode.Impulse.
+        private static MethodInfo _globalForceAtLocalPos;
+        private static object _impulseForceMode;
+
+        // Compatibility routes used by older/newer engine builds.
+        private static MethodInfo _worldImpulseInstance3;
+        private static MethodInfo _worldImpulseExtension4;
+        private static MethodInfo _worldImpulseInstance2;
+        private static MethodInfo _localImpulseInstance2;
+        private static MethodInfo _localImpulseExtension3;
+
         private static int _missingRouteLogged;
 
         internal static bool TryApply(GameEntity entity, Skeleton skeleton, in Vec3 worldImpulse, in Vec3 worldPosition)
@@ -215,31 +223,60 @@ namespace ExtremeRagdoll
             if (!ER_Math.IsFinite(in extent) || extent.x <= 0f || extent.y <= 0f || extent.z <= 0f)
                 return false;
             float maxExtent = ER_Config.MaxAabbExtent;
+            if (float.IsNaN(maxExtent) || float.IsInfinity(maxExtent) || maxExtent <= 0f)
+                maxExtent = 1024f;
             if (extent.x > maxExtent || extent.y > maxExtent || extent.z > maxExtent)
+                return false;
+
+            MatrixFrame frame;
+            try { frame = entity.GetGlobalFrame(); }
+            catch { return false; }
+
+            Vec3 localPosition = WorldPointToLocal(in frame, in worldPosition);
+            Vec3 localImpulse = WorldVectorToLocal(in frame, in worldImpulse);
+            if (!ER_Math.IsFinite(in localPosition) || !ER_Math.IsFinite(in localImpulse))
                 return false;
 
             EnsureBound();
 
             try
             {
-                if (_instanceApplyWorld != null)
+                if (_globalForceAtLocalPos != null && _impulseForceMode != null)
                 {
-                    _instanceApplyWorld(entity, worldImpulse, worldPosition, false);
+                    _globalForceAtLocalPos.Invoke(
+                        null,
+                        new[] { (object)entity, localPosition, worldImpulse, _impulseForceMode });
                     return true;
                 }
-                if (_instanceApplyWorldMethod != null)
+
+                if (_worldImpulseInstance3 != null)
                 {
-                    _instanceApplyWorldMethod.Invoke(entity, new object[] { worldImpulse, worldPosition, false });
+                    _worldImpulseInstance3.Invoke(entity, new object[] { worldImpulse, worldPosition, false });
                     return true;
                 }
-                if (_extensionApplyWorld != null)
+
+                if (_worldImpulseExtension4 != null)
                 {
-                    _extensionApplyWorld(entity, worldImpulse, worldPosition, false);
+                    _worldImpulseExtension4.Invoke(null, new object[] { entity, worldImpulse, worldPosition, false });
                     return true;
                 }
-                if (_extensionApplyWorldMethod != null)
+
+                // Legacy GameEntity API: position first, impulse second.
+                if (_worldImpulseInstance2 != null)
                 {
-                    _extensionApplyWorldMethod.Invoke(null, new object[] { entity, worldImpulse, worldPosition, false });
+                    _worldImpulseInstance2.Invoke(entity, new object[] { worldPosition, worldImpulse });
+                    return true;
+                }
+
+                if (_localImpulseInstance2 != null)
+                {
+                    _localImpulseInstance2.Invoke(entity, new object[] { localPosition, localImpulse });
+                    return true;
+                }
+
+                if (_localImpulseExtension3 != null)
+                {
+                    _localImpulseExtension3.Invoke(null, new object[] { entity, localPosition, localImpulse });
                     return true;
                 }
             }
@@ -258,8 +295,22 @@ namespace ExtremeRagdoll
             }
 
             if (Interlocked.Exchange(ref _missingRouteLogged, 1) == 0)
-                ER_Log.Error("Safe active-ragdoll impulse disabled: no world-space GameEntity impulse API was found");
+                ER_Log.Error("Safe active-ragdoll impulse disabled: no compatible GameEntity impulse API was found");
             return false;
+        }
+
+        private static Vec3 WorldPointToLocal(in MatrixFrame frame, in Vec3 worldPoint)
+        {
+            Vec3 delta = worldPoint - frame.origin;
+            return WorldVectorToLocal(in frame, in delta);
+        }
+
+        private static Vec3 WorldVectorToLocal(in MatrixFrame frame, in Vec3 worldVector)
+        {
+            return new Vec3(
+                frame.rotation.s.x * worldVector.x + frame.rotation.s.y * worldVector.y + frame.rotation.s.z * worldVector.z,
+                frame.rotation.f.x * worldVector.x + frame.rotation.f.y * worldVector.y + frame.rotation.f.z * worldVector.z,
+                frame.rotation.u.x * worldVector.x + frame.rotation.u.y * worldVector.y + frame.rotation.u.z * worldVector.z);
         }
 
         private static void EnsureBound()
@@ -273,46 +324,60 @@ namespace ExtremeRagdoll
                     return;
 
                 const BindingFlags InstanceFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                _instanceApplyWorldMethod = typeof(GameEntity).GetMethod(
+                const BindingFlags StaticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+
+                Type gameEntityType = typeof(GameEntity);
+                Type vec3Type = typeof(Vec3);
+                Type extensions = gameEntityType.Assembly.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
+
+                _worldImpulseInstance3 = gameEntityType.GetMethod(
                     "ApplyImpulseToDynamicBody",
                     InstanceFlags,
                     null,
-                    new[] { typeof(Vec3), typeof(Vec3), typeof(bool) },
+                    new[] { vec3Type, vec3Type, typeof(bool) },
                     null);
-                if (_instanceApplyWorldMethod != null)
-                {
-                    try
-                    {
-                        _instanceApplyWorld = (Action<GameEntity, Vec3, Vec3, bool>)_instanceApplyWorldMethod.CreateDelegate(
-                            typeof(Action<GameEntity, Vec3, Vec3, bool>));
-                    }
-                    catch
-                    {
-                        _instanceApplyWorld = null;
-                    }
-                }
 
-                Type extensions = typeof(GameEntity).Assembly.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
+                _worldImpulseInstance2 = gameEntityType.GetMethod(
+                    "ApplyImpulseToDynamicBody",
+                    InstanceFlags,
+                    null,
+                    new[] { vec3Type, vec3Type },
+                    null);
+
+                _localImpulseInstance2 = gameEntityType.GetMethod(
+                    "ApplyLocalImpulseToDynamicBody",
+                    InstanceFlags,
+                    null,
+                    new[] { vec3Type, vec3Type },
+                    null);
+
                 if (extensions != null)
                 {
-                    const BindingFlags StaticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-                    _extensionApplyWorldMethod = extensions.GetMethod(
+                    _worldImpulseExtension4 = extensions.GetMethod(
                         "ApplyImpulseToDynamicBody",
                         StaticFlags,
                         null,
-                        new[] { typeof(GameEntity), typeof(Vec3), typeof(Vec3), typeof(bool) },
+                        new[] { gameEntityType, vec3Type, vec3Type, typeof(bool) },
                         null);
-                    if (_extensionApplyWorldMethod != null)
+
+                    _localImpulseExtension3 = extensions.GetMethod(
+                        "ApplyLocalImpulseToDynamicBody",
+                        StaticFlags,
+                        null,
+                        new[] { gameEntityType, vec3Type, vec3Type },
+                        null);
+
+                    Type forceModeType = extensions.GetNestedType("ForceMode", BindingFlags.Public | BindingFlags.NonPublic);
+                    if (forceModeType != null && forceModeType.IsEnum)
                     {
-                        try
-                        {
-                            _extensionApplyWorld = (Action<GameEntity, Vec3, Vec3, bool>)_extensionApplyWorldMethod.CreateDelegate(
-                                typeof(Action<GameEntity, Vec3, Vec3, bool>));
-                        }
-                        catch
-                        {
-                            _extensionApplyWorld = null;
-                        }
+                        _globalForceAtLocalPos = extensions.GetMethod(
+                            "ApplyGlobalForceAtLocalPosToDynamicBody",
+                            StaticFlags,
+                            null,
+                            new[] { gameEntityType, vec3Type, vec3Type, forceModeType },
+                            null);
+                        if (_globalForceAtLocalPos != null)
+                            _impulseForceMode = Enum.ToObject(forceModeType, 1);
                     }
                 }
 
