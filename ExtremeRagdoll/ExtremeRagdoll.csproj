@@ -114,6 +114,7 @@
     <Compile Include="ER_Log.cs" />
     <Compile Include="ER_RagdollPrep.cs" />
     <Compile Include="ER_SafeDeathPipeline.cs" />
+    <Compile Include="ER_SafeImpulseBridge.cs" />
     <Compile Include="ER_TOR_Adapter.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SubModule.cs" />
