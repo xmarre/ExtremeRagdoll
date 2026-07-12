@@ -464,13 +464,11 @@ namespace ExtremeRagdoll
                     bool applied = false;
                     try
                     {
-                        applied = ER_DeathBlastBehavior.TryImpulseDirect(
+                        applied = ER_ActiveRagdollImpulse.TryApply(
                             entity,
                             skeleton,
                             in impulse,
-                            in contact,
-                            pending.AgentIndex,
-                            now);
+                            in contact);
                     }
                     catch
                     {
