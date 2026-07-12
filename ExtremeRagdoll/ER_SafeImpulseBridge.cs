@@ -146,52 +146,6 @@ namespace ExtremeRagdoll
         }
     }
 
-    internal static class ER_SafeImpulseScope
-    {
-        [ThreadStatic]
-        internal static int Depth;
-    }
-
-    [HarmonyPatch(typeof(ER_SafeRagdollBehavior), nameof(ER_SafeRagdollBehavior.OnMissionTick))]
-    internal static class ER_SafeImpulseScopePatch
-    {
-        [HarmonyPrefix]
-        [HarmonyPriority(Priority.First)]
-        private static void Prefix(out int __state)
-        {
-            __state = ER_SafeImpulseScope.Depth;
-            ER_SafeImpulseScope.Depth = __state + 1;
-        }
-
-        [HarmonyFinalizer]
-        [HarmonyPriority(Priority.Last)]
-        private static Exception Finalizer(int __state, Exception __exception)
-        {
-            ER_SafeImpulseScope.Depth = __state;
-            return __exception;
-        }
-    }
-
-    [HarmonyPatch(typeof(ER_DeathBlastBehavior), "TryImpulseDirect")]
-    internal static class ER_SafeImpulseBridgePatch
-    {
-        [HarmonyPrefix]
-        [HarmonyPriority(Priority.First)]
-        private static bool Prefix(
-            GameEntity ent,
-            Skeleton skel,
-            ref Vec3 worldImpulse,
-            ref Vec3 worldPos,
-            ref bool __result)
-        {
-            if (ER_SafeImpulseScope.Depth <= 0)
-                return true;
-
-            __result = ER_ActiveRagdollImpulse.TryApply(ent, skel, in worldImpulse, in worldPos);
-            return false;
-        }
-    }
-
     /// <summary>
     /// Applies one impulse to a body that Bannerlord has already converted to ragdoll.
     /// No route in this class activates, wakes, ticks, freezes, or otherwise changes ragdoll state.
