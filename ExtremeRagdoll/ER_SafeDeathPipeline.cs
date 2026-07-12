@@ -92,7 +92,8 @@ namespace ExtremeRagdoll
             if (!float.IsNaN(hardCap) && !float.IsInfinity(hardCap) && hardCap > 0f && impulse > hardCap)
                 impulse = hardCap;
 
-            const float AbsoluteSafeCap = 1.25f;
+            // A single capped impulse remains visible without recreating the old multi-pulse launch/tunnelling path.
+            const float AbsoluteSafeCap = 6.0f;
             if (impulse > AbsoluteSafeCap)
                 impulse = AbsoluteSafeCap;
 
