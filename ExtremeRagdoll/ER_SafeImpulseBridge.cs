@@ -82,7 +82,8 @@ namespace ExtremeRagdoll
         }
 
         [HarmonyPrefix]
-        [HarmonyPriority(Priority.First)]
+        [HarmonyPriority(Priority.Low)]
+        [HarmonyAfter("TOR", "TOR_Core")]
         private static void Prefix(
             Agent __instance,
             [HarmonyArgument(0)] ref Blow blow,
