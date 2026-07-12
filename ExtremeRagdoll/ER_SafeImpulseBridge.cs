@@ -1,12 +1,122 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Threading;
 using HarmonyLib;
+using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
+using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
 {
+    internal static class ER_SafeLegacyRegisterBlow
+    {
+        internal static void RestoreNonLethalPrefix(Harmony harmony)
+        {
+            if (harmony == null)
+                return;
+
+            MethodInfo legacyPrefix = AccessTools.Method(typeof(ER_Amplify_RegisterBlowPatch), "Prefix");
+            if (legacyPrefix == null)
+            {
+                ER_Log.Error("Safe death pipeline: legacy RegisterBlow prefix was not found");
+                return;
+            }
+
+            int restored = 0;
+            Type blowType = typeof(Blow);
+            foreach (MethodInfo original in AccessTools.GetDeclaredMethods(typeof(Agent)))
+            {
+                if (original == null || original.Name != nameof(Agent.RegisterBlow))
+                    continue;
+                ParameterInfo[] parameters = original.GetParameters();
+                if (parameters.Length == 0)
+                    continue;
+                Type first = parameters[0].ParameterType;
+                if (first != blowType && !(first.IsByRef && first.GetElementType() == blowType))
+                    continue;
+
+                try
+                {
+                    var patch = new HarmonyMethod(legacyPrefix)
+                    {
+                        priority = Priority.Last,
+                        after = new[] { "TOR", "TOR_Core" },
+                    };
+                    harmony.Patch(original, prefix: patch);
+                    restored++;
+                }
+                catch (Exception ex)
+                {
+                    ER_Log.Error($"Safe death pipeline: failed to restore nonlethal RegisterBlow prefix on {original}", ex);
+                }
+            }
+
+            ER_Log.Info($"Safe death pipeline: restored nonlethal RegisterBlow prefix on {restored} overload(s)");
+        }
+    }
+
+    /// <summary>
+    /// Keeps the original knockback amplifier for living targets while preventing it from touching a lethal blow.
+    /// The scope remains active until Harmony finalizers run, covering the old late-priority prefix.
+    /// </summary>
+    [HarmonyPatch]
+    internal static class ER_SuppressLegacyLethalRegisterBlowPatch
+    {
+        [HarmonyTargetMethods]
+        private static IEnumerable<MethodBase> TargetMethods()
+        {
+            Type blowType = typeof(Blow);
+            foreach (MethodInfo candidate in AccessTools.GetDeclaredMethods(typeof(Agent)))
+            {
+                if (candidate == null || candidate.Name != nameof(Agent.RegisterBlow))
+                    continue;
+                ParameterInfo[] parameters = candidate.GetParameters();
+                if (parameters.Length == 0)
+                    continue;
+                Type first = parameters[0].ParameterType;
+                if (first == blowType || (first.IsByRef && first.GetElementType() == blowType))
+                    yield return candidate;
+            }
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPriority(Priority.First)]
+        private static void Prefix(
+            Agent __instance,
+            [HarmonyArgument(0)] ref Blow blow,
+            out IDisposable __state)
+        {
+            __state = null;
+            if (__instance == null)
+                return;
+
+            float health;
+            try { health = __instance.Health; }
+            catch { return; }
+            if (float.IsNaN(health) || float.IsInfinity(health))
+                return;
+
+            float damage = blow.InflictedDamage;
+            if (float.IsNaN(damage) || float.IsInfinity(damage))
+                damage = 0f;
+
+            bool lethal = health <= 0f || (damage > 0f && health - damage <= 0f);
+            if (lethal)
+                __state = ER_Amplify_RegisterBlowPatch.SuppressPrefixScope();
+        }
+
+        [HarmonyFinalizer]
+        [HarmonyPriority(Priority.Last)]
+        private static Exception Finalizer(IDisposable __state, Exception __exception)
+        {
+            try { __state?.Dispose(); }
+            catch { }
+            return __exception;
+        }
+    }
+
     internal static class ER_SafeImpulseScope
     {
         [ThreadStatic]
