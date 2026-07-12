@@ -16,7 +16,9 @@ namespace ExtremeRagdoll
         {
             ER_Log.Info($"Debug logging enabled: writing to {ER_Log.LogFilePath}");
             if (_patched) return;
-            new Harmony("extremeragdoll.patch").PatchAll();
+            var harmony = new Harmony("extremeragdoll.patch");
+            harmony.PatchAll();
+            ER_SafeDeathPipeline.DisableLegacyDeathOverrides(harmony);
             _patched = true;
             ER_Log.Info("OnSubModuleLoad: PatchAll requested");
         }
@@ -92,7 +94,9 @@ namespace ExtremeRagdoll
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
             ER_Amplify_RegisterBlowPatch.ClearPending();
+            ER_SafeRagdollBehavior.Reset();
             mission.AddMissionBehavior(new ER_DeathBlastBehavior());
+            mission.AddMissionBehavior(new ER_SafeRagdollBehavior());
             if (!_adapted)
             {
                 try
@@ -106,7 +110,7 @@ namespace ExtremeRagdoll
                 {
                 }
             }
-            ER_Log.Info("MissionBehavior added: ER_DeathBlastBehavior");
+            ER_Log.Info("Mission behaviors added: ER_DeathBlastBehavior, ER_SafeRagdollBehavior");
         }
         // No OnMissionEnded override needed; pending gets cleared on behavior removal and mission start.
     }
