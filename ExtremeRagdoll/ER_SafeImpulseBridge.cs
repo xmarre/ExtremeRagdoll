@@ -147,14 +147,29 @@ namespace ExtremeRagdoll
     }
 
     /// <summary>
-    /// Applies force through Bannerlord's agent-ragdoll API after the engine owns and completes
-    /// the animation-to-ragdoll transition. This class never activates, wakes, freezes, ticks,
-    /// teleports, or registers another blow.
+    /// Applies force through Bannerlord's dedicated Agent ragdoll API when that API exists.
+    /// Bannerlord 1.2.12 does not expose these methods, so all binding is reflective and the
+    /// safe death pipeline uses the original fatal blow as its compatibility route instead.
     /// </summary>
     internal static class ER_ActiveRagdollImpulse
     {
         private const float LinearVelocityLimit = 25f;
         private const float AngularVelocityLimit = 60f;
+
+        private static readonly object BindLock = new object();
+        private static bool _bound;
+        private static MethodInfo _applyForceOnRagdoll;
+        private static MethodInfo _setVelocityLimitsOnRagdoll;
+        private static bool _missingRouteLogged;
+
+        internal static bool HasAgentForceRoute
+        {
+            get
+            {
+                EnsureBound();
+                return _applyForceOnRagdoll != null;
+            }
+        }
 
         internal static bool TryApply(Agent agent, Skeleton skeleton, sbyte requestedBoneIndex, in Vec3 worldForce)
         {
@@ -169,23 +184,135 @@ namespace ExtremeRagdoll
             if (state != RagdollState.ActiveFirstTick && state != RagdollState.Active)
                 return false;
 
+            EnsureBound();
+            if (_applyForceOnRagdoll == null)
+            {
+                LogMissingRouteOnce();
+                return false;
+            }
+
             sbyte boneIndex = ResolveBoneIndex(skeleton, requestedBoneIndex);
             try
             {
-                // Limit pathological tunnelling without weakening ordinary/extreme reactions.
-                agent.SetVelocityLimitsOnRagdoll(LinearVelocityLimit, AngularVelocityLimit);
-                agent.ApplyForceOnRagdoll(boneIndex, in worldForce);
+                if (_setVelocityLimitsOnRagdoll != null)
+                {
+                    _setVelocityLimitsOnRagdoll.Invoke(
+                        agent,
+                        new object[] { LinearVelocityLimit, AngularVelocityLimit });
+                }
+
+                ParameterInfo[] parameters = _applyForceOnRagdoll.GetParameters();
+                object boneArgument = BoxInteger(parameters[0].ParameterType, boneIndex);
+                _applyForceOnRagdoll.Invoke(agent, new object[] { boneArgument, worldForce });
 
                 if (ER_Config.DebugLogging)
-                    ER_Log.Info($"Safe ragdoll force route=Agent.ApplyForceOnRagdoll bone={boneIndex} force={MathF.Sqrt(worldForce.LengthSquared):0}");
+                {
+                    string route = _applyForceOnRagdoll.DeclaringType?.Name + "." + _applyForceOnRagdoll.Name;
+                    ER_Log.Info($"Safe ragdoll force route={route} bone={boneIndex} force={Math.Sqrt(worldForce.LengthSquared):0}");
+                }
                 return true;
+            }
+            catch (TargetInvocationException ex)
+            {
+                if (ER_Config.DebugLogging)
+                    ER_Log.Error("Safe Agent ragdoll-force invocation failed", ex.InnerException ?? ex);
+                return false;
             }
             catch (Exception ex)
             {
                 if (ER_Config.DebugLogging)
-                    ER_Log.Error("Safe Agent.ApplyForceOnRagdoll failed", ex);
+                    ER_Log.Error("Safe Agent ragdoll-force invocation failed", ex);
                 return false;
             }
+        }
+
+        private static void EnsureBound()
+        {
+            if (_bound)
+                return;
+
+            lock (BindLock)
+            {
+                if (_bound)
+                    return;
+
+                const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                MethodInfo[] methods;
+                try { methods = typeof(Agent).GetMethods(Flags); }
+                catch { methods = Array.Empty<MethodInfo>(); }
+
+                for (int i = 0; i < methods.Length; i++)
+                {
+                    MethodInfo method = methods[i];
+                    if (method == null)
+                        continue;
+
+                    ParameterInfo[] parameters;
+                    try { parameters = method.GetParameters(); }
+                    catch { continue; }
+
+                    if (method.Name == "ApplyForceOnRagdoll" &&
+                        parameters.Length == 2 &&
+                        IsInteger(parameters[0].ParameterType) &&
+                        IsVec3(parameters[1].ParameterType))
+                    {
+                        _applyForceOnRagdoll = method;
+                        continue;
+                    }
+
+                    if (method.Name == "SetVelocityLimitsOnRagdoll" &&
+                        parameters.Length == 2 &&
+                        Unwrap(parameters[0].ParameterType) == typeof(float) &&
+                        Unwrap(parameters[1].ParameterType) == typeof(float))
+                    {
+                        _setVelocityLimitsOnRagdoll = method;
+                    }
+                }
+
+                _bound = true;
+            }
+        }
+
+        private static void LogMissingRouteOnce()
+        {
+            lock (BindLock)
+            {
+                if (_missingRouteLogged)
+                    return;
+                _missingRouteLogged = true;
+            }
+
+            if (ER_Config.DebugLogging)
+                ER_Log.Info("Dedicated Agent ragdoll-force API unavailable; using fatal-blow compatibility route");
+        }
+
+        private static Type Unwrap(Type type)
+        {
+            return type != null && type.IsByRef ? type.GetElementType() : type;
+        }
+
+        private static bool IsVec3(Type type)
+        {
+            return Unwrap(type) == typeof(Vec3);
+        }
+
+        private static bool IsInteger(Type type)
+        {
+            type = Unwrap(type);
+            return type == typeof(sbyte) || type == typeof(byte) ||
+                   type == typeof(short) || type == typeof(ushort) ||
+                   type == typeof(int) || type == typeof(uint);
+        }
+
+        private static object BoxInteger(Type type, int value)
+        {
+            type = Unwrap(type);
+            if (type == typeof(sbyte)) return (sbyte)Math.Max(sbyte.MinValue, Math.Min(sbyte.MaxValue, value));
+            if (type == typeof(byte)) return (byte)Math.Max(byte.MinValue, Math.Min(byte.MaxValue, value));
+            if (type == typeof(short)) return (short)Math.Max(short.MinValue, Math.Min(short.MaxValue, value));
+            if (type == typeof(ushort)) return (ushort)Math.Max(ushort.MinValue, Math.Min(ushort.MaxValue, value));
+            if (type == typeof(uint)) return (uint)Math.Max(0, value);
+            return value;
         }
 
         private static sbyte ResolveBoneIndex(Skeleton skeleton, sbyte requested)
