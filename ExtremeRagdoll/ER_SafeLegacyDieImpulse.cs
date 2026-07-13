@@ -42,8 +42,8 @@ namespace ExtremeRagdoll
         private static MethodBase[] FindTargets()
         {
             var targets = new List<MethodBase>();
-            Type blowType = typeof(Blow);
-            foreach (MethodInfo candidate in AccessTools.GetDeclaredMethods(typeof(Agent)))
+            var blowType = typeof(Blow);
+            foreach (var candidate in AccessTools.GetDeclaredMethods(typeof(Agent)))
             {
                 if (candidate == null || candidate.Name != "Die")
                     continue;
@@ -54,7 +54,7 @@ namespace ExtremeRagdoll
                 if (parameters.Length == 0)
                     continue;
 
-                Type first = parameters[0].ParameterType;
+                var first = parameters[0].ParameterType;
                 if (first == blowType || (first.IsByRef && first.GetElementType() == blowType))
                     targets.Add(candidate);
             }
@@ -69,15 +69,15 @@ namespace ExtremeRagdoll
             if (__instance == null || ER_ActiveRagdollImpulse.HasAgentForceRoute)
                 return;
 
-            float originalMagnitude = blow.BaseMagnitude;
+            var originalMagnitude = blow.BaseMagnitude;
             if (float.IsNaN(originalMagnitude) || float.IsInfinity(originalMagnitude) || originalMagnitude < 0f)
                 originalMagnitude = 0f;
 
-            float damage = MathF.Max(0f, (float)blow.InflictedDamage);
-            bool missile = IsMissile(in blow);
+            var damage = MathF.Max(0f, (float)blow.InflictedDamage);
+            var missile = IsMissile(in blow);
 
-            float cap = missile ? MissileMagnitudeCap : MeleeMagnitudeCap;
-            float configuredHardCap = ER_Config.CorpseImpulseHardCap;
+            var cap = missile ? MissileMagnitudeCap : MeleeMagnitudeCap;
+            var configuredHardCap = ER_Config.CorpseImpulseHardCap;
             if (!float.IsNaN(configuredHardCap) &&
                 !float.IsInfinity(configuredHardCap) &&
                 configuredHardCap > 0f)
@@ -87,17 +87,17 @@ namespace ExtremeRagdoll
             if (cap <= 0f)
                 return;
 
-            float floor = missile ? MissileMagnitudeFloor : MeleeMagnitudeFloor;
+            var floor = missile ? MissileMagnitudeFloor : MeleeMagnitudeFloor;
             if (floor > cap)
                 floor = cap;
 
-            float multiplier = MathF.Max(1f, ER_Config.ExtraForceMultiplier) *
-                               MathF.Max(1f, ER_Config.KnockbackMultiplier);
+            var multiplier = MathF.Max(1f, ER_Config.ExtraForceMultiplier) *
+                             MathF.Max(1f, ER_Config.KnockbackMultiplier);
             multiplier = MathF.Min(multiplier, 4f);
 
-            float damageScale = missile ? 12f : 20f;
-            float sourceMagnitude = 1000f + damage * damageScale;
-            float desiredMagnitude = sourceMagnitude * multiplier;
+            var damageScale = missile ? 12f : 20f;
+            var sourceMagnitude = 1000f + damage * damageScale;
+            var desiredMagnitude = sourceMagnitude * multiplier;
             if (desiredMagnitude < floor)
                 desiredMagnitude = floor;
             if (desiredMagnitude > cap)
@@ -132,7 +132,7 @@ namespace ExtremeRagdoll
         {
             try
             {
-                string flags = blow.BlowFlag.ToString();
+                var flags = blow.BlowFlag.ToString();
                 return !string.IsNullOrEmpty(flags) &&
                        flags.IndexOf("Missile", StringComparison.OrdinalIgnoreCase) >= 0;
             }
