@@ -1,0 +1,113 @@
+name: Publish v1.1.0
+
+on:
+  pull_request:
+    paths:
+      - .release-v1.1.0-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Reconstruct and verify release asset
+        run: |
+          set -euo pipefail
+          test "$(find .release-v1.1.0.parts -maxdepth 1 -type f | wc -l)" -eq 16
+          cat \
+            .release-v1.1.0.parts/00 \
+            .release-v1.1.0.parts/01 \
+            .release-v1.1.0.parts/02 \
+            .release-v1.1.0.parts/03 \
+            .release-v1.1.0.parts/04 \
+            .release-v1.1.0.parts/05 \
+            .release-v1.1.0.parts/06 \
+            .release-v1.1.0.parts/07a \
+            .release-v1.1.0.parts/07b \
+            .release-v1.1.0.parts/08a \
+            .release-v1.1.0.parts/08b0 \
+            .release-v1.1.0.parts/08b1 \
+            .release-v1.1.0.parts/09a0 \
+            .release-v1.1.0.parts/09a1 \
+            .release-v1.1.0.parts/09b0 \
+            .release-v1.1.0.parts/09b1 \
+            | base64 --decode > /tmp/ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip
+          echo 'd821cecb720218b64bd2ff5ca0cc797454d1302dd05f9a6f07aea2bbd64dc792  /tmp/ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip' | sha256sum --check
+          unzip -t /tmp/ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip
+          test "$(unzip -Z1 /tmp/ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip | sort | tr '\n' '|')" = 'ExtremeRagdoll/SubModule.xml|ExtremeRagdoll/bin/Win64_Shipping_Client/ExtremeRagdoll.dll|'
+          unzip -p /tmp/ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip ExtremeRagdoll/SubModule.xml | grep -F '<Version value="v1.1.0" />'
+
+      - name: Create tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_SHA: 058a0dcb03fda6751d35ec1765e5906546fc3de9
+          ASSET: /tmp/ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+          Compatibility release for Mount & Blade II: Bannerlord 1.3.15 and The Old Realms: War in the Mountains 1.16.
+
+          Changes:
+          - Replaced removed `GameEntity.GetPhysicsBoundingBoxMin/Max()` calls with the Bannerlord 1.3.x `GlobalBoxMin` / `GlobalBoxMax` API.
+          - Retained a reflection-only bounds fallback for older game branches.
+          - Validated the death/ragdoll Harmony targets against Bannerlord 1.3.15.
+          - Validated the optional TOR shockwave adapter against `TOR_Core` 1.16.
+          - Updated the module and assembly version to 1.1.0.
+
+          SHA-256:
+          - `ExtremeRagdoll.dll`: `834128fbb595a6785f3be2d76215c54fa7308e810c9a362a4b2c2c090b3d570f`
+          - Release ZIP: `d821cecb720218b64bd2ff5ca0cc797454d1302dd05f9a6f07aea2bbd64dc792`
+
+          The assembly compiled successfully against the supplied Bannerlord 1.3.15 and TOR WiTM 1.16 assemblies. In-game runtime validation was not available in the build environment.
+          EOF
+
+          if gh api "repos/$REPOSITORY/git/ref/tags/v1.1.0" >/dev/null 2>&1; then
+            test "$(gh api "repos/$REPOSITORY/git/ref/tags/v1.1.0" --jq .object.sha)" = "$SOURCE_SHA"
+          fi
+
+          if ! gh release view v1.1.0 --repo "$REPOSITORY" >/dev/null 2>&1; then
+            gh release create v1.1.0 \
+              --repo "$REPOSITORY" \
+              --target "$SOURCE_SHA" \
+              --title 'Extreme Ragdoll v1.1.0' \
+              --notes-file /tmp/release-notes.md \
+              "$ASSET"
+          fi
+
+          test "$(gh api "repos/$REPOSITORY/git/ref/tags/v1.1.0" --jq .object.sha)" = "$SOURCE_SHA"
+          gh release view v1.1.0 --repo "$REPOSITORY" --json assets --jq '.assets[].name' \
+            | grep -Fx 'ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip'
+
+      - name: Record release and remove staging files
+        env:
+          SOURCE_SHA: 058a0dcb03fda6751d35ec1765e5906546fc3de9
+        run: |
+          set -euo pipefail
+          mkdir -p .release-status
+          cat > .release-status/v1.1.0.txt <<EOF
+          tag=v1.1.0
+          target=$SOURCE_SHA
+          release=https://github.com/$GITHUB_REPOSITORY/releases/tag/v1.1.0
+          asset=ExtremeRagdoll-v1.1.0-Bannerlord-1.3.15-TOR-1.16.zip
+          asset_sha256=d821cecb720218b64bd2ff5ca0cc797454d1302dd05f9a6f07aea2bbd64dc792
+          dll_sha256=834128fbb595a6785f3be2d76215c54fa7308e810c9a362a4b2c2c090b3d570f
+          bannerlord=1.3.15
+          tor_witm=1.16
+          EOF
+          rm -rf .release-v1.1.0.parts
+          rm -f .github/workflows/release-v1.1.0.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Record v1.1.0 release'
+          git push origin HEAD:master
