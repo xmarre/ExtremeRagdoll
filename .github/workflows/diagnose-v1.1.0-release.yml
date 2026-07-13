@@ -1,0 +1,53 @@
+name: Diagnose v1.1.0 release fragments
+
+on:
+  pull_request:
+    paths:
+      - .release-v1.1.0-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Record staged fragment hashes
+        run: |
+          set -euo pipefail
+          output=.release-diagnostics-v1.1.0.txt
+          : > "$output"
+          while read -r part expected; do
+            path=".release-v1.1.0.parts/$part"
+            actual="$(git hash-object "$path")"
+            size="$(wc -c < "$path")"
+            status=OK
+            if [ "$actual" != "$expected" ]; then status=MISMATCH; fi
+            printf '%s size=%s expected=%s actual=%s status=%s\n' "$part" "$size" "$expected" "$actual" "$status" >> "$output"
+          done <<'EOF'
+          00 f1767f034081c8412928b559b7ce301b8a92292b
+          01 96b899834082466cbf27b9ecda795389f9f3d109
+          02 9fc155d08e00f65380fb00d6910a6fd2dff3b153
+          03 ae156ba08c470e7e614b16c8549d7134a9159177
+          04 36189b40a7abd57fe72007246f1e39b81ac40a7d
+          05 663665d1548e3b0304063fd0f05236ef585b67f0
+          06 122cb06e2c5e3a723140e0144809260ec79d5a55
+          07a 8223a26cc440b22a77c874f00ff5be8d5ae1ff3e
+          07b a0ae99c90b9c796274e28a848a25a752b00cded0
+          08a 5839b657b085c0402e1cb17d5c4692c3571638a2
+          08b0 33fac5808c4d015809f16755d3d185b1c0ed7308
+          08b1 332099bb8a55764e6b66c024979f300910504759
+          09a0 000b2a2cfb930d4d6598074053196161104a75f1
+          09a1 7d7fd9055b7a887a1c38af4d280a33956ac1715b
+          09b0 dc6869d89651fe8d98202167fe4e4ef3872d4efa
+          09b1 dbfb05dd5bbeb8e93221cf0c2c1dabe98e877b5d
+          EOF
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add "$output"
+          git commit -m 'Record v1.1.0 release fragment diagnostics'
+          git push origin HEAD:master
