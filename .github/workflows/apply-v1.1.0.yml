@@ -6,6 +6,9 @@ on:
       - master
     paths:
       - .github/workflows/apply-v1.1.0.yml
+  pull_request:
+    paths:
+      - .apply-v1.1.0-trigger
 
 permissions:
   contents: write
