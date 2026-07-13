@@ -21,7 +21,7 @@ jobs:
       - name: Reconstruct and verify release asset
         run: |
           set -euo pipefail
-          test "$(find .release-v1.1.0.parts -maxdepth 1 -type f | wc -l)" -eq 16
+          test "$(find .release-v1.1.0.parts -maxdepth 1 -type f | wc -l)" -eq 17
           mismatch=0
           while read -r part expected; do
             path=".release-v1.1.0.parts/$part"
@@ -37,7 +37,8 @@ jobs:
           03 ae156ba08c470e7e614b16c8549d7134a9159177
           04 36189b40a7abd57fe72007246f1e39b81ac40a7d
           05 663665d1548e3b0304063fd0f05236ef585b67f0
-          06 122cb06e2c5e3a723140e0144809260ec79d5a55
+          06a 25022618239a152f4133edb140d9d8ce73e5ac33
+          06b 8a05fb014d89cef8be4983a798b71880c97f5dca
           07a 8223a26cc440b22a77c874f00ff5be8d5ae1ff3e
           07b a0ae99c90b9c796274e28a848a25a752b00cded0
           08a 5839b657b085c0402e1cb17d5c4692c3571638a2
@@ -56,7 +57,8 @@ jobs:
             .release-v1.1.0.parts/03 \
             .release-v1.1.0.parts/04 \
             .release-v1.1.0.parts/05 \
-            .release-v1.1.0.parts/06 \
+            .release-v1.1.0.parts/06a \
+            .release-v1.1.0.parts/06b \
             .release-v1.1.0.parts/07a \
             .release-v1.1.0.parts/07b \
             .release-v1.1.0.parts/08a \
@@ -131,6 +133,8 @@ jobs:
           tor_witm=1.16
           EOF
           rm -rf .release-v1.1.0.parts
+          rm -f .release-diagnostics-v1.1.0.txt
+          rm -f .github/workflows/diagnose-v1.1.0-release.yml
           rm -f .github/workflows/release-v1.1.0.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
