@@ -445,9 +445,10 @@ namespace ExtremeRagdoll
                     if (now - pending.RagdollSeenAt < SolverSettleDelay)
                         continue;
 
-                    Vec3 force = pending.Direction * pending.ForceMagnitude;
-                    if (force.z < 0f)
-                        force.z = 0f;
+                    Vec3 direction = ER_DeathBlastBehavior.FinalizeImpulseDir(
+                        pending.Direction,
+                        ER_Config.CorpseLaunchMaxUpFraction);
+                    Vec3 force = direction * pending.ForceMagnitude;
 
                     bool applied;
                     try
