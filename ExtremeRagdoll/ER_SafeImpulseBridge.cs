@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Threading;
 using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
@@ -10,8 +9,7 @@ using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
 {
-    // The legacy evaluator caches the first enum name containing "active". Bannerlord declares
-    // ActiveFirstTick before Active, so the persistent Active state was incorrectly treated as inactive.
+    // The legacy evaluator cached ActiveFirstTick and then rejected the persistent Active state.
     [HarmonyPatch(typeof(ER_DeathBlastBehavior), "IsRagdollActiveFast")]
     internal static class ER_ExactRagdollStatePatch
     {
@@ -34,6 +32,7 @@ namespace ExtremeRagdoll
             {
                 __result = false;
             }
+
             return false;
         }
     }
@@ -58,9 +57,11 @@ namespace ExtremeRagdoll
             {
                 if (original == null || original.Name != nameof(Agent.RegisterBlow))
                     continue;
+
                 ParameterInfo[] parameters = original.GetParameters();
                 if (parameters.Length == 0)
                     continue;
+
                 Type first = parameters[0].ParameterType;
                 if (first != blowType && !(first.IsByRef && first.GetElementType() == blowType))
                     continue;
@@ -86,8 +87,8 @@ namespace ExtremeRagdoll
     }
 
     /// <summary>
-    /// Keeps the original knockback amplifier for living targets while preventing it from touching a lethal blow.
-    /// The scope remains active until Harmony finalizers run, covering the old late-priority prefix.
+    /// Keeps the old living-target knockback path while preventing it from mutating lethal blows.
+    /// TOR runs first, capture observes the finalized blow, this scope then suppresses the old late prefix.
     /// </summary>
     [HarmonyPatch]
     internal static class ER_SuppressLegacyLethalRegisterBlowPatch
@@ -100,9 +101,11 @@ namespace ExtremeRagdoll
             {
                 if (candidate == null || candidate.Name != nameof(Agent.RegisterBlow))
                     continue;
+
                 ParameterInfo[] parameters = candidate.GetParameters();
                 if (parameters.Length == 0)
                     continue;
+
                 Type first = parameters[0].ParameterType;
                 if (first == blowType || (first.IsByRef && first.GetElementType() == blowType))
                     yield return candidate;
@@ -127,11 +130,8 @@ namespace ExtremeRagdoll
             if (float.IsNaN(health) || float.IsInfinity(health))
                 return;
 
-            float damage = blow.InflictedDamage;
-            if (float.IsNaN(damage) || float.IsInfinity(damage))
-                damage = 0f;
-
-            bool lethal = health <= 0f || (damage > 0f && health - damage <= 0f);
+            int damage = blow.InflictedDamage;
+            bool lethal = health <= 0f || (damage > 0 && health - damage <= 0f);
             if (lethal)
                 __state = ER_Amplify_RegisterBlowPatch.SuppressPrefixScope();
         }
@@ -147,225 +147,75 @@ namespace ExtremeRagdoll
     }
 
     /// <summary>
-    /// Applies one impulse to a body that Bannerlord has already converted to ragdoll.
-    /// No route in this class activates, wakes, ticks, freezes, or otherwise changes ragdoll state.
+    /// Applies force through Bannerlord's agent-ragdoll API after the engine owns and completes
+    /// the animation-to-ragdoll transition. This class never activates, wakes, freezes, ticks,
+    /// teleports, or registers another blow.
     /// </summary>
     internal static class ER_ActiveRagdollImpulse
     {
-        private static readonly object BindLock = new object();
-        private static int _bound;
+        private const float LinearVelocityLimit = 25f;
+        private const float AngularVelocityLimit = 60f;
 
-        // Bannerlord 1.3.x: local contact + global force + ForceMode.Impulse.
-        private static MethodInfo _globalForceAtLocalPos;
-        private static object _impulseForceMode;
-
-        // Compatibility routes used by older/newer engine builds.
-        private static MethodInfo _worldImpulseInstance3;
-        private static MethodInfo _worldImpulseExtension4;
-        private static MethodInfo _worldImpulseInstance2;
-        private static MethodInfo _localImpulseInstance2;
-        private static MethodInfo _localImpulseExtension3;
-
-        private static int _missingRouteLogged;
-
-        internal static bool TryApply(GameEntity entity, Skeleton skeleton, in Vec3 worldImpulse, in Vec3 worldPosition)
+        internal static bool TryApply(Agent agent, Skeleton skeleton, sbyte requestedBoneIndex, in Vec3 worldForce)
         {
-            if (entity == null || skeleton == null)
+            if (agent == null || skeleton == null)
                 return false;
-            if (!ER_Math.IsFinite(in worldImpulse) || !ER_Math.IsFinite(in worldPosition))
-                return false;
-            if (worldImpulse.LengthSquared < ER_Math.ImpulseTinySq)
+            if (!ER_Math.IsFinite(in worldForce) || worldForce.LengthSquared < ER_Math.ImpulseTinySq)
                 return false;
 
-            bool ragdollActive;
-            try { ragdollActive = ER_DeathBlastBehavior.IsRagdollActiveFast(skeleton); }
-            catch { ragdollActive = false; }
-            if (!ragdollActive)
-                return false;
-
-            bool hasPhysicsBody;
-            try { hasPhysicsBody = entity.HasPhysicsBody(); }
-            catch { hasPhysicsBody = false; }
-            if (!hasPhysicsBody)
-                return false;
-
-            Vec3 min;
-            Vec3 max;
-            try
-            {
-                min = entity.GetPhysicsBoundingBoxMin();
-                max = entity.GetPhysicsBoundingBoxMax();
-            }
-            catch
-            {
-                return false;
-            }
-            if (!ER_Math.IsFinite(in min) || !ER_Math.IsFinite(in max))
-                return false;
-            Vec3 extent = max - min;
-            if (!ER_Math.IsFinite(in extent) || extent.x <= 0f || extent.y <= 0f || extent.z <= 0f)
-                return false;
-            float maxExtent = ER_Config.MaxAabbExtent;
-            if (float.IsNaN(maxExtent) || float.IsInfinity(maxExtent) || maxExtent <= 0f)
-                maxExtent = 1024f;
-            if (extent.x > maxExtent || extent.y > maxExtent || extent.z > maxExtent)
-                return false;
-
-            MatrixFrame frame;
-            try { frame = entity.GetGlobalFrame(); }
+            RagdollState state;
+            try { state = skeleton.GetCurrentRagdollState(); }
             catch { return false; }
-
-            Vec3 localPosition = WorldPointToLocal(in frame, in worldPosition);
-            Vec3 localImpulse = WorldVectorToLocal(in frame, in worldImpulse);
-            if (!ER_Math.IsFinite(in localPosition) || !ER_Math.IsFinite(in localImpulse))
+            if (state != RagdollState.ActiveFirstTick && state != RagdollState.Active)
                 return false;
 
-            EnsureBound();
-
+            sbyte boneIndex = ResolveBoneIndex(skeleton, requestedBoneIndex);
             try
             {
-                if (_globalForceAtLocalPos != null && _impulseForceMode != null)
-                {
-                    _globalForceAtLocalPos.Invoke(
-                        null,
-                        new[] { (object)entity, localPosition, worldImpulse, _impulseForceMode });
-                    return true;
-                }
+                // Limit pathological tunnelling without weakening ordinary/extreme reactions.
+                agent.SetVelocityLimitsOnRagdoll(LinearVelocityLimit, AngularVelocityLimit);
+                agent.ApplyForceOnRagdoll(boneIndex, in worldForce);
 
-                if (_worldImpulseInstance3 != null)
-                {
-                    _worldImpulseInstance3.Invoke(entity, new object[] { worldImpulse, worldPosition, false });
-                    return true;
-                }
-
-                if (_worldImpulseExtension4 != null)
-                {
-                    _worldImpulseExtension4.Invoke(null, new object[] { entity, worldImpulse, worldPosition, false });
-                    return true;
-                }
-
-                // Legacy GameEntity API: position first, impulse second.
-                if (_worldImpulseInstance2 != null)
-                {
-                    _worldImpulseInstance2.Invoke(entity, new object[] { worldPosition, worldImpulse });
-                    return true;
-                }
-
-                if (_localImpulseInstance2 != null)
-                {
-                    _localImpulseInstance2.Invoke(entity, new object[] { localPosition, localImpulse });
-                    return true;
-                }
-
-                if (_localImpulseExtension3 != null)
-                {
-                    _localImpulseExtension3.Invoke(null, new object[] { entity, localPosition, localImpulse });
-                    return true;
-                }
-            }
-            catch (TargetInvocationException ex)
-            {
-                Exception inner = ex.InnerException ?? ex;
                 if (ER_Config.DebugLogging)
-                    ER_Log.Error("Safe active-ragdoll impulse failed", inner);
-                return false;
+                    ER_Log.Info($"Safe ragdoll force route=Agent.ApplyForceOnRagdoll bone={boneIndex} force={MathF.Sqrt(worldForce.LengthSquared):0}");
+                return true;
             }
             catch (Exception ex)
             {
                 if (ER_Config.DebugLogging)
-                    ER_Log.Error("Safe active-ragdoll impulse failed", ex);
+                    ER_Log.Error("Safe Agent.ApplyForceOnRagdoll failed", ex);
                 return false;
             }
-
-            if (Interlocked.Exchange(ref _missingRouteLogged, 1) == 0)
-                ER_Log.Error("Safe active-ragdoll impulse disabled: no compatible GameEntity impulse API was found");
-            return false;
         }
 
-        private static Vec3 WorldPointToLocal(in MatrixFrame frame, in Vec3 worldPoint)
+        private static sbyte ResolveBoneIndex(Skeleton skeleton, sbyte requested)
         {
-            Vec3 delta = worldPoint - frame.origin;
-            return WorldVectorToLocal(in frame, in delta);
-        }
+            int count;
+            try { count = skeleton.GetBoneCount(); }
+            catch { return requested >= 0 ? requested : (sbyte)0; }
 
-        private static Vec3 WorldVectorToLocal(in MatrixFrame frame, in Vec3 worldVector)
-        {
-            return new Vec3(
-                frame.rotation.s.x * worldVector.x + frame.rotation.s.y * worldVector.y + frame.rotation.s.z * worldVector.z,
-                frame.rotation.f.x * worldVector.x + frame.rotation.f.y * worldVector.y + frame.rotation.f.z * worldVector.z,
-                frame.rotation.u.x * worldVector.x + frame.rotation.u.y * worldVector.y + frame.rotation.u.z * worldVector.z);
-        }
+            if (count <= 0)
+                return 0;
+            if (requested >= 0 && requested < count)
+                return requested;
 
-        private static void EnsureBound()
-        {
-            if (Volatile.Read(ref _bound) != 0)
-                return;
-
-            lock (BindLock)
+            string[] preferred = { "pelvis", "hips", "spine_0", "spine", "root" };
+            for (int p = 0; p < preferred.Length; p++)
             {
-                if (_bound != 0)
-                    return;
-
-                const BindingFlags InstanceFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                const BindingFlags StaticFlags = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
-
-                Type gameEntityType = typeof(GameEntity);
-                Type vec3Type = typeof(Vec3);
-                Type extensions = gameEntityType.Assembly.GetType("TaleWorlds.Engine.GameEntityPhysicsExtensions");
-
-                _worldImpulseInstance3 = gameEntityType.GetMethod(
-                    "ApplyImpulseToDynamicBody",
-                    InstanceFlags,
-                    null,
-                    new[] { vec3Type, vec3Type, typeof(bool) },
-                    null);
-
-                _worldImpulseInstance2 = gameEntityType.GetMethod(
-                    "ApplyImpulseToDynamicBody",
-                    InstanceFlags,
-                    null,
-                    new[] { vec3Type, vec3Type },
-                    null);
-
-                _localImpulseInstance2 = gameEntityType.GetMethod(
-                    "ApplyLocalImpulseToDynamicBody",
-                    InstanceFlags,
-                    null,
-                    new[] { vec3Type, vec3Type },
-                    null);
-
-                if (extensions != null)
+                for (int i = 0; i < count && i <= sbyte.MaxValue; i++)
                 {
-                    _worldImpulseExtension4 = extensions.GetMethod(
-                        "ApplyImpulseToDynamicBody",
-                        StaticFlags,
-                        null,
-                        new[] { gameEntityType, vec3Type, vec3Type, typeof(bool) },
-                        null);
-
-                    _localImpulseExtension3 = extensions.GetMethod(
-                        "ApplyLocalImpulseToDynamicBody",
-                        StaticFlags,
-                        null,
-                        new[] { gameEntityType, vec3Type, vec3Type },
-                        null);
-
-                    Type forceModeType = extensions.GetNestedType("ForceMode", BindingFlags.Public | BindingFlags.NonPublic);
-                    if (forceModeType != null && forceModeType.IsEnum)
+                    try
                     {
-                        _globalForceAtLocalPos = extensions.GetMethod(
-                            "ApplyGlobalForceAtLocalPosToDynamicBody",
-                            StaticFlags,
-                            null,
-                            new[] { gameEntityType, vec3Type, vec3Type, forceModeType },
-                            null);
-                        if (_globalForceAtLocalPos != null)
-                            _impulseForceMode = Enum.ToObject(forceModeType, 1);
+                        string name = skeleton.GetBoneName((sbyte)i);
+                        if (!string.IsNullOrEmpty(name) &&
+                            name.IndexOf(preferred[p], StringComparison.OrdinalIgnoreCase) >= 0)
+                            return (sbyte)i;
                     }
+                    catch { }
                 }
-
-                Volatile.Write(ref _bound, 1);
             }
+
+            return 0;
         }
     }
 }
