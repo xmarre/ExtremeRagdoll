@@ -1,0 +1,28 @@
+name: Export Roslyn compiler
+
+on:
+  pull_request:
+    paths:
+      - .roslyn-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download compiler package
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            -o compiler.nupkg \
+            https://api.nuget.org/v3-flatcontainer/microsoft.net.compilers.toolset/4.8.0/microsoft.net.compilers.toolset.4.8.0.nupkg
+          mkdir compiler
+          unzip -q compiler.nupkg -d compiler
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roslyn-net472
+          path: compiler/tasks/net472
+          if-no-files-found: error
+          retention-days: 1
