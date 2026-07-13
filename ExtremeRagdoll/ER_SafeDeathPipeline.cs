@@ -5,6 +5,7 @@ using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
+using MathF = TaleWorlds.Library.MathF;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll

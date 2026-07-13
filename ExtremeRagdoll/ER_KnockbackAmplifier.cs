@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.Library;
+using MathF = TaleWorlds.Library.MathF;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll

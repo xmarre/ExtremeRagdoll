@@ -5,6 +5,7 @@ using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;           // for GameEntity, Skeleton, MBCommon
 using TaleWorlds.Library;
+using MathF = TaleWorlds.Library.MathF;
 using TaleWorlds.MountAndBlade;
 using System.Reflection;           // reflection fallback for impulse API
 using System.Runtime.CompilerServices;

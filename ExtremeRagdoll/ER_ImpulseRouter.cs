@@ -8,6 +8,7 @@ using System.Threading;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
+using MathF = TaleWorlds.Library.MathF;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
@@ -439,16 +440,59 @@ namespace ExtremeRagdoll
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryGetSaneAabb(GameEntity ent, out Vec3 mn, out Vec3 mx)
+        private static bool TryGetEntityBounds(GameEntity ent, out Vec3 mn, out Vec3 mx)
         {
             mn = default;
             mx = default;
             if (ent == null)
                 return false;
+
+            // Bannerlord 1.3.x exposes world-space entity bounds as properties. Older builds
+            // exposed the same data through GetPhysicsBoundingBoxMin/Max, so retain a
+            // reflection-only fallback without introducing a hard reference to removed APIs.
             try
             {
-                mn = ent.GetPhysicsBoundingBoxMin();
-                mx = ent.GetPhysicsBoundingBoxMax();
+                mn = ent.GlobalBoxMin;
+                mx = ent.GlobalBoxMax;
+                if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
+                    return true;
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                var type = ent.GetType();
+                var getMin = type.GetMethod("GetPhysicsBoundingBoxMin", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var getMax = type.GetMethod("GetPhysicsBoundingBoxMax", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (getMin == null || getMax == null)
+                    return false;
+
+                var minValue = getMin.Invoke(ent, null);
+                var maxValue = getMax.Invoke(ent, null);
+                if (!(minValue is Vec3 min) || !(maxValue is Vec3 max))
+                    return false;
+
+                mn = min;
+                mx = max;
+                return ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx);
+            }
+            catch
+            {
+                mn = default;
+                mx = default;
+                return false;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryGetSaneAabb(GameEntity ent, out Vec3 mn, out Vec3 mx)
+        {
+            if (!TryGetEntityBounds(ent, out mn, out mx))
+                return false;
+            try
+            {
                 // Fail-closed: if junk/zero, DO NOT touch native physics.
                 if (!ER_Math.IsFinite(in mn) || !ER_Math.IsFinite(in mx))
                     return false;
@@ -776,7 +820,8 @@ namespace ExtremeRagdoll
                 float zMin = baseZ;
                 try
                 {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
+                    if (!TryGetEntityBounds(ent, out var mn, out _))
+                        throw new InvalidOperationException("Entity bounds unavailable");
                     zMin = mn.z + zNudge;
                     if (zMin < baseZ) zMin = baseZ;
                 }
@@ -1571,9 +1616,8 @@ namespace ExtremeRagdoll
 
                 try
                 {
-                    var mn = ent.GetPhysicsBoundingBoxMin();
-                    var mx = ent.GetPhysicsBoundingBoxMax();
-                    if (ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
+                    if (TryGetEntityBounds(ent, out var mn, out var mx) &&
+                        ER_Math.IsFinite(in mn) && ER_Math.IsFinite(in mx))
                     {
                         var d = mx - mn;
                         if (d.x > 0f && d.y > 0f && d.z > 0f && d.LengthSquared > 1e-6f)
@@ -1758,8 +1802,8 @@ namespace ExtremeRagdoll
                         }
                         else
                         {
-                            var mn = ent.GetPhysicsBoundingBoxMin();
-                            mx = ent.GetPhysicsBoundingBoxMax();
+                            if (!TryGetEntityBounds(ent, out var mn, out mx))
+                                throw new InvalidOperationException("Entity bounds unavailable");
                             c = (mn + mx) * 0.5f;
                         }
                         if (ER_Math.IsFinite(in c))
@@ -2416,9 +2460,8 @@ namespace ExtremeRagdoll
                     {
                         if (hasEnt && dynOk) // AABB logging only when dynamic
                         {
-                            var mn = ent.GetPhysicsBoundingBoxMin();
-                            var mx = ent.GetPhysicsBoundingBoxMax();
-                            Log($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
+                            if (TryGetEntityBounds(ent, out var mn, out var mx))
+                                Log($"IMPULSE_AABB mn=({mn.x:0.###},{mn.y:0.###},{mn.z:0.###}) mx=({mx.x:0.###},{mx.y:0.###},{mx.z:0.###}) BodyFlag={ent.BodyFlag} PhysFlag={ent.PhysicsDescBodyFlag}");
                         }
                     }
                     catch { }

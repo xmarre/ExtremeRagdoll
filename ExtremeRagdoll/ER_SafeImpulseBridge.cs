@@ -148,8 +148,8 @@ namespace ExtremeRagdoll
 
     /// <summary>
     /// Applies force through Bannerlord's dedicated Agent ragdoll API when that API exists.
-    /// Bannerlord 1.2.12 does not expose these methods, so all binding is reflective and the
-    /// safe death pipeline uses the original fatal blow as its compatibility route instead.
+    /// Bannerlord 1.3.15 exposes ApplyForceOnRagdoll and SetVelocityLimitsOnRagdoll. Binding
+    /// remains reflective so older game branches continue to use the fatal-blow fallback safely.
     /// </summary>
     internal static class ER_ActiveRagdollImpulse
     {

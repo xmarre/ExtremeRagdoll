@@ -4,13 +4,14 @@ using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.Core;
 using TaleWorlds.Library;
+using MathF = TaleWorlds.Library.MathF;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll
 {
     /// <summary>
     /// Carries one lethal RegisterBlow context to Agent.HandleBlowAux on the same thread.
-    /// Bannerlord 1.2.12 calls HandleBlowAux only after damage callbacks and Agent.Die, so this
+    /// Bannerlord 1.3.15 calls HandleBlowAux only after damage callbacks and Agent.Die, so this
     /// is the last managed boundary before native hit physics without taking ownership of the
     /// animation-to-ragdoll transition.
     /// </summary>
