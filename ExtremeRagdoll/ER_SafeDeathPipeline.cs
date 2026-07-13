@@ -15,6 +15,8 @@ namespace ExtremeRagdoll
         private const float ForceUnitsPerLegacyImpulseUnit = 2000f;
         private const float MinimumUnitsPerLegacyImpulseUnit = 500f;
         private const float AbsoluteForceCap = 16000f;
+        private const float LegacyMeleeMagnitudeCap = 2200f;
+        private const float LegacyMissileMagnitudeCap = 1400f;
 
         internal static void DisableLegacyDeathOverrides(Harmony harmony)
         {
@@ -66,7 +68,7 @@ namespace ExtremeRagdoll
             if (float.IsNaN(baseMagnitude) || float.IsInfinity(baseMagnitude) || baseMagnitude < 0f)
                 baseMagnitude = 0f;
 
-            float damage = MathF.Max(0f, blow.InflictedDamage);
+            float damage = MathF.Max(0f, (float)blow.InflictedDamage);
             float sourceMagnitude = MathF.Max(MathF.Min(baseMagnitude, 1200f), 250f + damage * 8f);
             float multiplier = MathF.Max(0f, ER_Config.ExtraForceMultiplier) * MathF.Max(1f, ER_Config.KnockbackMultiplier);
             float force = sourceMagnitude * multiplier;
@@ -81,7 +83,7 @@ namespace ExtremeRagdoll
                 force = maximum;
 
             float configuredHardCap = ER_Config.CorpseImpulseHardCap;
-            if (configuredHardCap > 0f)
+            if (!float.IsNaN(configuredHardCap) && !float.IsInfinity(configuredHardCap) && configuredHardCap > 0f)
                 force = MathF.Min(force, configuredHardCap * ForceUnitsPerLegacyImpulseUnit);
             force = MathF.Min(force, AbsoluteForceCap);
 
@@ -109,6 +111,51 @@ namespace ExtremeRagdoll
             return ER_Math.IsFinite(in direction) && direction.LengthSquared >= ER_Math.DirectionTinySq
                 ? direction
                 : new Vec3(0f, 1f, 0f);
+        }
+
+        internal static void ApplyLegacyFatalBlowFallback(Agent agent, ref Blow blow)
+        {
+            float originalMagnitude = blow.BaseMagnitude;
+            if (float.IsNaN(originalMagnitude) || float.IsInfinity(originalMagnitude) || originalMagnitude < 0f)
+                originalMagnitude = 0f;
+
+            float damage = MathF.Max(0f, (float)blow.InflictedDamage);
+            float multiplier = MathF.Max(1f, ER_Config.ExtraForceMultiplier) *
+                               MathF.Max(1f, ER_Config.KnockbackMultiplier);
+            multiplier = MathF.Min(multiplier, 3f);
+
+            bool missile = false;
+            try
+            {
+                string flags = blow.BlowFlag.ToString();
+                missile = !string.IsNullOrEmpty(flags) &&
+                          flags.IndexOf("Missile", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { }
+
+            float cap = missile ? LegacyMissileMagnitudeCap : LegacyMeleeMagnitudeCap;
+            float configuredHardCap = ER_Config.CorpseImpulseHardCap;
+            if (!float.IsNaN(configuredHardCap) && !float.IsInfinity(configuredHardCap) && configuredHardCap > 0f)
+                cap = MathF.Min(cap, configuredHardCap * 350f);
+
+            float floor = missile ? 900f : 1200f;
+            if (floor > cap)
+                floor = cap;
+
+            float source = MathF.Max(originalMagnitude, 500f + damage * 10f);
+            float desired = MathF.Min(source * multiplier, cap);
+            if (desired < floor)
+                desired = floor;
+
+            if (desired > originalMagnitude)
+                blow.BaseMagnitude = desired;
+
+            Vec3 swing = blow.SwingDirection;
+            if (!ER_Math.IsFinite(in swing) || swing.LengthSquared < ER_Math.DirectionTinySq || swing.z < 0f)
+                blow.SwingDirection = ResolveDirection(agent, in blow);
+
+            if (ER_Config.DebugLogging)
+                ER_Log.Info($"Safe fatal-blow compatibility route magnitude={blow.BaseMagnitude:0} missile={missile}");
         }
     }
 
@@ -143,7 +190,6 @@ namespace ExtremeRagdoll
             }
         }
 
-        // Observe TOR's finalized blow before the lower-priority lethal suppression scope runs.
         [HarmonyPrefix]
         [HarmonyPriority(Priority.Normal)]
         [HarmonyAfter("TOR", "TOR_Core")]
@@ -163,6 +209,12 @@ namespace ExtremeRagdoll
             bool lethal = health <= 0f || (damage > 0 && health - damage <= 0f);
             if (!lethal)
                 return;
+
+            if (!ER_ActiveRagdollImpulse.HasAgentForceRoute)
+            {
+                ER_SafeDeathPipeline.ApplyLegacyFatalBlowFallback(__instance, ref blow);
+                return;
+            }
 
             float force = ER_SafeDeathPipeline.ComputeRagdollForceMagnitude(in blow);
             if (force <= 0f)
@@ -201,7 +253,6 @@ namespace ExtremeRagdoll
         }
     }
 
-    // These paths took ownership of death before Bannerlord completed its animation/state transition.
     [HarmonyPatch]
     internal static class ER_DisableLegacyPreDeathQueuePatch
     {
@@ -360,6 +411,8 @@ namespace ExtremeRagdoll
         {
             if (affected == null || state != AgentState.Killed)
                 return;
+            if (!ER_ActiveRagdollImpulse.HasAgentForceRoute)
+                return;
 
             lock (_gate)
             {
@@ -379,7 +432,7 @@ namespace ExtremeRagdoll
 
             float fallbackForce = 2500f * MathF.Max(1f, ER_Config.KnockbackMultiplier);
             float hardCap = ER_Config.CorpseImpulseHardCap;
-            if (hardCap > 0f)
+            if (!float.IsNaN(hardCap) && !float.IsInfinity(hardCap) && hardCap > 0f)
                 fallbackForce = MathF.Min(fallbackForce, hardCap * 2000f);
             fallbackForce = MathF.Min(fallbackForce, 16000f);
 
@@ -431,7 +484,6 @@ namespace ExtremeRagdoll
                     catch { ragdollActive = false; }
                     if (!ragdollActive)
                     {
-                        // Bannerlord remains the sole owner of the death animation and transition.
                         pending.NextTryAt = now + RetryDelay;
                         continue;
                     }
