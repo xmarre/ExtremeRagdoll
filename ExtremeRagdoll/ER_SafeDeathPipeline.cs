@@ -12,6 +12,9 @@ namespace ExtremeRagdoll
     internal static class ER_SafeDeathPipeline
     {
         private const string LegacyPatchId = "extremeragdoll.patch";
+        private const float ForceUnitsPerLegacyImpulseUnit = 2000f;
+        private const float MinimumUnitsPerLegacyImpulseUnit = 500f;
+        private const float AbsoluteForceCap = 16000f;
 
         internal static void DisableLegacyDeathOverrides(Harmony harmony)
         {
@@ -57,52 +60,39 @@ namespace ExtremeRagdoll
             return removed;
         }
 
-        internal static float ComputeImpulseMagnitude(in Blow blow)
+        internal static float ComputeRagdollForceMagnitude(in Blow blow)
         {
             float baseMagnitude = blow.BaseMagnitude;
             if (float.IsNaN(baseMagnitude) || float.IsInfinity(baseMagnitude) || baseMagnitude < 0f)
                 baseMagnitude = 0f;
 
-            float damage = blow.InflictedDamage;
-            if (float.IsNaN(damage) || float.IsInfinity(damage) || damage < 0f)
-                damage = 0f;
-
-            // Use the real fatal blow only as an input signal. The engine blow itself remains untouched.
-            // This range is strong enough to move an active ragdoll while staying below tunnelling speeds.
+            float damage = MathF.Max(0f, blow.InflictedDamage);
             float sourceMagnitude = MathF.Max(MathF.Min(baseMagnitude, 1200f), 250f + damage * 8f);
             float multiplier = MathF.Max(0f, ER_Config.ExtraForceMultiplier) * MathF.Max(1f, ER_Config.KnockbackMultiplier);
-            float impulse = sourceMagnitude * 1.0e-3f * multiplier;
+            float force = sourceMagnitude * multiplier;
 
-            float minimum = ER_Config.CorpseImpulseMinimum;
-            if (float.IsNaN(minimum) || float.IsInfinity(minimum) || minimum < 0f)
-                minimum = 0f;
-
-            float maximum = ER_Config.CorpseImpulseMaximum;
-            if (float.IsNaN(maximum) || float.IsInfinity(maximum) || maximum < 0f)
-                maximum = 0f;
-
+            float minimum = ER_Config.CorpseImpulseMinimum * MinimumUnitsPerLegacyImpulseUnit;
+            float maximum = ER_Config.CorpseImpulseMaximum * MinimumUnitsPerLegacyImpulseUnit;
             if (maximum > 0f && minimum > maximum)
                 minimum = maximum;
-            if (minimum > 0f && impulse < minimum)
-                impulse = minimum;
-            if (maximum > 0f && impulse > maximum)
-                impulse = maximum;
+            if (minimum > 0f && force < minimum)
+                force = minimum;
+            if (maximum > 0f && force > maximum)
+                force = maximum;
 
-            float hardCap = ER_Config.CorpseImpulseHardCap;
-            if (!float.IsNaN(hardCap) && !float.IsInfinity(hardCap) && hardCap > 0f && impulse > hardCap)
-                impulse = hardCap;
+            float configuredHardCap = ER_Config.CorpseImpulseHardCap;
+            if (configuredHardCap > 0f)
+                force = MathF.Min(force, configuredHardCap * ForceUnitsPerLegacyImpulseUnit);
+            force = MathF.Min(force, AbsoluteForceCap);
 
-            // A single capped impulse remains visible without recreating the old multi-pulse launch/tunnelling path.
-            const float AbsoluteSafeCap = 6.0f;
-            if (impulse > AbsoluteSafeCap)
-                impulse = AbsoluteSafeCap;
-
-            return float.IsNaN(impulse) || float.IsInfinity(impulse) || impulse <= 0f ? 0f : impulse;
+            return float.IsNaN(force) || float.IsInfinity(force) || force <= 0f ? 0f : force;
         }
 
         internal static Vec3 ResolveDirection(Agent agent, in Blow blow)
         {
             Vec3 direction = blow.SwingDirection;
+            if (!ER_Math.IsFinite(in direction) || direction.LengthSquared < ER_Math.DirectionTinySq)
+                direction = blow.Direction;
             if (!ER_Math.IsFinite(in direction) || direction.LengthSquared < ER_Math.DirectionTinySq)
             {
                 try { direction = agent.Position - blow.GlobalPosition; }
@@ -116,18 +106,9 @@ namespace ExtremeRagdoll
 
             direction = ER_DeathBlastBehavior.PrepDir(direction, 0.98f, 0.02f);
             direction = ER_DeathBlastBehavior.FinalizeImpulseDir(direction, ER_Config.CorpseLaunchMaxUpFraction);
-            if (!ER_Math.IsFinite(in direction) || direction.LengthSquared < ER_Math.DirectionTinySq)
-                return new Vec3(0f, 1f, 0f);
-            return direction;
-        }
-
-        internal static Vec3 ResolveContact(Agent agent)
-        {
-            Vec3 contact;
-            try { contact = agent.Position; }
-            catch { contact = Vec3.Zero; }
-            contact.z += 0.9f;
-            return contact;
+            return ER_Math.IsFinite(in direction) && direction.LengthSquared >= ER_Math.DirectionTinySq
+                ? direction
+                : new Vec3(0f, 1f, 0f);
         }
     }
 
@@ -138,9 +119,9 @@ namespace ExtremeRagdoll
         {
             internal bool Candidate;
             internal Vec3 Direction;
-            internal Vec3 Contact;
-            internal float ImpulseMagnitude;
+            internal float ForceMagnitude;
             internal float Time;
+            internal sbyte BoneIndex;
         }
 
         [HarmonyTargetMethods]
@@ -151,17 +132,21 @@ namespace ExtremeRagdoll
             {
                 if (candidate == null || candidate.Name != nameof(Agent.RegisterBlow))
                     continue;
+
                 ParameterInfo[] parameters = candidate.GetParameters();
                 if (parameters.Length == 0)
                     continue;
+
                 Type first = parameters[0].ParameterType;
                 if (first == blowType || (first.IsByRef && first.GetElementType() == blowType))
                     yield return candidate;
             }
         }
 
+        // Observe TOR's finalized blow before the lower-priority lethal suppression scope runs.
         [HarmonyPrefix]
-        [HarmonyPriority(Priority.First)]
+        [HarmonyPriority(Priority.Normal)]
+        [HarmonyAfter("TOR", "TOR_Core")]
         private static void Prefix(Agent __instance, [HarmonyArgument(0)] ref Blow blow, out CaptureState __state)
         {
             __state = default;
@@ -174,25 +159,22 @@ namespace ExtremeRagdoll
             if (float.IsNaN(health) || float.IsInfinity(health))
                 return;
 
-            float damage = blow.InflictedDamage;
-            if (float.IsNaN(damage) || float.IsInfinity(damage) || damage <= 0f)
+            int damage = blow.InflictedDamage;
+            bool lethal = health <= 0f || (damage > 0 && health - damage <= 0f);
+            if (!lethal)
                 return;
 
-            // Capture only a blow that can actually be fatal. The postfix confirms the final engine result.
-            if (health > 0f && health - damage > 0f)
-                return;
-
-            float impulse = ER_SafeDeathPipeline.ComputeImpulseMagnitude(in blow);
-            if (impulse <= 0f)
+            float force = ER_SafeDeathPipeline.ComputeRagdollForceMagnitude(in blow);
+            if (force <= 0f)
                 return;
 
             __state = new CaptureState
             {
                 Candidate = true,
                 Direction = ER_SafeDeathPipeline.ResolveDirection(__instance, in blow),
-                Contact = ER_SafeDeathPipeline.ResolveContact(__instance),
-                ImpulseMagnitude = impulse,
+                ForceMagnitude = force,
                 Time = __instance.Mission?.CurrentTime ?? Mission.Current?.CurrentTime ?? 0f,
+                BoneIndex = blow.BoneIndex,
             };
         }
 
@@ -212,15 +194,14 @@ namespace ExtremeRagdoll
             ER_SafeRagdollBehavior.Enqueue(
                 __instance,
                 __state.Direction,
-                __state.Contact,
-                __state.ImpulseMagnitude,
+                __state.ForceMagnitude,
                 __state.Time,
+                __state.BoneIndex,
                 "RegisterBlow");
         }
     }
 
-    // These legacy paths activate physics before Bannerlord has completed its death transition.
-    // Returning false leaves the engine animation/state machine in sole control of that transition.
+    // These paths took ownership of death before Bannerlord completed its animation/state transition.
     [HarmonyPatch]
     internal static class ER_DisableLegacyPreDeathQueuePatch
     {
@@ -255,7 +236,8 @@ namespace ExtremeRagdoll
     internal static class ER_DisableLegacyRemovedLaunchPatch
     {
         [HarmonyTargetMethod]
-        private static MethodBase TargetMethod() => AccessTools.Method(typeof(ER_DeathBlastBehavior), nameof(ER_DeathBlastBehavior.OnAgentRemoved));
+        private static MethodBase TargetMethod() =>
+            AccessTools.Method(typeof(ER_DeathBlastBehavior), nameof(ER_DeathBlastBehavior.OnAgentRemoved));
 
         [HarmonyPrefix]
         private static bool Prefix() => false;
@@ -265,20 +247,20 @@ namespace ExtremeRagdoll
     {
         private const float SolverSettleDelay = 0.033f;
         private const float RetryDelay = 0.05f;
-        private const float PendingLifetime = 8.0f;
-        private const int MaxApplyAttempts = 8;
+        private const float PendingLifetime = 8f;
+        private const int MaxApplyAttempts = 3;
 
         private sealed class PendingDeath
         {
             internal Agent Agent;
             internal int AgentIndex;
             internal Vec3 Direction;
-            internal Vec3 Contact;
-            internal float ImpulseMagnitude;
+            internal float ForceMagnitude;
             internal float CapturedAt;
             internal float RagdollSeenAt = -1f;
             internal float NextTryAt;
             internal int Attempts;
+            internal sbyte BoneIndex;
             internal string Source;
         }
 
@@ -292,9 +274,15 @@ namespace ExtremeRagdoll
             _instance = null;
         }
 
-        internal static void Enqueue(Agent agent, Vec3 direction, Vec3 contact, float impulseMagnitude, float capturedAt, string source)
+        internal static void Enqueue(
+            Agent agent,
+            Vec3 direction,
+            float forceMagnitude,
+            float capturedAt,
+            sbyte boneIndex,
+            string source)
         {
-            _instance?.EnqueueInternal(agent, direction, contact, impulseMagnitude, capturedAt, source);
+            _instance?.EnqueueInternal(agent, direction, forceMagnitude, capturedAt, boneIndex, source);
         }
 
         public override void OnBehaviorInitialize()
@@ -318,9 +306,15 @@ namespace ExtremeRagdoll
                 _instance = null;
         }
 
-        private void EnqueueInternal(Agent agent, Vec3 direction, Vec3 contact, float impulseMagnitude, float capturedAt, string source)
+        private void EnqueueInternal(
+            Agent agent,
+            Vec3 direction,
+            float forceMagnitude,
+            float capturedAt,
+            sbyte boneIndex,
+            string source)
         {
-            if (agent == null || impulseMagnitude <= 0f || !ER_Math.IsFinite(in direction) || !ER_Math.IsFinite(in contact))
+            if (agent == null || forceMagnitude <= 0f || !ER_Math.IsFinite(in direction))
                 return;
 
             int agentIndex;
@@ -338,12 +332,11 @@ namespace ExtremeRagdoll
                     if (!ReferenceEquals(existing.Agent, agent))
                         continue;
 
-                    // Retain the strongest observed fatal hit without creating stacked pulses.
-                    if (impulseMagnitude > existing.ImpulseMagnitude)
+                    if (forceMagnitude > existing.ForceMagnitude)
                     {
                         existing.Direction = direction;
-                        existing.Contact = contact;
-                        existing.ImpulseMagnitude = impulseMagnitude;
+                        existing.ForceMagnitude = forceMagnitude;
+                        existing.BoneIndex = boneIndex;
                         existing.Source = source;
                     }
                     return;
@@ -354,10 +347,10 @@ namespace ExtremeRagdoll
                     Agent = agent,
                     AgentIndex = agentIndex,
                     Direction = direction,
-                    Contact = contact,
-                    ImpulseMagnitude = impulseMagnitude,
+                    ForceMagnitude = forceMagnitude,
                     CapturedAt = capturedAt,
                     NextTryAt = capturedAt,
+                    BoneIndex = boneIndex,
                     Source = source ?? "unknown",
                 });
             }
@@ -377,7 +370,6 @@ namespace ExtremeRagdoll
                         return;
             }
 
-            // Scripted deaths may bypass RegisterBlow. Queue a conservative fallback and still wait for real ragdoll state.
             Vec3 direction;
             try { direction = affected.LookDirection; }
             catch { direction = new Vec3(0f, 1f, 0f); }
@@ -385,15 +377,14 @@ namespace ExtremeRagdoll
                 ER_DeathBlastBehavior.PrepDir(direction, 0.98f, 0.02f),
                 ER_Config.CorpseLaunchMaxUpFraction);
 
-            float fallbackImpulse = 0.60f * MathF.Max(1f, ER_Config.KnockbackMultiplier);
+            float fallbackForce = 2500f * MathF.Max(1f, ER_Config.KnockbackMultiplier);
             float hardCap = ER_Config.CorpseImpulseHardCap;
-            if (hardCap > 0f && fallbackImpulse > hardCap)
-                fallbackImpulse = hardCap;
-            if (fallbackImpulse > 1.25f)
-                fallbackImpulse = 1.25f;
+            if (hardCap > 0f)
+                fallbackForce = MathF.Min(fallbackForce, hardCap * 2000f);
+            fallbackForce = MathF.Min(fallbackForce, 16000f);
 
             float now = Mission?.CurrentTime ?? affected.Mission?.CurrentTime ?? 0f;
-            EnqueueInternal(affected, direction, ER_SafeDeathPipeline.ResolveContact(affected), fallbackImpulse, now, "OnAgentRemoved");
+            EnqueueInternal(affected, direction, fallbackForce, now, -1, "OnAgentRemoved");
         }
 
         public override void OnMissionTick(float dt)
@@ -426,10 +417,9 @@ namespace ExtremeRagdoll
                     if (float.IsNaN(health) || float.IsInfinity(health) || health > 0f)
                         continue;
 
-                    GameEntity entity = null;
-                    Skeleton skeleton = null;
-                    try { entity = agent.AgentVisuals?.GetEntity(); } catch { entity = null; }
-                    try { skeleton = agent.AgentVisuals?.GetSkeleton(); } catch { skeleton = null; }
+                    Skeleton skeleton;
+                    try { skeleton = agent.AgentVisuals?.GetSkeleton(); }
+                    catch { skeleton = null; }
                     if (skeleton == null)
                     {
                         pending.NextTryAt = now + RetryDelay;
@@ -441,8 +431,7 @@ namespace ExtremeRagdoll
                     catch { ragdollActive = false; }
                     if (!ragdollActive)
                     {
-                        // No activation, animation ticking, synthetic blow, or wake call here.
-                        // Bannerlord owns the complete death-animation-to-ragdoll transition.
+                        // Bannerlord remains the sole owner of the death animation and transition.
                         pending.NextTryAt = now + RetryDelay;
                         continue;
                     }
@@ -456,19 +445,18 @@ namespace ExtremeRagdoll
                     if (now - pending.RagdollSeenAt < SolverSettleDelay)
                         continue;
 
-                    Vec3 contact = ER_DeathBlastBehavior.ClampHitToBody(agent, pending.Contact);
-                    Vec3 impulse = pending.Direction * pending.ImpulseMagnitude;
-                    if (impulse.z < 0f)
-                        impulse.z = 0f;
+                    Vec3 force = pending.Direction * pending.ForceMagnitude;
+                    if (force.z < 0f)
+                        force.z = 0f;
 
-                    bool applied = false;
+                    bool applied;
                     try
                     {
                         applied = ER_ActiveRagdollImpulse.TryApply(
-                            entity,
+                            agent,
                             skeleton,
-                            in impulse,
-                            in contact);
+                            pending.BoneIndex,
+                            in force);
                     }
                     catch
                     {
@@ -480,7 +468,7 @@ namespace ExtremeRagdoll
                         _completed.Add(agent);
                         _pending.RemoveAt(i);
                         if (ER_Config.DebugLogging)
-                            ER_Log.Info($"Safe corpse impulse applied Agent#{pending.AgentIndex} source={pending.Source} impulse={pending.ImpulseMagnitude:0.00}");
+                            ER_Log.Info($"Safe corpse force applied Agent#{pending.AgentIndex} source={pending.Source} bone={pending.BoneIndex} force={pending.ForceMagnitude:0}");
                         continue;
                     }
 
@@ -489,7 +477,7 @@ namespace ExtremeRagdoll
                     {
                         _pending.RemoveAt(i);
                         if (ER_Config.DebugLogging)
-                            ER_Log.Info($"Safe corpse impulse dropped Agent#{pending.AgentIndex}: active ragdoll rejected {pending.Attempts} attempt(s)");
+                            ER_Log.Info($"Safe corpse force dropped Agent#{pending.AgentIndex}: active ragdoll rejected {pending.Attempts} attempt(s)");
                     }
                     else
                     {
