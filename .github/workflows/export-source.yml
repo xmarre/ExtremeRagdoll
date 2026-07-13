@@ -1,0 +1,25 @@
+name: Export source
+
+on:
+  pull_request:
+    paths:
+      - .source-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create source archive
+        run: |
+          set -euo pipefail
+          git archive --format=zip --output=ExtremeRagdoll-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-source
+          path: ExtremeRagdoll-source.zip
+          if-no-files-found: error
+          retention-days: 1
