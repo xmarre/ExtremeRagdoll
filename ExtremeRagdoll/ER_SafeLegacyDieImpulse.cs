@@ -23,9 +23,25 @@ namespace ExtremeRagdoll
         private const float MissileMagnitudeFloor = 1800f;
         private const float HardCapToMagnitudeUnits = 1000f;
 
-        [HarmonyTargetMethods]
-        private static IEnumerable<MethodBase> TargetMethods()
+        private static readonly MethodBase[] Targets = FindTargets();
+
+        [HarmonyPrepare]
+        private static bool Prepare()
         {
+            if (Targets.Length != 0)
+                return true;
+
+            if (ER_Config.DebugLogging)
+                ER_Log.Info("Safe fatal Die impulse patch skipped: no compatible Agent.Die(Blow, ...) target");
+            return false;
+        }
+
+        [HarmonyTargetMethods]
+        private static IEnumerable<MethodBase> TargetMethods() => Targets;
+
+        private static MethodBase[] FindTargets()
+        {
+            var targets = new List<MethodBase>();
             Type blowType = typeof(Blow);
             foreach (MethodInfo candidate in AccessTools.GetDeclaredMethods(typeof(Agent)))
             {
@@ -40,8 +56,9 @@ namespace ExtremeRagdoll
 
                 Type first = parameters[0].ParameterType;
                 if (first == blowType || (first.IsByRef && first.GetElementType() == blowType))
-                    yield return candidate;
+                    targets.Add(candidate);
             }
+            return targets.ToArray();
         }
 
         [HarmonyPrefix]
@@ -86,10 +103,16 @@ namespace ExtremeRagdoll
             if (desiredMagnitude > cap)
                 desiredMagnitude = cap;
 
-            // Preserve a stronger value supplied by another Die prefix. HandleBlow normally
-            // reaches this point with exactly 1000 because of Bannerlord 1.2.12's managed clamp.
-            if (desiredMagnitude > originalMagnitude)
-                blow.BaseMagnitude = desiredMagnitude;
+            // Preserve all values supplied by a stronger Die prefix. Only add our matching
+            // KnockBack flag/direction when this patch actually supplies the winning magnitude.
+            if (desiredMagnitude <= originalMagnitude)
+            {
+                if (ER_Config.DebugLogging)
+                    ER_Log.Info($"Safe fatal Die impulse preserved stronger external magnitude={originalMagnitude:0}");
+                return;
+            }
+
+            blow.BaseMagnitude = desiredMagnitude;
 
             // KnockBack is applied only to Die's by-value Blow copy. It cannot cause a living
             // hit reaction or alter Agent.HandleBlowAux after Die returns. Do not add KnockDown:
