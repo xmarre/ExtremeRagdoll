@@ -1,0 +1,31 @@
+name: Export build dependencies
+
+on:
+  pull_request:
+    paths:
+      - .dependency-export
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages
+        run: |
+          set -euo pipefail
+          mkdir -p packages/harmony packages/mcm
+          curl --fail --location --retry 3 -o harmony.nupkg \
+            https://api.nuget.org/v3-flatcontainer/lib.harmony/2.4.2/lib.harmony.2.4.2.nupkg
+          curl --fail --location --retry 3 -o mcm.nupkg \
+            https://api.nuget.org/v3-flatcontainer/bannerlord.mcm/5.11.3/bannerlord.mcm.5.11.3.nupkg
+          unzip -q harmony.nupkg -d packages/harmony
+          unzip -q mcm.nupkg -d packages/mcm
+          find packages -type f -name '*.dll' -print
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-dependencies
+          path: packages
+          if-no-files-found: error
+          retention-days: 1
