@@ -25,7 +25,11 @@ jobs:
       - name: Verify and apply source patch
         run: |
           set -euo pipefail
-          base64 --decode .update-v1.1.0.patch.b64 > /tmp/v1.1.0.patch
+          test "$(find .update-v1.1.0.parts -maxdepth 1 -type f | wc -l)" -eq 9
+          cat .update-v1.1.0.parts/00 .update-v1.1.0.parts/01 .update-v1.1.0.parts/02 \
+              .update-v1.1.0.parts/03 .update-v1.1.0.parts/04 .update-v1.1.0.parts/05 \
+              .update-v1.1.0.parts/06 .update-v1.1.0.parts/07 .update-v1.1.0.parts/08 \
+              | base64 --decode > /tmp/v1.1.0.patch
           echo '2c04b60dc6c937db1df78d9345f5ec577c6ca72a28265fa86ff5b3203f0d19cf  /tmp/v1.1.0.patch' | sha256sum --check
           git apply --check /tmp/v1.1.0.patch
           git apply /tmp/v1.1.0.patch
@@ -38,6 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f .update-v1.1.0.patch.b64
+          rm -rf .update-v1.1.0.parts
           rm -f .github/workflows/preserve-v1.0.1.yml
           rm -f .github/workflows/export-source.yml
           rm -f .github/workflows/export-roslyn.yml
