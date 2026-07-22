@@ -1,0 +1,24 @@
+name: TORCU Compiler Probe
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - name: Probe toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet --info | Out-File -FilePath probe.txt -Encoding utf8
+          "`n--- csc ---" | Add-Content probe.txt
+          $csc = Get-ChildItem "${env:ProgramFiles}\dotnet\sdk" -Recurse -Filter csc.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($csc) { $csc.FullName | Add-Content probe.txt } else { 'csc.dll not found' | Add-Content probe.txt }
+          "`n--- nuget ---" | Add-Content probe.txt
+          nuget help | Select-Object -First 5 | Add-Content probe.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: torcu-compiler-probe
+          path: probe.txt
