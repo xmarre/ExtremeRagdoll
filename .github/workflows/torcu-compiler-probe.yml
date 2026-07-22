@@ -14,16 +14,18 @@ jobs:
           $ErrorActionPreference = 'Continue'
           dotnet --info | Out-File -FilePath probe.txt -Encoding utf8
           "`n--- nuget Bannerlord refs ---" | Add-Content probe.txt
-          nuget list Bannerlord.ReferenceAssemblies -AllVersions -Source https://api.nuget.org/v3/index.json | Select-String '1.3.15' | Add-Content probe.txt
+          cmd /c "nuget list Bannerlord.ReferenceAssemblies -AllVersions -Source https://api.nuget.org/v3/index.json >> probe.txt 2>&1"
           "`n--- nuget MCM ---" | Add-Content probe.txt
-          nuget list Bannerlord.MCM -AllVersions -Source https://api.nuget.org/v3/index.json | Select-String '5.12.1' | Add-Content probe.txt
+          cmd /c "nuget list Bannerlord.MCM -AllVersions -Source https://api.nuget.org/v3/index.json >> probe.txt 2>&1"
           "`n--- Nexus files page ---" | Add-Content probe.txt
-          curl.exe -L -A "Mozilla/5.0" --fail-with-body "https://www.nexusmods.com/mountandblade2bannerlord/mods/12134?tab=files" -o nexus-files.html 2>> probe.txt
+          cmd /c "curl.exe -L -A \"Mozilla/5.0\" \"https://www.nexusmods.com/mountandblade2bannerlord/mods/12134?tab=files\" -o nexus-files.html 2>> probe.txt"
           if (Test-Path nexus-files.html) {
             "bytes=$((Get-Item nexus-files.html).Length)" | Add-Content probe.txt
             Select-String -Path nexus-files.html -Pattern '1.7.13|file_id|Manual download|TOR_Career' | Select-Object -First 100 | ForEach-Object { $_.Line } | Add-Content probe.txt
           }
+          exit 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: torcu-compiler-probe
           path: |
