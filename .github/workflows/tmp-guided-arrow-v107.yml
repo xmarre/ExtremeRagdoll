@@ -16,11 +16,12 @@ jobs:
         shell: pwsh
         run: |
           $utf8 = New-Object System.Text.UTF8Encoding($false)
-          $parts = Get-ChildItem 'GuidedArrow/SourceParts/GuidedArrowBehavior.part*' | Sort-Object Name
-          if ($parts.Count -ne 8) { throw "Expected 8 v1.0.5 source parts, found $($parts.Count)" }
-          $text = ''
-          foreach ($part in $parts) { $text += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
-          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $text, $utf8)
+
+          $baseParts = Get-ChildItem 'GuidedArrow/SourceParts/GuidedArrowBehavior.part*' | Sort-Object Name
+          if ($baseParts.Count -ne 8) { throw "Expected 8 v1.0.5 source parts, found $($baseParts.Count)" }
+          $baseText = ''
+          foreach ($part in $baseParts) { $baseText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
+          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $baseText, $utf8)
           $baseHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($baseHash -ne '6b0146db647ccb1c1f4b271c3ec2bdaf0ac817fbea558f93d52acc792c012d9c') { throw "v1.0.5 source mismatch: $baseHash" }
 
@@ -35,18 +36,24 @@ jobs:
           if ((Get-FileHash 'GuidedArrow/Source/Settings.cs' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'bd231c7751cd0511a60adec360ba15e322637f800afdb36f93817341f963ec5a') { throw 'v1.0.6 Settings mismatch' }
           if ((Get-FileHash 'GuidedArrow/Source/GuidedArrow.csproj' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '5ce628ba15e9e3f99b07faa12feeca0adffd3f8d3046daeaab89c43e7efe5440') { throw 'v1.0.6 project mismatch' }
           if ((Get-FileHash 'GuidedArrow/SubModule.xml' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '120cbca983c7cd859511e182e1a51c26ca162f9883fa8e9433d52341e9c278de') { throw 'v1.0.6 SubModule mismatch' }
+          Write-Host 'Authoritative v1.0.6 source verified.'
 
-          $patchParts = Get-ChildItem 'GuidedArrow/PatchParts/v107_all.patch.part*' | Sort-Object Name
-          if ($patchParts.Count -ne 8) { throw "Expected 8 v1.0.7 patch parts, found $($patchParts.Count)" }
-          $patchText = ''
-          foreach ($part in $patchParts) { $patchText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
-          [IO.File]::WriteAllText('GuidedArrow/v107_all.patch', $patchText, $utf8)
-          $patchHash = (Get-FileHash 'GuidedArrow/v107_all.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
-          Write-Host "Transport patch SHA-256: $patchHash"
-          git apply --check --whitespace=nowarn GuidedArrow/v107_all.patch
-          if ($LASTEXITCODE -ne 0) { throw "v1.0.7 patch check failed with exit code $LASTEXITCODE" }
-          git apply --whitespace=nowarn GuidedArrow/v107_all.patch
-          if ($LASTEXITCODE -ne 0) { throw "v1.0.7 patch apply failed with exit code $LASTEXITCODE" }
+          $behaviorParts = Get-ChildItem 'GuidedArrow/FinalSourceParts/GuidedArrowBehavior.cs.part*' | Sort-Object Name
+          if ($behaviorParts.Count -ne 10) { throw "Expected 10 final controller parts, found $($behaviorParts.Count)" }
+          $behaviorText = ''
+          foreach ($part in $behaviorParts) { $behaviorText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
+          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $behaviorText, $utf8)
+
+          $settingsParts = Get-ChildItem 'GuidedArrow/FinalSourceParts/Settings.cs.part*' | Sort-Object Name
+          if ($settingsParts.Count -ne 2) { throw "Expected 2 final Settings parts, found $($settingsParts.Count)" }
+          $settingsText = ''
+          foreach ($part in $settingsParts) { $settingsText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
+          [IO.File]::WriteAllText('GuidedArrow/Source/Settings.cs', $settingsText, $utf8)
+
+          $projectText = (Get-Content -Raw 'GuidedArrow/FinalSourceParts/GuidedArrow.csproj').Replace("`r`n", "`n")
+          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrow.csproj', $projectText, $utf8)
+          $submoduleText = (Get-Content -Raw 'GuidedArrow/FinalSourceParts/SubModule.xml').Replace("`r`n", "`n")
+          [IO.File]::WriteAllText('GuidedArrow/SubModule.xml', $submoduleText, $utf8)
 
           $behaviorHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           $settingsHash = (Get-FileHash 'GuidedArrow/Source/Settings.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
