@@ -1,0 +1,1 @@
+Trigger temporary Guided Arrow CI build after compiler workflow installation.
