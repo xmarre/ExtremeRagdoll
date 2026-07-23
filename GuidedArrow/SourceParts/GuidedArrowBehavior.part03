@@ -1,0 +1,210 @@
+                else
+                    right = Cross(flightForward, new Vec3(0f, 1f, 0f));
+            }
+
+            right = NormalizeSafe(right, new Vec3(1f, 0f, 0f));
+            localUp = NormalizeSafe(Cross(right, flightForward), WorldUp);
+        }
+
+        private void UpdateCrosshairVisibility()
+        {
+            bool shouldShow = _state == State.Guiding && (Settings.Instance?.ShowCrosshair ?? false);
+            if (shouldShow)
+                ShowCrosshair();
+            else
+                HideCrosshair();
+        }
+
+        private void ShowCrosshair()
+        {
+            if (_crosshairLayer != null)
+                return;
+
+            MissionScreen screen = ResolveMissionScreen();
+            if (screen == null)
+                return;
+
+            GauntletLayer layer = null;
+            try
+            {
+                layer = new GauntletLayer("GuidedArrowCrosshair", 10000, false);
+                _crosshairDataSource = new CrosshairViewModel();
+                _crosshairMovie = layer.LoadMovie("GuidedArrowCrosshair", _crosshairDataSource);
+                screen.AddLayer(layer);
+                _crosshairLayer = layer;
+                _crosshairScreen = screen;
+                Log("Crosshair overlay loaded.");
+            }
+            catch (Exception ex)
+            {
+                try { if (layer != null) screen.RemoveLayer(layer); } catch { }
+                Log("Crosshair overlay unavailable: " + ex.GetType().Name + " " + ex.Message);
+                _crosshairLayer = null;
+                _crosshairMovie = null;
+                _crosshairDataSource = null;
+                _crosshairScreen = null;
+            }
+        }
+
+        private void HideCrosshair()
+        {
+            GauntletLayer layer = _crosshairLayer;
+            GauntletMovieIdentifier movie = _crosshairMovie;
+            MissionScreen screen = _crosshairScreen;
+            _crosshairLayer = null;
+            _crosshairMovie = null;
+            _crosshairDataSource = null;
+            _crosshairScreen = null;
+
+            if (layer == null)
+                return;
+            try { if (movie != null) layer.ReleaseMovie(movie); } catch { }
+            try { if (screen != null) screen.RemoveLayer(layer); } catch { }
+        }
+
+        private void QueueDirectSteeringInput(float yaw, float pitch)
+        {
+            if (IsFinite(yaw))
+                _pendingYawInput += yaw;
+            if (IsFinite(pitch))
+                _pendingPitchInput += pitch;
+        }
+
+        private static Vec3 ApplyDirectSteering(Vec3 currentDirection, float yaw, float pitch)
+        {
+            Vec3 steered = NormalizeSafe(currentDirection, new Vec3(0f, 1f, 0f));
+
+            // Build controls from the projectile's live flight basis, never from the camera frame.
+            // This keeps mouse-left/right screen-intuitive while remaining fully camera-independent.
+            Vec3 right = Cross(steered, WorldUp);
+            if (!IsFinite(right) || right.LengthSquared <= 0.0001f)
+                right = Cross(steered, new Vec3(0f, 1f, 0f));
+            right = NormalizeSafe(right, new Vec3(1f, 0f, 0f));
+            Vec3 localUp = NormalizeSafe(Cross(right, steered), WorldUp);
+
+            if (Math.Abs(yaw) > Tiny)
+                steered = NormalizeSafe(RotateAroundAxis(steered, localUp, yaw), steered);
+
+            if (Math.Abs(pitch) > Tiny)
+            {
+                right = NormalizeSafe(Cross(steered, localUp), right);
+                Vec3 pitched = NormalizeSafe(RotateAroundAxis(steered, right, pitch), steered);
+                // Avoid the yaw singularity at exactly vertical flight while preserving direct input.
+                if (Math.Abs(pitched.z) < 0.985f)
+                    steered = pitched;
+            }
+
+            return steered;
+        }
+
+        private void AddPendingShotSeed(int forcedIndex, Vec3 position, Vec3 velocity)
+        {
+            _pendingShotSeeds.Add(new PendingShotSeed
+            {
+                ForcedIndex = forcedIndex,
+                Position = position,
+                Velocity = velocity
+            });
+            if (_pendingShotSeeds.Count == 1)
+            {
+                _pendingShotPosition = position;
+                _pendingShotVelocity = velocity;
+                _shotDirection = NormalizeSafe(velocity, Mission?.MainAgent?.LookDirection ?? new Vec3(0f, 1f, 0f));
+            }
+        }
+
+        private void CapturePreShotMissileIndices()
+        {
+            _preShotMissileIndices.Clear();
+            try
+            {
+                foreach (Mission.Missile missile in Mission.MissilesList)
+                {
+                    if (missile != null && missile.ShooterAgent == Mission.MainAgent)
+                        _preShotMissileIndices.Add(missile.Index);
+                }
+            }
+            catch { }
+        }
+
+        private TrackedMissile FindTrackedMissile(int index)
+        {
+            for (int i = 0; i < _trackedMissiles.Count; i++)
+                if (_trackedMissiles[i].Index == index)
+                    return _trackedMissiles[i];
+            return null;
+        }
+
+        private TrackedMissile FindClosestTrackedMissile(Vec3 position)
+        {
+            TrackedMissile best = null;
+            float bestDistance = float.MaxValue;
+            for (int i = 0; i < _trackedMissiles.Count; i++)
+            {
+                try
+                {
+                    float distance = (_trackedMissiles[i].Missile.GetPosition() - position).LengthSquared;
+                    if (distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        best = _trackedMissiles[i];
+                    }
+                }
+                catch { }
+            }
+            return best;
+        }
+
+        private void RemoveTrackedMissile(TrackedMissile tracked, bool removeVisual)
+        {
+            if (tracked == null)
+                return;
+            if (removeVisual)
+                RemoveFullDetailVisual(tracked);
+            _trackedMissiles.Remove(tracked);
+            if (tracked.Index == _missileIndex)
+            {
+                _missile = _trackedMissiles.Count > 0 ? _trackedMissiles[0].Missile : null;
+                _missileIndex = _trackedMissiles.Count > 0 ? _trackedMissiles[0].Index : -1;
+            }
+        }
+
+        private void CleanupTrackedMissiles(bool removeVisuals)
+        {
+            if (removeVisuals)
+            {
+                for (int i = 0; i < _trackedMissiles.Count; i++)
+                    RemoveFullDetailVisual(_trackedMissiles[i]);
+            }
+            _trackedMissiles.Clear();
+            _missile = null;
+            _missileIndex = -1;
+        }
+
+        private bool TryGetSwarmCameraAnchor(out Vec3 position, out Vec3 forward, out float movingCount)
+        {
+            Vec3 positionSum = Vec3.Zero;
+            Vec3 directionSum = Vec3.Zero;
+            int validCount = 0;
+            movingCount = 0f;
+            for (int i = _trackedMissiles.Count - 1; i >= 0; i--)
+            {
+                TrackedMissile tracked = _trackedMissiles[i];
+                try
+                {
+                    Vec3 p = tracked.Missile.GetPosition();
+                    Vec3 v = tracked.Missile.GetVelocity();
+                    if (!IsFinite(p) || !IsFinite(v))
+                        continue;
+                    positionSum += p;
+                    if (v.LengthSquared > 0.0625f)
+                    {
+                        directionSum += NormalizeSafe(v, _lastMissileDirection);
+                        movingCount += 1f;
+                    }
+                    validCount++;
+                }
+                catch
+                {
+                    RemoveTrackedMissile(tracked, true);
+                }
