@@ -1,0 +1,66 @@
+name: Temporary Guided Arrow v1.0.3 Compiler
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    if: startsWith(github.head_ref, 'tmp/guided-arrow-v103-')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Materialize source
+        shell: pwsh
+        run: |
+          if (-not (Test-Path '.tmp/guided-arrow-v103-src.b64')) { throw 'Missing source payload' }
+          $raw = (Get-Content -Raw '.tmp/guided-arrow-v103-src.b64').Trim()
+          [IO.File]::WriteAllBytes('guided-arrow-v103-src.tar.gz', [Convert]::FromBase64String($raw))
+          New-Item -ItemType Directory -Force GuidedArrow | Out-Null
+          tar -xzf guided-arrow-v103-src.tar.gz -C GuidedArrow
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
+      - name: Build
+        id: compile
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          & dotnet build GuidedArrow/Source/GuidedArrow.csproj -c Release --no-restore --nologo *> build.log
+          $exitCode = $LASTEXITCODE
+          Get-Content build.log
+          if ($exitCode -ne 0) { 'BUILD_FAILED=1' | Out-File -FilePath $env:GITHUB_ENV -Append }
+      - name: Upload compiler log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.3-compiler-log
+          path: build.log
+      - name: Package
+        if: env.BUILD_FAILED != '1'
+        shell: pwsh
+        run: |
+          $module = 'package/GuidedArrow'
+          New-Item -ItemType Directory -Force "$module/bin/Win64_Shipping_Client" | Out-Null
+          New-Item -ItemType Directory -Force "$module/Source" | Out-Null
+          New-Item -ItemType Directory -Force "$module/GUI/Prefabs" | Out-Null
+          Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll "$module/bin/Win64_Shipping_Client/"
+          if (Test-Path GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb) { Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb "$module/bin/Win64_Shipping_Client/" }
+          Copy-Item GuidedArrow/SubModule.xml $module/
+          Copy-Item GuidedArrow/*.txt $module/
+          Copy-Item GuidedArrow/Source/*.cs $module/Source/
+          Copy-Item GuidedArrow/Source/GuidedArrow.csproj $module/Source/
+          Copy-Item GuidedArrow/GUI/Prefabs/*.xml "$module/GUI/Prefabs/"
+          Compress-Archive -Path $module -DestinationPath GuidedArrow-v1.0.3-Bannerlord-1.3.15-Projectile-Camera-Rigs.zip -Force
+      - name: Upload package
+        if: env.BUILD_FAILED != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.3-Bannerlord-1.3.15-Projectile-Camera-Rigs
+          path: GuidedArrow-v1.0.3-Bannerlord-1.3.15-Projectile-Camera-Rigs.zip
+      - name: Fail on compiler errors
+        if: env.BUILD_FAILED == '1'
+        shell: pwsh
+        run: exit 1
