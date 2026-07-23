@@ -29,6 +29,7 @@ jobs:
           $scriptText = $scriptText.Replace('1ba687abc03afe518221ae5fbe553608052bdc382621e711290760c5d2e48264', 'cf2a9561517631b42e31165db1c185d67e2240c6315bc7f17ab72e56f41fff23')
           [IO.File]::WriteAllText($v106Script, $scriptText, $utf8)
           python $v106Script
+          if ($LASTEXITCODE -ne 0) { throw "v1.0.6 source patch failed with exit code $LASTEXITCODE" }
           $v106Hash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($v106Hash -ne 'cf2a9561517631b42e31165db1c185d67e2240c6315bc7f17ab72e56f41fff23') { throw "v1.0.6 source mismatch: $v106Hash" }
           if ((Get-FileHash 'GuidedArrow/Source/Settings.cs' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'bd231c7751cd0511a60adec360ba15e322637f800afdb36f93817341f963ec5a') { throw 'v1.0.6 Settings mismatch' }
@@ -41,9 +42,11 @@ jobs:
           foreach ($part in $patchParts) { $patchText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
           [IO.File]::WriteAllText('GuidedArrow/v107_all.patch', $patchText, $utf8)
           $patchHash = (Get-FileHash 'GuidedArrow/v107_all.patch' -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne 'b2c88943da1f0a0f2613e19a0e4d37ff964b85dc6c37c7a352b48873227cbb65') { throw "v1.0.7 patch mismatch: $patchHash" }
+          Write-Host "Transport patch SHA-256: $patchHash"
           git apply --check --whitespace=nowarn GuidedArrow/v107_all.patch
+          if ($LASTEXITCODE -ne 0) { throw "v1.0.7 patch check failed with exit code $LASTEXITCODE" }
           git apply --whitespace=nowarn GuidedArrow/v107_all.patch
+          if ($LASTEXITCODE -ne 0) { throw "v1.0.7 patch apply failed with exit code $LASTEXITCODE" }
 
           $behaviorHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           $settingsHash = (Get-FileHash 'GuidedArrow/Source/Settings.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
