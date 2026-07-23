@@ -1,0 +1,220 @@
+
+                float sensitivity = Clamp(Settings.Instance?.MouseSensitivity ?? 1f, 0.10f, 4f);
+                float yaw = Mission.InputManager.GetMouseMoveX() * 0.0026f * sensitivity;
+                float pitch = -Mission.InputManager.GetMouseMoveY() * 0.0026f * sensitivity;
+                ApplyDesiredDirectionInput(yaw, pitch);
+            }
+
+            try
+            {
+                Vec3 position = _missile.GetPosition();
+                Vec3 velocity = _missile.GetVelocity();
+                float speedSq = velocity.LengthSquared;
+                if (!IsFinite(speedSq) || speedSq <= 0.0625f)
+                {
+                    _stoppedMissileElapsed += dt;
+                    if (_stoppedMissileElapsed >= StoppedMissileReturnDelay)
+                    {
+                        BeginReturn("MissileStoppedWithoutImpactCallback");
+                        return;
+                    }
+                }
+                else
+                {
+                    _stoppedMissileElapsed = 0f;
+                }
+
+                Vec3 forward = NormalizeSafe(velocity, _lastMissileDirection);
+                _lastMissileDirection = forward;
+
+                MatrixFrame desiredFrame = BuildProjectileCameraFrame(position, forward);
+                // Projectile cameras are intentionally rigid relative to the missile. This keeps
+                // third-person distance/elevation locked and makes first person behave as the arrow.
+                SetMissionCamera(desiredFrame);
+                UpdateCrosshairVisibility();
+            }
+            catch
+            {
+                BeginReturn("ProjectileCameraReadFailed");
+            }
+        }
+
+        private void TickImpactPendingDisplay(float dt)
+        {
+            _impactConfirmElapsed += Math.Max(0f, dt);
+
+            Agent victim = _hitVictim;
+            if (victim != null)
+            {
+                try
+                {
+                    float health = victim.Health;
+                    if (IsFinite(health) && health <= 0f)
+                    {
+                        BeginKillCinematic(victim, "ImpactConfirmationHealthCheck");
+                        return;
+                    }
+                }
+                catch { }
+            }
+
+            if (_impactConfirmElapsed >= ImpactKillConfirmationWindow)
+                BeginReturn("ImpactWithoutKill");
+        }
+
+        private MatrixFrame BuildProjectileCameraFrame(Vec3 projectilePosition, Vec3 flightForward)
+        {
+            flightForward = NormalizeSafe(flightForward, _lastMissileDirection);
+            BuildFlightBasis(flightForward, out Vec3 right, out Vec3 localUp);
+
+            int mode = Settings.Instance?.ProjectileCameraMode ?? 1;
+            if (mode <= 0)
+            {
+                float rear = Clamp(Settings.Instance?.FirstPersonRearOffset ?? 0.12f, 0.01f, 1.50f);
+                float height = Clamp(Settings.Instance?.FirstPersonVerticalOffset ?? 0f, -0.50f, 0.50f);
+                Vec3 cameraPosition = projectilePosition - flightForward * rear + localUp * height;
+                return MakeCameraFrame(cameraPosition, flightForward, localUp);
+            }
+
+            float distance = Clamp(Settings.Instance?.CameraDistance ?? 3.4f, 0.5f, 15f);
+            float elevationDegrees = Clamp(Settings.Instance?.ThirdPersonElevationAngle ?? 12f, -30f, 60f);
+            float elevation = elevationDegrees * ((float)Math.PI / 180f);
+            float lookAhead = Clamp(Settings.Instance?.ThirdPersonLookAhead ?? 5f, 0f, 25f);
+
+            // The offset is constructed entirely in the projectile's local frame. When the arrow
+            // pitches or yaws, the complete chase rig follows with the same locked relationship.
+            Vec3 cameraPositionThird = projectilePosition
+                - flightForward * (distance * (float)Math.Cos(elevation))
+                + localUp * (distance * (float)Math.Sin(elevation));
+            Vec3 lookTarget = projectilePosition + flightForward * lookAhead;
+            Vec3 viewForward = NormalizeSafe(lookTarget - cameraPositionThird, flightForward);
+            return MakeCameraFrame(cameraPositionThird, viewForward, localUp);
+        }
+
+        private void BuildFlightBasis(Vec3 flightForward, out Vec3 right, out Vec3 localUp)
+        {
+            flightForward = NormalizeSafe(flightForward, new Vec3(0f, 1f, 0f));
+            right = Cross(flightForward, WorldUp);
+            if (!IsFinite(right) || right.LengthSquared <= 0.0001f)
+            {
+                // Near vertical flight, reuse the previous camera's right axis when possible to
+                // avoid an arbitrary 180-degree roll flip.
+                if (_cameraFrameValid && IsFinite(_cameraFrame.rotation.s) && _cameraFrame.rotation.s.LengthSquared > Tiny)
+                    right = _cameraFrame.rotation.s;
+                else
+                    right = Cross(flightForward, new Vec3(0f, 1f, 0f));
+            }
+
+            right = NormalizeSafe(right, new Vec3(1f, 0f, 0f));
+            localUp = NormalizeSafe(Cross(right, flightForward), WorldUp);
+        }
+
+        private void UpdateCrosshairVisibility()
+        {
+            bool shouldShow = _state == State.Guiding && (Settings.Instance?.ShowCrosshair ?? false);
+            if (shouldShow)
+                ShowCrosshair();
+            else
+                HideCrosshair();
+        }
+
+        private void ShowCrosshair()
+        {
+            if (_crosshairLayer != null)
+                return;
+
+            MissionScreen screen = ResolveMissionScreen();
+            if (screen == null)
+                return;
+
+            try
+            {
+                _crosshairLayer = new GauntletLayer("GuidedArrowCrosshair", 9999, false);
+                _crosshairMovie = _crosshairLayer.LoadMovie("GuidedArrowCrosshair", null);
+                screen.AddLayer(_crosshairLayer);
+                _crosshairScreen = screen;
+            }
+            catch (Exception ex)
+            {
+                Log("Crosshair overlay unavailable: " + ex.GetType().Name);
+                _crosshairLayer = null;
+                _crosshairMovie = null;
+                _crosshairScreen = null;
+            }
+        }
+
+        private void HideCrosshair()
+        {
+            GauntletLayer layer = _crosshairLayer;
+            MissionScreen screen = _crosshairScreen;
+            _crosshairLayer = null;
+            _crosshairMovie = null;
+            _crosshairScreen = null;
+
+            if (layer == null)
+                return;
+
+            try
+            {
+                if (screen != null)
+                    screen.RemoveLayer(layer);
+            }
+            catch { }
+        }
+
+        private void ApplyDesiredDirectionInput(float yaw, float pitch)
+        {
+            if (Math.Abs(yaw) > Tiny)
+                _desiredDirection = NormalizeSafe(RotateAroundAxis(_desiredDirection, WorldUp, yaw), _desiredDirection);
+
+            if (Math.Abs(pitch) > Tiny)
+            {
+                Vec3 right = NormalizeSafe(Cross(_desiredDirection, WorldUp), new Vec3(1f, 0f, 0f));
+                Vec3 pitched = NormalizeSafe(RotateAroundAxis(_desiredDirection, right, pitch), _desiredDirection);
+                // Prevent singular near-vertical steering where yaw becomes unstable.
+                if (Math.Abs(pitched.z) < 0.985f)
+                    _desiredDirection = pitched;
+            }
+        }
+
+        private void TrackHitVictim(Agent victim)
+        {
+            if (ReferenceEquals(_hitVictim, victim))
+                return;
+
+            ResetTrackedVictim();
+            _hitVictim = victim;
+            try { _hitVictim.OnAgentHealthChanged += OnHitVictimHealthChanged; }
+            catch { _hitVictim = null; }
+        }
+
+        private void ResetTrackedVictim()
+        {
+            Agent victim = _hitVictim;
+            _hitVictim = null;
+            if (victim != null)
+            {
+                try { victim.OnAgentHealthChanged -= OnHitVictimHealthChanged; }
+                catch { }
+            }
+        }
+
+        private void OnHitVictimHealthChanged(Agent agent, float oldHealth, float newHealth)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || agent == null || !ReferenceEquals(agent, _hitVictim))
+                return;
+            if (!IsFinite(oldHealth) || !IsFinite(newHealth) || oldHealth <= 0f)
+                return;
+            if (newHealth <= 0f)
+                BeginKillCinematic(agent, "OnAgentHealthChanged");
+        }
+
+        private void ConfirmRemovalKillFallback(Agent affectedAgent, Agent affectorAgent, AgentState state, string source)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || affectedAgent == null || !ReferenceEquals(affectedAgent, _hitVictim))
+                return;
+            if (state != AgentState.Killed)
+                return;
+            if (Mission != null && affectorAgent != null && affectorAgent != Mission.MainAgent)
+                return;
+
