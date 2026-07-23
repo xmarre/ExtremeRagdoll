@@ -19,9 +19,12 @@ jobs:
           if (-not (Test-Path $archive)) { throw 'Missing source archive' }
           $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = '9d6123c2c04482f443a107361784925f7f7c05bc502e4a08a6e7de8551477268'
+          Write-Host "Source archive SHA-256: $actual"
           if ($actual -ne $expected) { throw "Source archive hash mismatch: $actual" }
           New-Item -ItemType Directory -Force GuidedArrow | Out-Null
-          python -c "import tarfile; tarfile.open(r'.tmp/guided-arrow-v103-src.tar.gz','r:gz').extractall('GuidedArrow')"
+          tar -tzf $archive | Select-Object -First 20
+          tar -xzf $archive -C GuidedArrow
+          if (-not (Test-Path 'GuidedArrow/Source/GuidedArrow.csproj')) { throw 'Source project missing after extraction' }
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
