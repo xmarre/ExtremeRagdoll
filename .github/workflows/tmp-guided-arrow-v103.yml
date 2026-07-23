@@ -17,9 +17,9 @@ jobs:
         run: |
           if (-not (Test-Path '.tmp/guided-arrow-v103-src.b64')) { throw 'Missing source payload' }
           $raw = (Get-Content -Raw '.tmp/guided-arrow-v103-src.b64').Trim()
-          [IO.File]::WriteAllBytes('guided-arrow-v103-src.tar.gz', [Convert]::FromBase64String($raw))
+          [IO.File]::WriteAllBytes('guided-arrow-v103-src.zip', [Convert]::FromBase64String($raw))
           New-Item -ItemType Directory -Force GuidedArrow | Out-Null
-          tar -xzf guided-arrow-v103-src.tar.gz -C GuidedArrow
+          Expand-Archive -Path guided-arrow-v103-src.zip -DestinationPath GuidedArrow -Force
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
