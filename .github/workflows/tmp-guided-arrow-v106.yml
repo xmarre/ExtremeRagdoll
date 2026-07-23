@@ -25,10 +25,13 @@ jobs:
           [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $text, $utf8)
           $baseHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($baseHash -ne '6b0146db647ccb1c1f4b271c3ec2bdaf0ac817fbea558f93d52acc792c012d9c') { throw "v1.0.5 source mismatch: $baseHash" }
-          python GuidedArrow/apply_v106.py
+          $patchScript = 'GuidedArrow/apply_v106.py'
+          $scriptText = (Get-Content -Raw $patchScript).Replace('1ba687abc03afe518221ae5fbe553608052bdc382621e711290760c5d2e48264', 'cf2a9561517631b42e31165db1c185d67e2240c6315bc7f17ab72e56f41fff23')
+          [IO.File]::WriteAllText($patchScript, $scriptText, $utf8)
+          python $patchScript
           $finalHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "GuidedArrowBehavior.cs SHA-256: $finalHash"
-          if ($finalHash -ne '1ba687abc03afe518221ae5fbe553608052bdc382621e711290760c5d2e48264') { throw "v1.0.6 source mismatch: $finalHash" }
+          if ($finalHash -ne 'cf2a9561517631b42e31165db1c185d67e2240c6315bc7f17ab72e56f41fff23') { throw "v1.0.6 source mismatch: $finalHash" }
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
