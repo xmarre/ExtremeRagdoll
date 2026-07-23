@@ -17,15 +17,14 @@ jobs:
         run: |
           $parts = Get-ChildItem 'GuidedArrow/SourceParts/GuidedArrowBehavior.part*' | Sort-Object Name
           if ($parts.Count -ne 6) { throw "Expected 6 controller source parts, found $($parts.Count)" }
-          $output = 'GuidedArrow/Source/GuidedArrowBehavior.cs'
-          $stream = [IO.File]::Open($output, [IO.FileMode]::Create, [IO.FileAccess]::Write)
-          try {
-            foreach ($part in $parts) {
-              $bytes = [IO.File]::ReadAllBytes($part.FullName)
-              $stream.Write($bytes, 0, $bytes.Length)
-            }
+          $builder = [Text.StringBuilder]::new()
+          foreach ($part in $parts) {
+            $text = [IO.File]::ReadAllText($part.FullName)
+            $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+            [void]$builder.Append($text)
           }
-          finally { $stream.Dispose() }
+          $output = 'GuidedArrow/Source/GuidedArrowBehavior.cs'
+          [IO.File]::WriteAllText($output, $builder.ToString(), [Text.UTF8Encoding]::new($false))
           $actual = (Get-FileHash $output -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = 'e7c2f2171c5ac30ac3f4dc8b0d46e175db21318c7f58d0b49fed3724b5a51ab6'
           Write-Host "GuidedArrowBehavior.cs SHA-256: $actual"
