@@ -6,9 +6,9 @@
     <AssemblyName>GuidedArrow</AssemblyName>
     <RootNamespace>GuidedArrow</RootNamespace>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>1.0.5</Version>
-    <FileVersion>1.0.5.0</FileVersion>
-    <AssemblyVersion>1.0.5.0</AssemblyVersion>
+    <Version>1.0.7</Version>
+    <FileVersion>1.0.7.0</FileVersion>
+    <AssemblyVersion>1.0.7.0</AssemblyVersion>
     <Deterministic>true</Deterministic>
     <DebugType>pdbonly</DebugType>
     <Optimize>true</Optimize>
