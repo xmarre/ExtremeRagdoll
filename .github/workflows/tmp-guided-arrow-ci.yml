@@ -1,0 +1,43 @@
+name: Temporary Guided Arrow Compiler
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    if: startsWith(github.head_ref, 'tmp/guided-arrow-')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Materialize source
+        shell: pwsh
+        run: |
+          if (-not (Test-Path '.tmp/guided-arrow-src.b64')) { throw 'Missing staged source archive' }
+          [IO.File]::WriteAllBytes('guided-arrow-src.tar.gz', [Convert]::FromBase64String((Get-Content -Raw '.tmp/guided-arrow-src.b64')))
+          tar -xzf guided-arrow-src.tar.gz
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
+      - name: Build
+        shell: pwsh
+        run: dotnet build GuidedArrow/Source/GuidedArrow.csproj -c Release --no-restore --nologo
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package/GuidedArrow/bin/Win64_Shipping_Client | Out-Null
+          Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll package/GuidedArrow/bin/Win64_Shipping_Client/
+          if (Test-Path GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb) { Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb package/GuidedArrow/bin/Win64_Shipping_Client/ }
+          Copy-Item GuidedArrow/SubModule.xml package/GuidedArrow/
+          Copy-Item GuidedArrow/README.txt package/GuidedArrow/
+          New-Item -ItemType Directory -Force package/GuidedArrow/Source | Out-Null
+          Copy-Item GuidedArrow/Source/* package/GuidedArrow/Source/ -Recurse
+          Compress-Archive -Path package/GuidedArrow -DestinationPath GuidedArrow-v1.0.0-Bannerlord-1.3.15.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.0-Bannerlord-1.3.15
+          path: |
+            GuidedArrow-v1.0.0-Bannerlord-1.3.15.zip
+            package/GuidedArrow/**
