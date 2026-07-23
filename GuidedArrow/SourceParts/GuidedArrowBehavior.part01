@@ -208,30 +208,3 @@
                 case State.WaitingForMissile:
                     _pendingAcquireElapsed += dt;
                     if (!TryAcquireMissiles() && _pendingAcquireElapsed >= MissileAcquireWindow)
-                        ResetAll(false);
-                    break;
-
-                case State.Guiding:
-                    TickGuidanceDisplay(dt);
-                    break;
-
-                case State.ImpactPending:
-                    TickImpactPendingDisplay(dt);
-                    break;
-
-                case State.Cinematic:
-                    TickCinematicDisplay(dt);
-                    break;
-
-                case State.Returning:
-                    TickReturnDisplay(dt);
-                    break;
-            }
-        }
-
-        private bool Enabled => Settings.Instance?.Enabled ?? true;
-
-        private bool TryAcquireMissiles()
-        {
-            if ((_state != State.WaitingForMissile && _state != State.Guiding) || Mission == null || Mission.MainAgent == null)
-                return _trackedMissiles.Count > 0;
