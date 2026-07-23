@@ -1,3 +1,34 @@
+            _missile = null;
+            _missileIndex = -1;
+        }
+
+        private bool TryGetSwarmCameraAnchor(out Vec3 position, out Vec3 forward, out float movingCount)
+        {
+            Vec3 positionSum = Vec3.Zero;
+            Vec3 directionSum = Vec3.Zero;
+            int validCount = 0;
+            movingCount = 0f;
+            for (int i = _trackedMissiles.Count - 1; i >= 0; i--)
+            {
+                TrackedMissile tracked = _trackedMissiles[i];
+                try
+                {
+                    Vec3 p = tracked.Missile.GetPosition();
+                    Vec3 v = tracked.Missile.GetVelocity();
+                    if (!IsFinite(p) || !IsFinite(v))
+                        continue;
+                    positionSum += p;
+                    if (v.LengthSquared > 0.0625f)
+                    {
+                        directionSum += NormalizeSafe(v, _lastMissileDirection);
+                        movingCount += 1f;
+                    }
+                    validCount++;
+                }
+                catch
+                {
+                    RemoveTrackedMissile(tracked, true);
+                }
             }
 
             if (validCount == 0)
@@ -81,29 +112,49 @@
 
         private void TrackHitVictim(Agent victim)
         {
-            if (ReferenceEquals(_hitVictim, victim))
+            if (victim == null)
                 return;
 
-            ResetTrackedVictim();
             _hitVictim = victim;
-            try { _hitVictim.OnAgentHealthChanged += OnHitVictimHealthChanged; }
-            catch { _hitVictim = null; }
+            if (_pendingHitVictims.Contains(victim))
+                return;
+
+            try
+            {
+                victim.OnAgentHealthChanged += OnHitVictimHealthChanged;
+                _pendingHitVictims.Add(victim);
+            }
+            catch { }
         }
 
-        private void ResetTrackedVictim()
+        private void RemoveTrackedVictim(Agent victim)
         {
-            Agent victim = _hitVictim;
-            _hitVictim = null;
-            if (victim != null)
+            if (victim == null)
+                return;
+            if (_pendingHitVictims.Remove(victim))
             {
                 try { victim.OnAgentHealthChanged -= OnHitVictimHealthChanged; }
                 catch { }
             }
+            if (ReferenceEquals(_hitVictim, victim))
+                _hitVictim = _pendingHitVictims.Count > 0 ? _pendingHitVictims[_pendingHitVictims.Count - 1] : null;
+        }
+
+        private void ResetTrackedVictim()
+        {
+            for (int i = 0; i < _pendingHitVictims.Count; i++)
+            {
+                Agent victim = _pendingHitVictims[i];
+                try { if (victim != null) victim.OnAgentHealthChanged -= OnHitVictimHealthChanged; }
+                catch { }
+            }
+            _pendingHitVictims.Clear();
+            _hitVictim = null;
         }
 
         private void OnHitVictimHealthChanged(Agent agent, float oldHealth, float newHealth)
         {
-            if ((_state != State.Guiding && _state != State.ImpactPending) || agent == null || !ReferenceEquals(agent, _hitVictim))
+            if ((_state != State.Guiding && _state != State.ImpactPending) || agent == null || !_pendingHitVictims.Contains(agent))
                 return;
             if (!IsFinite(oldHealth) || !IsFinite(newHealth) || oldHealth <= 0f)
                 return;
@@ -113,7 +164,7 @@
 
         private void ConfirmRemovalKillFallback(Agent affectedAgent, Agent affectorAgent, AgentState state, string source)
         {
-            if ((_state != State.Guiding && _state != State.ImpactPending) || affectedAgent == null || !ReferenceEquals(affectedAgent, _hitVictim))
+            if ((_state != State.Guiding && _state != State.ImpactPending) || affectedAgent == null || !_pendingHitVictims.Contains(affectedAgent))
                 return;
             if (state != AgentState.Killed)
                 return;
@@ -157,54 +208,3 @@
 
             _cinematicElapsed += dt;
 
-            Vec3 center;
-            try { center = GetCinematicFocus(victim); }
-            catch
-            {
-                BeginReturn("VictimPositionUnavailable");
-                return;
-            }
-
-            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
-            Vec3 horizontalIncoming = incoming - WorldUp * Dot(incoming, WorldUp);
-            horizontalIncoming = NormalizeSafe(horizontalIncoming, new Vec3(0f, 1f, 0f));
-            float cameraDistance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
-            float orbitSpeed = Clamp(Settings.Instance?.CinematicOrbitSpeed ?? 32f, -120f, 120f) * ((float)Math.PI / 180f);
-            float elevation = Clamp(Settings.Instance?.CinematicElevationAngle ?? 18f, -20f, 60f) * ((float)Math.PI / 180f);
-            Vec3 baseRadial = -horizontalIncoming;
-            Vec3 radial = NormalizeSafe(RotateAroundAxis(baseRadial, WorldUp, orbitSpeed * _cinematicElapsed), baseRadial);
-            Vec3 cameraPos = center
-                + radial * (cameraDistance * (float)Math.Cos(elevation))
-                + WorldUp * (cameraDistance * (float)Math.Sin(elevation));
-            Vec3 look = NormalizeSafe(center - cameraPos, incoming);
-            MatrixFrame desiredFrame = MakeCameraFrame(cameraPos, look, WorldUp);
-            ApplySmoothedCamera(desiredFrame, dt, 14f, 16f);
-
-            int mode = Settings.Instance?.CinematicMode ?? 2;
-            if (mode <= 0)
-            {
-                float fixedDuration = Clamp(Settings.Instance?.FixedCinematicDuration ?? 1.5f, 0.1f, 10f);
-                if (_cinematicElapsed >= fixedDuration)
-                    BeginReturn("FixedCinematicComplete");
-                return;
-            }
-
-            if (mode == 1)
-            {
-                TickSettledMode(victim, dt);
-                return;
-            }
-
-            TickFullFinalizationMode(victim, dt);
-        }
-
-        private void TickSettledMode(Agent victim, float dt)
-        {
-            _restPollCountdown -= dt;
-            if (_restPollCountdown > 0f)
-                return;
-            _restPollCountdown = RestPollInterval;
-
-            Vec3 position;
-            try { position = GetVisualPosition(victim); }
-            catch
