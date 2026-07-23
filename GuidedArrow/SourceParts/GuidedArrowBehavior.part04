@@ -1,0 +1,210 @@
+            }
+
+            if (validCount == 0)
+            {
+                position = Vec3.Zero;
+                forward = _lastMissileDirection;
+                return false;
+            }
+
+            position = positionSum / validCount;
+            forward = NormalizeSafe(directionSum, _lastMissileDirection);
+            return true;
+        }
+
+        private void ApplyFullDetailVisual(TrackedMissile tracked)
+        {
+            if (tracked == null || !(Settings.Instance?.UseFullDetailProjectileModels ?? true))
+                return;
+            try
+            {
+                GameEntity entity = tracked.Missile.Entity;
+                ItemObject item = tracked.Missile.Weapon.Item;
+                string meshName = item?.MultiMeshName;
+                if (entity == null || string.IsNullOrEmpty(meshName))
+                    return;
+
+                MetaMesh full = MetaMesh.GetCopy(meshName, false, true);
+                if (full == null || !full.IsValid)
+                    return;
+
+                entity.AddMultiMesh(full, true);
+                tracked.VisualEntity = entity;
+                tracked.FullDetailMesh = full;
+                Log("Applied full-detail mesh '" + meshName + "' to missile #" + tracked.Index + ".");
+            }
+            catch (Exception ex)
+            {
+                Log("Full-detail projectile visual unavailable: " + ex.GetType().Name);
+            }
+        }
+
+        private void RemoveFullDetailVisual(TrackedMissile tracked)
+        {
+            if (tracked == null || tracked.FullDetailMesh == null)
+                return;
+            try
+            {
+                if (tracked.VisualEntity != null)
+                    tracked.VisualEntity.RemoveMultiMesh(tracked.FullDetailMesh);
+            }
+            catch { }
+            tracked.FullDetailMesh = null;
+            tracked.VisualEntity = null;
+        }
+
+        private void UpdateImpactPendingCamera(Agent victim, float dt)
+        {
+            Vec3 focus = GetCinematicFocus(victim);
+            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
+            Vec3 side = NormalizeSafe(Cross(WorldUp, incoming), new Vec3(1f, 0f, 0f));
+            float distance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
+            Vec3 cameraPos = focus - incoming * distance + side * 0.75f + WorldUp * 0.55f;
+            ApplySmoothedCamera(MakeCameraFrame(cameraPos, NormalizeSafe(focus - cameraPos, incoming), WorldUp), dt, 18f, 20f);
+        }
+
+        private Vec3 GetCinematicFocus(Agent victim)
+        {
+            Vec3 corpseCenter = GetVisualPosition(victim) + WorldUp * 0.95f;
+            GameEntity arrowEntity = _cinematicArrowEntity;
+            if (arrowEntity == null)
+                return corpseCenter;
+            try
+            {
+                Vec3 arrowPosition = arrowEntity.GlobalPosition;
+                if (IsFinite(arrowPosition) && (arrowPosition - corpseCenter).LengthSquared <= 12.25f)
+                    return Lerp(corpseCenter, arrowPosition, 0.45f);
+            }
+            catch { }
+            return corpseCenter;
+        }
+
+        private void TrackHitVictim(Agent victim)
+        {
+            if (ReferenceEquals(_hitVictim, victim))
+                return;
+
+            ResetTrackedVictim();
+            _hitVictim = victim;
+            try { _hitVictim.OnAgentHealthChanged += OnHitVictimHealthChanged; }
+            catch { _hitVictim = null; }
+        }
+
+        private void ResetTrackedVictim()
+        {
+            Agent victim = _hitVictim;
+            _hitVictim = null;
+            if (victim != null)
+            {
+                try { victim.OnAgentHealthChanged -= OnHitVictimHealthChanged; }
+                catch { }
+            }
+        }
+
+        private void OnHitVictimHealthChanged(Agent agent, float oldHealth, float newHealth)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || agent == null || !ReferenceEquals(agent, _hitVictim))
+                return;
+            if (!IsFinite(oldHealth) || !IsFinite(newHealth) || oldHealth <= 0f)
+                return;
+            if (newHealth <= 0f)
+                BeginKillCinematic(agent, "OnAgentHealthChanged");
+        }
+
+        private void ConfirmRemovalKillFallback(Agent affectedAgent, Agent affectorAgent, AgentState state, string source)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || affectedAgent == null || !ReferenceEquals(affectedAgent, _hitVictim))
+                return;
+            if (state != AgentState.Killed)
+                return;
+            if (Mission != null && affectorAgent != null && affectorAgent != Mission.MainAgent)
+                return;
+
+            BeginKillCinematic(affectedAgent, source);
+        }
+
+        private void BeginKillCinematic(Agent victim, string source)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || victim == null)
+                return;
+
+            ResetTrackedVictim();
+            HideCrosshair();
+            _cinematicVictim = victim;
+            CleanupTrackedMissiles(true);
+            _cinematicElapsed = 0f;
+            _impactConfirmElapsed = 0f;
+            _restPollCountdown = 0f;
+            _lastRestPositionValid = false;
+            _settledElapsed = 0f;
+            _cinematicSawActiveRagdoll = false;
+            _returnDurationOverride = 0f;
+            if (!IsFinite(_impactDirection) || _impactDirection.LengthSquared <= Tiny)
+                _impactDirection = _lastMissileDirection;
+            SetOwnTimeSpeed(Settings.Instance?.CinematicTimeSpeed ?? 0.10f);
+            _state = State.Cinematic;
+            Log("Kill cinematic started via " + source + ".");
+        }
+
+        private void TickCinematicDisplay(float dt)
+        {
+            Agent victim = _cinematicVictim;
+            if (victim == null)
+            {
+                BeginReturn("NoCinematicVictim");
+                return;
+            }
+
+            _cinematicElapsed += dt;
+
+            Vec3 center;
+            try { center = GetCinematicFocus(victim); }
+            catch
+            {
+                BeginReturn("VictimPositionUnavailable");
+                return;
+            }
+
+            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
+            Vec3 horizontalIncoming = incoming - WorldUp * Dot(incoming, WorldUp);
+            horizontalIncoming = NormalizeSafe(horizontalIncoming, new Vec3(0f, 1f, 0f));
+            float cameraDistance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
+            float orbitSpeed = Clamp(Settings.Instance?.CinematicOrbitSpeed ?? 32f, -120f, 120f) * ((float)Math.PI / 180f);
+            float elevation = Clamp(Settings.Instance?.CinematicElevationAngle ?? 18f, -20f, 60f) * ((float)Math.PI / 180f);
+            Vec3 baseRadial = -horizontalIncoming;
+            Vec3 radial = NormalizeSafe(RotateAroundAxis(baseRadial, WorldUp, orbitSpeed * _cinematicElapsed), baseRadial);
+            Vec3 cameraPos = center
+                + radial * (cameraDistance * (float)Math.Cos(elevation))
+                + WorldUp * (cameraDistance * (float)Math.Sin(elevation));
+            Vec3 look = NormalizeSafe(center - cameraPos, incoming);
+            MatrixFrame desiredFrame = MakeCameraFrame(cameraPos, look, WorldUp);
+            ApplySmoothedCamera(desiredFrame, dt, 14f, 16f);
+
+            int mode = Settings.Instance?.CinematicMode ?? 2;
+            if (mode <= 0)
+            {
+                float fixedDuration = Clamp(Settings.Instance?.FixedCinematicDuration ?? 1.5f, 0.1f, 10f);
+                if (_cinematicElapsed >= fixedDuration)
+                    BeginReturn("FixedCinematicComplete");
+                return;
+            }
+
+            if (mode == 1)
+            {
+                TickSettledMode(victim, dt);
+                return;
+            }
+
+            TickFullFinalizationMode(victim, dt);
+        }
+
+        private void TickSettledMode(Agent victim, float dt)
+        {
+            _restPollCountdown -= dt;
+            if (_restPollCountdown > 0f)
+                return;
+            _restPollCountdown = RestPollInterval;
+
+            Vec3 position;
+            try { position = GetVisualPosition(victim); }
+            catch
