@@ -1,0 +1,85 @@
+-                if (tracked.VisualEntity != null)
+-                    tracked.VisualEntity.Remove(0);
++                if (tracked.NativeEntity != null && tracked.FullDetailMesh != null)
++                    tracked.NativeEntity.RemoveMultiMesh(tracked.FullDetailMesh);
+             }
+-            catch
++            catch { }
++
++            for (int setIndex = 0; setIndex < tracked.RemovedNativeMeshes.Count; setIndex++)
+             {
+-                try
++                RemovedNativeMeshSet set = tracked.RemovedNativeMeshes[setIndex];
++                if (set?.Entity == null)
++                    continue;
++                for (int meshIndex = 0; meshIndex < set.Meshes.Count; meshIndex++)
+                 {
+-                    if (tracked.VisualEntity != null && tracked.FullDetailMesh != null)
+-                        tracked.VisualEntity.RemoveMultiMesh(tracked.FullDetailMesh);
++                    try { set.Entity.AddMultiMesh(set.Meshes[meshIndex], true); }
++                    catch { }
+                 }
+-                catch { }
+             }
++
++            tracked.RemovedNativeMeshes.Clear();
+             tracked.FullDetailMesh = null;
+-            tracked.VisualEntity = null;
+             tracked.NativeEntity = null;
+         }
+ 
+@@ -1183,6 +1219,7 @@ namespace GuidedArrow
+             _returnDurationOverride = 0f;
+             if (!IsFinite(_impactDirection) || _impactDirection.LengthSquared <= Tiny)
+                 _impactDirection = _lastMissileDirection;
++            ResetGuidanceTimeControl();
+             SetOwnTimeSpeed(Settings.Instance?.CinematicTimeSpeed ?? 0.10f);
+             _state = State.Cinematic;
+             Log("Kill cinematic started via " + source + ".");
+@@ -1232,6 +1269,13 @@ namespace GuidedArrow
+                 return;
+             }
+ 
++            float adaptiveMaximum = GetAdaptiveCinematicMaximumDuration();
++            if (_cinematicElapsed >= adaptiveMaximum)
++            {
++                BeginReturn("AdaptiveCinematicMaximumDuration");
++                return;
++            }
++
+             if (mode == 1)
+             {
+                 TickSettledMode(victim, realDt);
+@@ -1254,6 +1298,18 @@ namespace GuidedArrow
+             return Clamp((float)seconds, 0f, 0.10f);
+         }
+ 
++        private float GetAdaptiveCinematicMinimumDuration()
++        {
++            return Clamp(Settings.Instance?.AdaptiveCinematicMinimumDuration ?? 0.90f, 0.25f, 3f);
++        }
++
++        private float GetAdaptiveCinematicMaximumDuration()
++        {
++            float minimum = GetAdaptiveCinematicMinimumDuration();
++            float maximum = Clamp(Settings.Instance?.AdaptiveCinematicMaximumDuration ?? 3.25f, 1f, 8f);
++            return Math.Max(minimum, maximum);
++        }
++
+         private void TickSettledMode(Agent victim, float dt)
+         {
+             _restPollCountdown -= dt;
+@@ -1262,7 +1318,7 @@ namespace GuidedArrow
+             _restPollCountdown = RestPollInterval;
+ 
+             Vec3 position;
+-            try { position = GetVisualPosition(victim); }
++            try { position = GetRagdollVisualPosition(victim); }
+             catch
+             {
+                 BeginReturn("SettledVictimUnavailable");
+@@ -1283,19 +1339,18 @@ namespace GuidedArrow
+             _lastRestPositionValid = true;
+ 
+             float hold = Clamp(Settings.Instance?.SettledHoldTime ?? 0.5f, 0.1f, 3f);
+-            if (_cinematicElapsed >= 0.25f && _settledElapsed >= hold)
