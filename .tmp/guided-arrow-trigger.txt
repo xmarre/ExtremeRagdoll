@@ -1,2 +1,2 @@
 Trigger temporary Guided Arrow CI build after compiler workflow installation.
-Pass 2: patch staged source compile errors.
+Pass 3: refresh PR against updated compiler workflow.
