@@ -1,3 +1,54 @@
+            Vec3 center;
+            try { center = GetCinematicFocus(victim); }
+            catch
+            {
+                BeginReturn("VictimPositionUnavailable");
+                return;
+            }
+
+            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
+            Vec3 horizontalIncoming = incoming - WorldUp * Dot(incoming, WorldUp);
+            horizontalIncoming = NormalizeSafe(horizontalIncoming, new Vec3(0f, 1f, 0f));
+            float cameraDistance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
+            float orbitSpeed = Clamp(Settings.Instance?.CinematicOrbitSpeed ?? 32f, -120f, 120f) * ((float)Math.PI / 180f);
+            float elevation = Clamp(Settings.Instance?.CinematicElevationAngle ?? 18f, -20f, 60f) * ((float)Math.PI / 180f);
+            Vec3 baseRadial = -horizontalIncoming;
+            Vec3 radial = NormalizeSafe(RotateAroundAxis(baseRadial, WorldUp, orbitSpeed * _cinematicElapsed), baseRadial);
+            Vec3 cameraPos = center
+                + radial * (cameraDistance * (float)Math.Cos(elevation))
+                + WorldUp * (cameraDistance * (float)Math.Sin(elevation));
+            Vec3 look = NormalizeSafe(center - cameraPos, incoming);
+            MatrixFrame desiredFrame = MakeCameraFrame(cameraPos, look, WorldUp);
+            ApplySmoothedCamera(desiredFrame, dt, 14f, 16f);
+
+            int mode = Settings.Instance?.CinematicMode ?? 2;
+            if (mode <= 0)
+            {
+                float fixedDuration = Clamp(Settings.Instance?.FixedCinematicDuration ?? 1.5f, 0.1f, 10f);
+                if (_cinematicElapsed >= fixedDuration)
+                    BeginReturn("FixedCinematicComplete");
+                return;
+            }
+
+            if (mode == 1)
+            {
+                TickSettledMode(victim, dt);
+                return;
+            }
+
+            TickFullFinalizationMode(victim, dt);
+        }
+
+        private void TickSettledMode(Agent victim, float dt)
+        {
+            _restPollCountdown -= dt;
+            if (_restPollCountdown > 0f)
+                return;
+            _restPollCountdown = RestPollInterval;
+
+            Vec3 position;
+            try { position = GetVisualPosition(victim); }
+            catch
             {
                 BeginReturn("SettledVictimUnavailable");
                 return;
@@ -157,54 +208,3 @@
             _returnLocalUp = Dot(offset, up);
             _returnViewForwardLocal = ToLocal(-frame.rotation.u, right, forward, up);
             _returnViewUpLocal = ToLocal(frame.rotation.f, right, forward, up);
-        }
-
-        private MatrixFrame BuildReturnTargetFrame(Agent player)
-        {
-            Vec3 forward = NormalizeSafe(player.LookDirection, new Vec3(0f, 1f, 0f));
-            Vec3 right = NormalizeSafe(Cross(forward, WorldUp), new Vec3(1f, 0f, 0f));
-            Vec3 up = NormalizeSafe(Cross(right, forward), WorldUp);
-            Vec3 anchor = player.Position + WorldUp * 1.45f;
-            Vec3 position = anchor + right * _returnLocalRight + forward * _returnLocalForward + up * _returnLocalUp;
-
-            Vec3 cameraForward = FromLocal(_returnViewForwardLocal, right, forward, up);
-            Vec3 cameraUp = FromLocal(_returnViewUpLocal, right, forward, up);
-            return MakeCameraFrame(position, cameraForward, cameraUp);
-        }
-
-        private void ApplySmoothedCamera(MatrixFrame desired, float dt, float positionRate, float rotationRate)
-        {
-            if (!_cameraFrameValid)
-            {
-                _cameraFrame = desired;
-                _cameraFrameValid = true;
-                SetMissionCamera(_cameraFrame);
-                return;
-            }
-
-            float posT = 1f - (float)Math.Exp(-positionRate * Math.Max(0f, dt));
-            float rotT = 1f - (float)Math.Exp(-rotationRate * Math.Max(0f, dt));
-            Vec3 position = Lerp(_cameraFrame.origin, desired.origin, posT);
-            Vec3 forward = NormalizeSafe(Lerp(-_cameraFrame.rotation.u, -desired.rotation.u, rotT), -desired.rotation.u);
-            Vec3 up = NormalizeSafe(Lerp(_cameraFrame.rotation.f, desired.rotation.f, rotT), desired.rotation.f);
-            _cameraFrame = MakeCameraFrame(position, forward, up);
-            SetMissionCamera(_cameraFrame);
-        }
-
-        private void SetMissionCamera(MatrixFrame frame)
-        {
-            if (Mission == null)
-                return;
-            _cameraFrame = frame;
-            _cameraFrameValid = true;
-            try
-            {
-                MissionScreen screen = ResolveMissionScreen();
-                if (screen != null)
-                {
-                    EnsureCustomCameraOwnership(screen);
-                    if (_ownedCustomCamera != null)
-                        _ownedCustomCamera.Frame = frame;
-                    if (screen.CombatCamera != null)
-                        screen.CombatCamera.Frame = frame;
-                }
