@@ -1,0 +1,12 @@
+Guided Arrow v1.0.3
+
+- Corrected the Bannerlord camera basis: the rendered view now follows the projectile flight path instead of looking down from above.
+- Added MCM-selectable First Person and Third Person projectile camera modes.
+- First Person travels immediately behind the arrow and looks exactly along its current velocity vector.
+- Added adjustable First Person rear and vertical offsets.
+- Third Person now uses a rigid projectile-relative chase rig with adjustable locked distance, elevation angle and look-ahead distance.
+- The complete Third Person rig pitches and yaws with the arrow instead of using a world-space height offset.
+- Added an optional centered crosshair overlay while guidance is active.
+- Corrected horizontal mouse steering: mouse-right turns the arrow right and mouse-left turns it left.
+- Updated camera interpolation, kill cinematic orientation and return-flight orientation for Bannerlord's actual camera-axis convention.
+- Retains v1.0.2 CustomCamera ownership, v1.0.1 impact cleanup and automatic time restoration.
