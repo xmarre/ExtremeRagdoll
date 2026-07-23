@@ -1,5 +1,5 @@
 diff --git a/GuidedArrow/Source/GuidedArrow.csproj b/GuidedArrow/Source/GuidedArrow.csproj
-index f6d76f1..3ed09e0 100644
+index f6d76f158e8d298e328d42c54a360645e6c224ab..3ed09e03c43c4ed423cdba3977e710e40c2d6f8a 100644
 --- a/GuidedArrow/Source/GuidedArrow.csproj
 +++ b/GuidedArrow/Source/GuidedArrow.csproj
 @@ -6,9 +6,9 @@
@@ -16,7 +16,7 @@ index f6d76f1..3ed09e0 100644
      <DebugType>pdbonly</DebugType>
      <Optimize>true</Optimize>
 diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
-index 62afefa..8ae258b 100644
+index 570222b9fdca040368448e99b24c02eb704295ca..7cd9667d38c389bc190df89ce981a1466bb845fd 100644
 --- a/GuidedArrow/Source/GuidedArrowBehavior.cs
 +++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
 @@ -35,14 +35,19 @@ namespace GuidedArrow
@@ -83,3 +83,24 @@ index 62afefa..8ae258b 100644
 +            _pendingAcquireElapsed += realDt;
              if (_pendingAcquireElapsed < MissileAcquireWindow)
                  TryAcquireMissiles();
+ 
+@@ -545,7 +561,7 @@ namespace GuidedArrow
+                 return;
+             }
+ 
+-            _guidanceRealElapsed += dt;
++            _guidanceRealElapsed += realDt;
+             float maximum = Clamp(Settings.Instance?.MaximumGuidanceTime ?? 35f, 5f, 120f);
+             if (_guidanceRealElapsed >= maximum)
+             {
+@@ -584,7 +600,7 @@ namespace GuidedArrow
+ 
+             if (movingCount <= 0f)
+             {
+-                _stoppedMissileElapsed += dt;
++                _stoppedMissileElapsed += realDt;
+                 if (_stoppedMissileElapsed >= StoppedMissileReturnDelay)
+                 {
+                     BeginReturn("SwarmStoppedWithoutImpactCallback", true);
+@@ -596,6 +612,7 @@ namespace GuidedArrow
+                 _stoppedMissileElapsed = 0f;
