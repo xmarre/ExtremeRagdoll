@@ -1,0 +1,85 @@
++            float minimum = GetAdaptiveCinematicMinimumDuration();
++            if (_cinematicElapsed >= minimum && _settledElapsed >= hold)
+             {
+                 BeginReturn("CorpseSettled");
+                 return;
+             }
+ 
+-            if (_cinematicElapsed >= 12f)
+-                BeginReturn("SettledModeFailsafe");
+         }
+ 
+         private void TickFullFinalizationMode(Agent victim, float dt)
+         {
+-            float timeout = Clamp(Settings.Instance?.FullCinematicTimeout ?? 30f, 5f, 60f);
++            float timeout = Clamp(Settings.Instance?.FullCinematicTimeout ?? 30f, 1f, 60f);
+             if (_cinematicElapsed >= timeout)
+             {
+                 BeginReturn("FullModeFailsafe");
+@@ -1322,7 +1377,8 @@ namespace GuidedArrow
+ 
+                 // Extreme Ragdoll v1.3.6 uses NeedsDeactivation immediately before
+                 // EndRagdollAsCorpse(). Observe the same boundary without mutating the corpse.
+-                if (state == RagdollState.NeedsDeactivation)
++                if (state == RagdollState.NeedsDeactivation &&
++                    _cinematicElapsed >= GetAdaptiveCinematicMinimumDuration())
+                 {
+                     BeginReturn("NativeCorpseFinalizationBoundary");
+                     return;
+@@ -1331,6 +1387,7 @@ namespace GuidedArrow
+                 // Extreme Ragdoll and Bannerlord may finalize between our bounded 10 Hz samples.
+                 // Disabled after an observed active ragdoll is the completed side of that crossing.
+                 if (state == RagdollState.Disabled &&
++                    _cinematicElapsed >= GetAdaptiveCinematicMinimumDuration() &&
+                     (_cinematicSawActiveRagdoll || _cinematicElapsed >= 0.75f))
+                 {
+                     BeginReturn("NativeCorpseFinalizedBetweenSamples");
+@@ -1355,6 +1412,7 @@ namespace GuidedArrow
+             _cinematicArrowEntity = null;
+             ResetCinematicBoneAnchor();
+             RemoveOwnTimeRequest();
++            ResetGuidanceTimeControl();
+             _returnDurationOverride = fastReturn
+                 ? Clamp(Settings.Instance?.MissReturnDuration ?? 0.10f, 0.02f, 0.50f)
+                 : 0f;
+@@ -1555,6 +1613,189 @@ namespace GuidedArrow
+             Log("Camera ownership released: " + reason + ".");
+         }
+ 
++        private void InitializeGuidanceTimeControl()
++        {
++            ResetGuidanceTimeControl();
++            _guidanceLastTimestamp = Stopwatch.GetTimestamp();
++
++            Settings settings = Settings.Instance;
++            if (settings?.EnableProximityTimeDilation ?? true)
++            {
++                float farSpeed = Clamp(settings?.ProximityFarTimeSpeed ?? 1f, SpeedSteps[0], 1f);
++                _proximityCurrentSpeed = farSpeed;
++                _proximityTargetSpeed = farSpeed;
++                _proximityScanCountdown = 0f;
++                ApplyAutomaticTimeSpeed(farSpeed);
++                Log("Proximity Time Dilation started at " + farSpeed.ToString("0.00") + "x.");
++                return;
++            }
++
++            float fixedSpeed = Clamp(settings?.InitialGuidanceTimeSpeed ?? 0.15f, SpeedSteps[0], 1f);
++            _proximityCurrentSpeed = fixedSpeed;
++            _proximityTargetSpeed = fixedSpeed;
++            SetOwnTimeSpeed(fixedSpeed);
++            Log("Legacy fixed guidance time speed started at " + fixedSpeed.ToString("0.00") + "x.");
++        }
++
++        private void ResetGuidanceTimeControl()
++        {
++            _proximityCandidates.Clear();
++            _proximityScanCountdown = 0f;
++            _proximityTargetSpeed = 1f;
++            _proximityCurrentSpeed = 1f;
++            _closestProximityDistance = float.PositiveInfinity;
++            _closestProximityEnemy = null;
++            _manualTimeOverride = false;
++            _guidanceLastTimestamp = 0;
++        }
++
++        private float GetGuidanceRealDelta(float fallback)
