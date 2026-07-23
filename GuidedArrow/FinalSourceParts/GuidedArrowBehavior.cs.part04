@@ -1,0 +1,209 @@
+
+            for (int i = _pendingHitVictims.Count - 1; i >= 0; i--)
+            {
+                Agent victim = _pendingHitVictims[i];
+                if (victim == null)
+                    continue;
+                try
+                {
+                    float health = victim.Health;
+                    if (IsFinite(health) && health <= 0f)
+                    {
+                        BeginKillCinematic(victim, "ImpactConfirmationHealthCheck");
+                        return;
+                    }
+                }
+                catch { }
+            }
+
+            if (_impactConfirmElapsed >= ImpactKillConfirmationWindow)
+                BeginReturn("ImpactWithoutKill", true);
+        }
+
+        private MatrixFrame BuildProjectileCameraFrame(Vec3 projectilePosition, Vec3 flightForward)
+        {
+            flightForward = NormalizeSafe(flightForward, _lastMissileDirection);
+            BuildFlightBasis(flightForward, out Vec3 right, out Vec3 localUp);
+
+            int mode = Settings.Instance?.ProjectileCameraMode ?? 1;
+            if (mode <= 0)
+            {
+                float rear = Clamp(Settings.Instance?.FirstPersonRearOffset ?? 0.12f, 0.01f, 1.50f);
+                float height = Clamp(Settings.Instance?.FirstPersonVerticalOffset ?? 0f, -0.50f, 0.50f);
+                Vec3 cameraPosition = projectilePosition - flightForward * rear + localUp * height;
+                return MakeCameraFrame(cameraPosition, flightForward, localUp);
+            }
+
+            float distance = Clamp(Settings.Instance?.CameraDistance ?? 3.4f, 0.5f, 15f);
+            float elevationDegrees = Clamp(Settings.Instance?.ThirdPersonElevationAngle ?? 12f, -30f, 60f);
+            float elevation = elevationDegrees * ((float)Math.PI / 180f);
+            float lookAhead = Clamp(Settings.Instance?.ThirdPersonLookAhead ?? 5f, 0f, 25f);
+
+            // The offset is constructed entirely in the projectile's local frame. When the arrow
+            // pitches or yaws, the complete chase rig follows with the same locked relationship.
+            Vec3 cameraPositionThird = projectilePosition
+                - flightForward * (distance * (float)Math.Cos(elevation))
+                + localUp * (distance * (float)Math.Sin(elevation));
+            Vec3 lookTarget = projectilePosition + flightForward * lookAhead;
+            Vec3 viewForward = NormalizeSafe(lookTarget - cameraPositionThird, flightForward);
+            return MakeCameraFrame(cameraPositionThird, viewForward, localUp);
+        }
+
+        private void BuildFlightBasis(Vec3 flightForward, out Vec3 right, out Vec3 localUp)
+        {
+            flightForward = NormalizeSafe(flightForward, new Vec3(0f, 1f, 0f));
+            right = Cross(flightForward, WorldUp);
+            if (!IsFinite(right) || right.LengthSquared <= 0.0001f)
+            {
+                // Near vertical flight, reuse the previous camera's right axis when possible to
+                // avoid an arbitrary 180-degree roll flip.
+                if (_cameraFrameValid && IsFinite(_cameraFrame.rotation.s) && _cameraFrame.rotation.s.LengthSquared > Tiny)
+                    right = _cameraFrame.rotation.s;
+                else
+                    right = Cross(flightForward, new Vec3(0f, 1f, 0f));
+            }
+
+            right = NormalizeSafe(right, new Vec3(1f, 0f, 0f));
+            localUp = NormalizeSafe(Cross(right, flightForward), WorldUp);
+        }
+
+        private void UpdateCrosshairVisibility()
+        {
+            bool shouldShow = _state == State.Guiding && (Settings.Instance?.ShowCrosshair ?? false);
+            if (shouldShow)
+                ShowCrosshair();
+            else
+                HideCrosshair();
+        }
+
+        private void ShowCrosshair()
+        {
+            if (_crosshairLayer != null)
+                return;
+
+            MissionScreen screen = ResolveMissionScreen();
+            if (screen == null)
+                return;
+
+            GauntletLayer layer = null;
+            try
+            {
+                layer = new GauntletLayer("GuidedArrowCrosshair", 10000, false);
+                _crosshairDataSource = new CrosshairViewModel();
+                _crosshairMovie = layer.LoadMovie("GuidedArrowCrosshair", _crosshairDataSource);
+                screen.AddLayer(layer);
+                _crosshairLayer = layer;
+                _crosshairScreen = screen;
+                Log("Crosshair overlay loaded.");
+            }
+            catch (Exception ex)
+            {
+                try { if (layer != null) screen.RemoveLayer(layer); } catch { }
+                Log("Crosshair overlay unavailable: " + ex.GetType().Name + " " + ex.Message);
+                _crosshairLayer = null;
+                _crosshairMovie = null;
+                _crosshairDataSource = null;
+                _crosshairScreen = null;
+            }
+        }
+
+        private void HideCrosshair()
+        {
+            GauntletLayer layer = _crosshairLayer;
+            GauntletMovieIdentifier movie = _crosshairMovie;
+            MissionScreen screen = _crosshairScreen;
+            _crosshairLayer = null;
+            _crosshairMovie = null;
+            _crosshairDataSource = null;
+            _crosshairScreen = null;
+
+            if (layer == null)
+                return;
+            try { if (movie != null) layer.ReleaseMovie(movie); } catch { }
+            try { if (screen != null) screen.RemoveLayer(layer); } catch { }
+        }
+
+        private void QueueDirectSteeringInput(float yaw, float pitch)
+        {
+            if (IsFinite(yaw))
+                _pendingYawInput += yaw;
+            if (IsFinite(pitch))
+                _pendingPitchInput += pitch;
+        }
+
+        private static Vec3 ApplyDirectSteering(Vec3 currentDirection, float yaw, float pitch)
+        {
+            Vec3 steered = NormalizeSafe(currentDirection, new Vec3(0f, 1f, 0f));
+
+            // Build controls from the projectile's live flight basis, never from the camera frame.
+            // This keeps mouse-left/right screen-intuitive while remaining fully camera-independent.
+            Vec3 right = Cross(steered, WorldUp);
+            if (!IsFinite(right) || right.LengthSquared <= 0.0001f)
+                right = Cross(steered, new Vec3(0f, 1f, 0f));
+            right = NormalizeSafe(right, new Vec3(1f, 0f, 0f));
+            Vec3 localUp = NormalizeSafe(Cross(right, steered), WorldUp);
+
+            if (Math.Abs(yaw) > Tiny)
+                steered = NormalizeSafe(RotateAroundAxis(steered, localUp, yaw), steered);
+
+            if (Math.Abs(pitch) > Tiny)
+            {
+                right = NormalizeSafe(Cross(steered, localUp), right);
+                Vec3 pitched = NormalizeSafe(RotateAroundAxis(steered, right, pitch), steered);
+                // Avoid the yaw singularity at exactly vertical flight while preserving direct input.
+                if (Math.Abs(pitched.z) < 0.985f)
+                    steered = pitched;
+            }
+
+            return steered;
+        }
+
+        private void AddPendingShotSeed(int forcedIndex, Vec3 position, Vec3 velocity)
+        {
+            _pendingShotSeeds.Add(new PendingShotSeed
+            {
+                ForcedIndex = forcedIndex,
+                Position = position,
+                Velocity = velocity
+            });
+            if (_pendingShotSeeds.Count == 1)
+            {
+                _pendingShotPosition = position;
+                _pendingShotVelocity = velocity;
+                _shotDirection = NormalizeSafe(velocity, Mission?.MainAgent?.LookDirection ?? new Vec3(0f, 1f, 0f));
+            }
+        }
+
+        private void CapturePreShotMissileIndices()
+        {
+            _preShotMissileIndices.Clear();
+            try
+            {
+                foreach (Mission.Missile missile in Mission.MissilesList)
+                {
+                    if (missile != null && missile.ShooterAgent == Mission.MainAgent)
+                        _preShotMissileIndices.Add(missile.Index);
+                }
+            }
+            catch { }
+        }
+
+        private TrackedMissile FindTrackedMissile(int index)
+        {
+            for (int i = 0; i < _trackedMissiles.Count; i++)
+                if (_trackedMissiles[i].Index == index)
+                    return _trackedMissiles[i];
+            return null;
+        }
+
+        private TrackedMissile FindClosestTrackedMissile(Vec3 position)
+        {
+            TrackedMissile best = null;
+            float bestDistance = float.MaxValue;
+            for (int i = 0; i < _trackedMissiles.Count; i++)
+            {
+                try
+                {
+                    float distance = (_trackedMissiles[i].Missile.GetPosition() - position).LengthSquared;
+                    if (distance < bestDistance)
+                    {
