@@ -1,0 +1,85 @@
++                        continue;
++                }
++                catch { continue; }
++
++                Vec3 targetPosition;
++                try { targetPosition = GetVisualPosition(candidate) + WorldUp * 0.85f; }
++                catch { continue; }
++                if (!IsFinite(targetPosition))
++                    continue;
++
++                for (int missileIndex = 0; missileIndex < _trackedMissiles.Count; missileIndex++)
++                {
++                    try
++                    {
++                        Vec3 missilePosition = _trackedMissiles[missileIndex].Missile.GetPosition();
++                        float distanceSquared = (missilePosition - targetPosition).LengthSquared;
++                        if (!IsFinite(distanceSquared) || distanceSquared >= bestSquared)
++                            continue;
++                        bestSquared = distanceSquared;
++                        _closestProximityEnemy = candidate;
++                    }
++                    catch { }
++                }
++            }
++
++            if (_closestProximityEnemy != null && IsFinite(bestSquared) && bestSquared >= 0f)
++                _closestProximityDistance = (float)Math.Sqrt(bestSquared);
++        }
++
++        private float ComputeProximityTargetSpeed(float distance)
++        {
++            float farSpeed = Clamp(Settings.Instance?.ProximityFarTimeSpeed ?? 1f, SpeedSteps[0], 1f);
++            float nearSpeed = Clamp(Settings.Instance?.ProximityNearTimeSpeed ?? 0.10f, SpeedSteps[0], farSpeed);
++            float farDistance = Clamp(Settings.Instance?.ProximitySlowdownStartDistance ?? 45f, 5f, 150f);
++            float nearDistance = Clamp(Settings.Instance?.ProximityFullSlowdownDistance ?? 6f, 0.5f, farDistance - 0.5f);
++
++            if (!IsFinite(distance) || distance >= farDistance)
++                return farSpeed;
++            if (distance <= nearDistance)
++                return nearSpeed;
++
++            float t = Clamp((distance - nearDistance) / Math.Max(0.5f, farDistance - nearDistance), 0f, 1f);
++            float smootherStep = t * t * t * (t * (t * 6f - 15f) + 10f);
++            return nearSpeed + (farSpeed - nearSpeed) * smootherStep;
++        }
++
++        private void ApplyAutomaticTimeSpeed(float speed)
++        {
++            float quantized = (float)Math.Round(Clamp(speed, SpeedSteps[0], 1f) * 100f) / 100f;
++            if (quantized >= 0.995f)
++            {
++                if (_timeRequestActive)
++                    RemoveOwnTimeRequest();
++                return;
++            }
++
++            if (!_timeRequestActive || Math.Abs(_requestedSpeed - quantized) >= 0.005f)
++                SetOwnTimeSpeed(quantized);
++        }
++
+         private void SetOwnTimeSpeed(float requested)
+         {
+             if (Mission == null)
+@@ -1593,7 +1834,13 @@ namespace GuidedArrow
+ 
+         private void StepTimeSpeed(int direction)
+         {
+-            float current = _timeRequestActive ? _requestedSpeed : 1f;
++            if (!_manualTimeOverride)
++            {
++                _manualTimeOverride = true;
++                Log("Q/E manual time-speed override activated for the current guided shot.");
++            }
++
++            float current = _timeRequestActive ? _requestedSpeed : _proximityCurrentSpeed;
+             int nearest = 0;
+             float best = float.MaxValue;
+             for (int i = 0; i < SpeedSteps.Length; i++)
+@@ -1616,6 +1863,7 @@ namespace GuidedArrow
+         {
+             ResetTrackedVictim();
+             RemoveOwnTimeRequest();
++            ResetGuidanceTimeControl();
+             HideCrosshair();
+             CleanupTrackedMissiles(true);
