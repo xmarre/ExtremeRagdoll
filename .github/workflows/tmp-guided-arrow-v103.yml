@@ -5,26 +5,31 @@ on:
 
 jobs:
   build:
-    if: startsWith(github.head_ref, 'tmp/guided-arrow-v103-')
+    if: startsWith(github.head_ref, 'tmp/guided-arrow-v103-source-tree')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Materialize source
+      - name: Reconstruct and verify source
         shell: pwsh
         run: |
-          $archive = '.tmp/guided-arrow-v103-src.tar.gz'
-          if (-not (Test-Path $archive)) { throw 'Missing source archive' }
-          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expected = '9d6123c2c04482f443a107361784925f7f7c05bc502e4a08a6e7de8551477268'
-          Write-Host "Source archive SHA-256: $actual"
-          if ($actual -ne $expected) { throw "Source archive hash mismatch: $actual" }
-          New-Item -ItemType Directory -Force GuidedArrow | Out-Null
-          tar -tzf $archive | Select-Object -First 20
-          tar -xzf $archive -C GuidedArrow
-          if (-not (Test-Path 'GuidedArrow/Source/GuidedArrow.csproj')) { throw 'Source project missing after extraction' }
+          $parts = Get-ChildItem 'GuidedArrow/SourceParts/GuidedArrowBehavior.part*' | Sort-Object Name
+          if ($parts.Count -ne 6) { throw "Expected 6 controller source parts, found $($parts.Count)" }
+          $output = 'GuidedArrow/Source/GuidedArrowBehavior.cs'
+          $stream = [IO.File]::Open($output, [IO.FileMode]::Create, [IO.FileAccess]::Write)
+          try {
+            foreach ($part in $parts) {
+              $bytes = [IO.File]::ReadAllBytes($part.FullName)
+              $stream.Write($bytes, 0, $bytes.Length)
+            }
+          }
+          finally { $stream.Dispose() }
+          $actual = (Get-FileHash $output -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = 'e7c2f2171c5ac30ac3f4dc8b0d46e175db21318c7f58d0b49fed3724b5a51ab6'
+          Write-Host "GuidedArrowBehavior.cs SHA-256: $actual"
+          if ($actual -ne $expected) { throw "Controller source hash mismatch: $actual" }
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
@@ -54,7 +59,7 @@ jobs:
           Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll "$module/bin/Win64_Shipping_Client/"
           if (Test-Path GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb) { Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb "$module/bin/Win64_Shipping_Client/" }
           Copy-Item GuidedArrow/SubModule.xml $module/
-          Copy-Item GuidedArrow/*.txt $module/
+          if (Test-Path GuidedArrow/*.txt) { Copy-Item GuidedArrow/*.txt $module/ }
           Copy-Item GuidedArrow/Source/*.cs $module/Source/
           Copy-Item GuidedArrow/Source/GuidedArrow.csproj $module/Source/
           Copy-Item GuidedArrow/GUI/Prefabs/*.xml "$module/GUI/Prefabs/"
