@@ -12,18 +12,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Reconstruct and verify source
+      - name: Verify source
         shell: pwsh
         run: |
-          $parts = Get-ChildItem 'GuidedArrow/SourceParts/GuidedArrowBehavior.part*' | Sort-Object Name
-          if ($parts.Count -ne 8) { throw "Expected 8 source parts, found $($parts.Count)" }
-          $text = ''
-          foreach ($part in $parts) {
-            $text += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n")
-          }
-          $utf8 = New-Object System.Text.UTF8Encoding($false)
-          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $text, $utf8)
-          $actual = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $source = 'GuidedArrow/Source/GuidedArrowBehavior.cs'
+          if (-not (Test-Path $source)) { throw 'Missing controller source' }
+          $actual = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = 'd109069714ec3404d4d55b19f3c63ae36c2809b4bbe6fb3c33b9027c86af2acc'
           Write-Host "GuidedArrowBehavior.cs SHA-256: $actual"
           if ($actual -ne $expected) { throw "Controller source hash mismatch: $actual" }
