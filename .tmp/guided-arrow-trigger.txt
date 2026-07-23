@@ -1,2 +1,2 @@
 Trigger temporary Guided Arrow CI build after compiler workflow installation.
-Pass 5: use direct System.IO patch writes.
+Pass 6: final visual tracking and corpse-finalization crossing patch.
