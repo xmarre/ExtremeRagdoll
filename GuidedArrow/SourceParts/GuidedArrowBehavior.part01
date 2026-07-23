@@ -1,0 +1,210 @@
+            _impactConfirmElapsed = 0f;
+            _stoppedMissileElapsed = 0f;
+
+            // Terrain, shield and other victimless impacts are definite misses: start the fast
+            // camera return immediately instead of holding on the arrow in the ground.
+            if (victim == null)
+            {
+                BeginReturn("MissedImpact", true);
+                return;
+            }
+
+            TrackHitVictim(victim);
+            _state = State.ImpactPending;
+
+            try
+            {
+                float health = victim.Health;
+                if (IsFinite(health) && health <= 0f)
+                {
+                    BeginKillCinematic(victim, "OnMissileHitAlreadyDead");
+                    return;
+                }
+            }
+            catch { }
+
+            Log("Guided swarm impact awaiting one-frame kill confirmation.");
+        }
+
+        public override void OnMissileRemoved(int missileIndex)
+        {
+            TrackedMissile tracked = FindTrackedMissile(missileIndex);
+            if (tracked == null)
+                return;
+
+            RemoveTrackedMissile(tracked, true);
+            if (_state == State.Guiding && _trackedMissiles.Count == 0)
+                BeginReturn("SwarmRemovedWithoutImpact", true);
+        }
+
+        public override void OnEarlyAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow blow)
+        {
+            ConfirmRemovalKillFallback(affectedAgent, affectorAgent, agentState, "OnEarlyAgentRemoved");
+        }
+
+        public override void OnAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow killingBlow)
+        {
+            ConfirmRemovalKillFallback(affectedAgent, affectorAgent, agentState, "OnAgentRemoved");
+        }
+
+        public override void OnAgentDeleted(Agent affectedAgent)
+        {
+            if (affectedAgent == null)
+                return;
+
+            if (ReferenceEquals(affectedAgent, _hitVictim))
+                ResetTrackedVictim();
+
+            if (ReferenceEquals(affectedAgent, _cinematicVictim) && _state == State.Cinematic)
+                BeginReturn("CinematicVictimDeleted");
+        }
+
+        public override bool UpdateOverridenCamera(float dt)
+        {
+            bool ownsCamera = _cameraFrameValid &&
+                (_state == State.Guiding || _state == State.ImpactPending ||
+                 _state == State.Cinematic || _state == State.Returning);
+            if (!ownsCamera)
+                return base.UpdateOverridenCamera(dt);
+
+            MatrixFrame frame = _cameraFrame;
+            try
+            {
+                MissionScreen screen = ResolveMissionScreen();
+                if (screen != null)
+                {
+                    EnsureCustomCameraOwnership(screen);
+                    if (_ownedCustomCamera != null)
+                        _ownedCustomCamera.Frame = frame;
+                    if (screen.CombatCamera != null)
+                        screen.CombatCamera.Frame = frame;
+                }
+                Mission?.SetCameraFrame(ref frame, 1f);
+            }
+            catch (Exception ex)
+            {
+                Log("Camera override failed: " + ex.GetType().Name);
+                RemoveOwnTimeRequest();
+                _state = State.Idle;
+                _cameraFrameValid = false;
+                _releaseCameraAfterOverride = false;
+                ReleaseCustomCameraOwnership("CameraOverrideFailure");
+                return base.UpdateOverridenCamera(dt);
+            }
+
+            if (_releaseCameraAfterOverride)
+            {
+                _releaseCameraAfterOverride = false;
+                _releaseCustomCameraNextDisplay = true;
+            }
+
+            return true;
+        }
+
+        public override void OnMissionTick(float dt)
+        {
+            if (_state != State.Guiding || _trackedMissiles.Count == 0 || dt <= 0f)
+                return;
+
+            float yaw = _pendingYawInput;
+            float pitch = _pendingPitchInput;
+            _pendingYawInput = 0f;
+            _pendingPitchInput = 0f;
+            if (Math.Abs(yaw) <= Tiny && Math.Abs(pitch) <= Tiny)
+                return;
+
+            bool anyValid = false;
+            for (int i = _trackedMissiles.Count - 1; i >= 0; i--)
+            {
+                TrackedMissile tracked = _trackedMissiles[i];
+                try
+                {
+                    Vec3 velocity = tracked.Missile.GetVelocity();
+                    float speedSq = velocity.LengthSquared;
+                    if (!IsFinite(velocity) || !IsFinite(speedSq) || speedSq <= Tiny)
+                        continue;
+
+                    float speed = (float)Math.Sqrt(speedSq);
+                    Vec3 currentDirection = velocity / speed;
+                    float radius = Clamp(Settings.Instance?.MinimumTurnRadius ?? 24f, 3f, 120f);
+                    float maxAngle = Math.Min(1.2f, (speed / radius) * dt);
+                    if (maxAngle <= Tiny)
+                        continue;
+
+                    float localYaw = yaw;
+                    float localPitch = pitch;
+                    float requestedAngle = (float)Math.Sqrt(localYaw * localYaw + localPitch * localPitch);
+                    if (requestedAngle > maxAngle)
+                    {
+                        float scale = maxAngle / requestedAngle;
+                        localYaw *= scale;
+                        localPitch *= scale;
+                    }
+
+                    Vec3 steered = ApplyDirectSteering(currentDirection, localYaw, localPitch);
+                    Vec3 newVelocity = steered * speed;
+                    tracked.Missile.SetVelocity(in newVelocity);
+                    if (tracked.Index == _missileIndex)
+                        _lastMissileDirection = steered;
+                    anyValid = true;
+                }
+                catch
+                {
+                    RemoveTrackedMissile(tracked, true);
+                }
+            }
+
+            if (!anyValid && _trackedMissiles.Count == 0)
+                BeginReturn("SwarmSteeringUnavailable", true);
+        }
+
+        public override void OnPreDisplayMissionTick(float dt)
+        {
+            if (Mission == null || dt < 0f)
+                return;
+
+            // Keep the final return frame owned for one complete render interval, then restore
+            // exactly the camera that was active before guidance.
+            if (_releaseCustomCameraNextDisplay)
+            {
+                _releaseCustomCameraNextDisplay = false;
+                ReleaseCustomCameraOwnership("ReturnComplete");
+                _releaseCameraAfterOverride = false;
+                _state = State.Idle;
+                _cameraFrameValid = false;
+                Log("Return flight complete.");
+                return;
+            }
+
+            switch (_state)
+            {
+                case State.WaitingForMissile:
+                    _pendingAcquireElapsed += dt;
+                    if (!TryAcquireMissiles() && _pendingAcquireElapsed >= MissileAcquireWindow)
+                        ResetAll(false);
+                    break;
+
+                case State.Guiding:
+                    TickGuidanceDisplay(dt);
+                    break;
+
+                case State.ImpactPending:
+                    TickImpactPendingDisplay(dt);
+                    break;
+
+                case State.Cinematic:
+                    TickCinematicDisplay(dt);
+                    break;
+
+                case State.Returning:
+                    TickReturnDisplay(dt);
+                    break;
+            }
+        }
+
+        private bool Enabled => Settings.Instance?.Enabled ?? true;
+
+        private bool TryAcquireMissiles()
+        {
+            if ((_state != State.WaitingForMissile && _state != State.Guiding) || Mission == null || Mission.MainAgent == null)
+                return _trackedMissiles.Count > 0;
