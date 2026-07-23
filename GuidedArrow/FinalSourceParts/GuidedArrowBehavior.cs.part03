@@ -1,0 +1,209 @@
+        }
+
+        public override void OnPreDisplayMissionTick(float dt)
+        {
+            if (Mission == null || dt < 0f)
+                return;
+
+            // Keep the final return frame owned for one complete render interval, then restore
+            // exactly the camera that was active before guidance.
+            if (_releaseCustomCameraNextDisplay)
+            {
+                _releaseCustomCameraNextDisplay = false;
+                ReleaseCustomCameraOwnership("ReturnComplete");
+                _releaseCameraAfterOverride = false;
+                _state = State.Idle;
+                _cameraFrameValid = false;
+                Log("Return flight complete.");
+                return;
+            }
+
+            switch (_state)
+            {
+                case State.WaitingForMissile:
+                    _pendingAcquireElapsed += dt;
+                    if (!TryAcquireMissiles() && _pendingAcquireElapsed >= MissileAcquireWindow)
+                        ResetAll(false);
+                    break;
+
+                case State.Guiding:
+                    TickGuidanceDisplay(dt);
+                    break;
+
+                case State.ImpactPending:
+                    TickImpactPendingDisplay(dt);
+                    break;
+
+                case State.Cinematic:
+                    TickCinematicDisplay(dt);
+                    break;
+
+                case State.Returning:
+                    TickReturnDisplay(dt);
+                    break;
+            }
+        }
+
+        private bool Enabled => Settings.Instance?.Enabled ?? true;
+
+        private bool TryAcquireMissiles()
+        {
+            if ((_state != State.WaitingForMissile && _state != State.Guiding) || Mission == null || Mission.MainAgent == null)
+                return _trackedMissiles.Count > 0;
+
+            try
+            {
+                foreach (Mission.Missile candidate in Mission.MissilesList)
+                {
+                    if (_trackedMissiles.Count >= MaxTrackedSwarmMissiles)
+                        break;
+                    if (candidate == null || candidate.ShooterAgent != Mission.MainAgent || !IsArrowOrBolt(candidate))
+                        continue;
+
+                    int index;
+                    Vec3 position;
+                    Vec3 velocity;
+                    try
+                    {
+                        index = candidate.Index;
+                        position = candidate.GetPosition();
+                        velocity = candidate.GetVelocity();
+                    }
+                    catch { continue; }
+                    if (FindTrackedMissile(index) != null)
+                        continue;
+
+                    bool forcedMatch = false;
+                    bool trajectoryMatch = false;
+                    float bestScore = float.MaxValue;
+                    for (int i = 0; i < _pendingShotSeeds.Count; i++)
+                    {
+                        PendingShotSeed seed = _pendingShotSeeds[i];
+                        if (seed.ForcedIndex >= 0 && seed.ForcedIndex == index)
+                            forcedMatch = true;
+
+                        float positionError = (position - seed.Position).LengthSquared;
+                        Vec3 candidateDir = NormalizeSafe(velocity, _shotDirection);
+                        Vec3 seedDir = NormalizeSafe(seed.Velocity, _shotDirection);
+                        float directionDot = Dot(candidateDir, seedDir);
+                        if (positionError <= 9f && directionDot >= 0.55f)
+                        {
+                            trajectoryMatch = true;
+                            float score = positionError + (1f - directionDot) * 4f;
+                            if (score < bestScore) bestScore = score;
+                        }
+                    }
+
+                    if (!forcedMatch && !trajectoryMatch)
+                        continue;
+                    if (_preShotMissileIndices.Contains(index) && !forcedMatch && bestScore > 0.50f)
+                        continue;
+
+                    TrackedMissile tracked = new TrackedMissile { Missile = candidate, Index = index };
+                    _trackedMissiles.Add(tracked);
+                    ApplyFullDetailVisual(tracked);
+                    if (_missile == null)
+                    {
+                        _missile = candidate;
+                        _missileIndex = index;
+                        _lastMissileDirection = NormalizeSafe(velocity, _shotDirection);
+                    }
+                    Log("Added guided swarm missile #" + index + ".");
+                }
+            }
+            catch { }
+
+            if (_trackedMissiles.Count == 0)
+                return false;
+
+            if (_state == State.WaitingForMissile)
+            {
+                _pendingYawInput = 0f;
+                _pendingPitchInput = 0f;
+                _state = State.Guiding;
+                _cameraFrameValid = false;
+                AcquireCustomCameraOwnership();
+                UpdateCrosshairVisibility();
+                InitializeGuidanceTimeControl();
+                Log("Guidance started for a swarm of " + _trackedMissiles.Count + " missile(s).");
+            }
+            return true;
+        }
+
+        private void TickGuidanceDisplay(float dt)
+        {
+            float realDt = GetGuidanceRealDelta(dt);
+            _pendingAcquireElapsed += realDt;
+            if (_pendingAcquireElapsed < MissileAcquireWindow)
+                TryAcquireMissiles();
+
+            if (_trackedMissiles.Count == 0)
+            {
+                BeginReturn("MissingTrackedSwarm", true);
+                return;
+            }
+
+            _guidanceRealElapsed += realDt;
+            float maximum = Clamp(Settings.Instance?.MaximumGuidanceTime ?? 35f, 5f, 120f);
+            if (_guidanceRealElapsed >= maximum)
+            {
+                BeginReturn("GuidanceTimeout", true);
+                return;
+            }
+
+            if (Mission.InputManager != null)
+            {
+                if (Mission.InputManager.IsKeyPressed(InputKey.Escape) ||
+                    Mission.InputManager.IsKeyPressed(InputKey.RightMouseButton))
+                {
+                    BeginReturn("UserCancelled");
+                    return;
+                }
+
+                if (Mission.InputManager.IsKeyPressed(InputKey.Q)) StepTimeSpeed(-1);
+                if (Mission.InputManager.IsKeyPressed(InputKey.E)) StepTimeSpeed(+1);
+
+                float sensitivity = Clamp(Settings.Instance?.MouseSensitivity ?? 1f, 0.10f, 4f);
+                float yaw = -Mission.InputManager.GetMouseMoveX() * 0.0026f * sensitivity;
+                float pitch = -Mission.InputManager.GetMouseMoveY() * 0.0026f * sensitivity;
+                QueueDirectSteeringInput(yaw, pitch);
+            }
+
+            UpdateFullDetailVisuals();
+
+            Vec3 position;
+            Vec3 forward;
+            float movingCount;
+            if (!TryGetSwarmCameraAnchor(out position, out forward, out movingCount))
+            {
+                BeginReturn("ProjectileCameraReadFailed", true);
+                return;
+            }
+
+            if (movingCount <= 0f)
+            {
+                _stoppedMissileElapsed += realDt;
+                if (_stoppedMissileElapsed >= StoppedMissileReturnDelay)
+                {
+                    BeginReturn("SwarmStoppedWithoutImpactCallback", true);
+                    return;
+                }
+            }
+            else
+            {
+                _stoppedMissileElapsed = 0f;
+            }
+
+            UpdateGuidanceTimeControl(position, realDt);
+            _lastMissileDirection = forward;
+            MatrixFrame desiredFrame = BuildProjectileCameraFrame(position, forward);
+            SetMissionCamera(desiredFrame);
+            UpdateCrosshairVisibility();
+        }
+
+        private void TickImpactPendingDisplay(float dt)
+        {
+            _impactConfirmElapsed += Math.Max(0f, dt);
+            Agent focusVictim = _hitVictim;
+            if (focusVictim != null)
+                UpdateImpactPendingCamera(focusVictim, dt);
