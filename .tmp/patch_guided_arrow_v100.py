@@ -77,9 +77,13 @@ replace_once(
 
             try
             {
-                Vec3 position = agent.GetVisualPosition();
-                if (IsFinite(position))
-                    return position;
+                MBAgentVisuals visuals = agent.AgentVisuals;
+                if (visuals != null)
+                {
+                    Vec3 position = visuals.GetGlobalFrame().origin;
+                    if (IsFinite(position))
+                        return position;
+                }
             }
             catch { }
 
