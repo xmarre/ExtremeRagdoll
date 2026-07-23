@@ -1,0 +1,9 @@
+<Prefab>
+  <Window>
+    <Widget DoNotAcceptEvents="true" WidthSizePolicy="StretchToParent" HeightSizePolicy="StretchToParent">
+      <Children>
+        <TextWidget Text="+" WidthSizePolicy="Fixed" HeightSizePolicy="Fixed" SuggestedWidth="48" SuggestedHeight="48" HorizontalAlignment="Center" VerticalAlignment="Center" Brush="AgentHUD.Interaction.Text" />
+      </Children>
+    </Widget>
+  </Window>
+</Prefab>
