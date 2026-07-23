@@ -1,0 +1,86 @@
++        {
++            long now = Stopwatch.GetTimestamp();
++            long previous = _guidanceLastTimestamp;
++            _guidanceLastTimestamp = now;
++            if (previous <= 0 || now <= previous)
++                return Clamp(fallback, 0f, 0.10f);
++            double seconds = (double)(now - previous) / Stopwatch.Frequency;
++            if (double.IsNaN(seconds) || double.IsInfinity(seconds))
++                return Clamp(fallback, 0f, 0.10f);
++            return Clamp((float)seconds, 0f, 0.10f);
++        }
++
++        private void UpdateGuidanceTimeControl(Vec3 swarmAnchor, float realDt)
++        {
++            if (_manualTimeOverride || !(Settings.Instance?.EnableProximityTimeDilation ?? true))
++                return;
++
++            _proximityScanCountdown -= Math.Max(0f, realDt);
++            if (_proximityScanCountdown <= 0f)
++            {
++                float interval = Clamp(Settings.Instance?.ProximityScanInterval ?? 0.05f, 0.02f, 0.25f);
++                _proximityScanCountdown = interval;
++                RefreshClosestProximityEnemy(swarmAnchor);
++                _proximityTargetSpeed = ComputeProximityTargetSpeed(_closestProximityDistance);
++            }
++
++            float response = Clamp(Settings.Instance?.ProximityTimeResponseRate ?? 12f, 1f, 30f);
++            float alpha = 1f - (float)Math.Exp(-response * Math.Max(0f, realDt));
++            _proximityCurrentSpeed += (_proximityTargetSpeed - _proximityCurrentSpeed) * alpha;
++            _proximityCurrentSpeed = Clamp(_proximityCurrentSpeed, SpeedSteps[0], 1f);
++            ApplyAutomaticTimeSpeed(_proximityCurrentSpeed);
++        }
++
++        private void RefreshClosestProximityEnemy(Vec3 swarmAnchor)
++        {
++            _closestProximityDistance = float.PositiveInfinity;
++            _closestProximityEnemy = null;
++            _proximityCandidates.Clear();
++
++            Mission mission = Mission;
++            Agent player = mission?.MainAgent;
++            Team playerTeam = player?.Team;
++            if (mission == null || player == null || playerTeam == null || _trackedMissiles.Count == 0)
++                return;
++
++            float startDistance = Clamp(Settings.Instance?.ProximitySlowdownStartDistance ?? 45f, 5f, 150f);
++            float maximumSpread = 0f;
++            for (int i = 0; i < _trackedMissiles.Count; i++)
++            {
++                try
++                {
++                    Vec3 missilePosition = _trackedMissiles[i].Missile.GetPosition();
++                    if (!IsFinite(missilePosition))
++                        continue;
++                    float spread = (missilePosition - swarmAnchor).Length;
++                    if (IsFinite(spread) && spread > maximumSpread)
++                        maximumSpread = spread;
++                }
++                catch { }
++            }
++
++            float queryRadius = startDistance + maximumSpread + 3f;
++            try
++            {
++                mission.GetNearbyEnemyAgents(
++                    new Vec2(swarmAnchor.x, swarmAnchor.y),
++                    queryRadius,
++                    playerTeam,
++                    _proximityCandidates);
++            }
++            catch
++            {
++                _proximityCandidates.Clear();
++                return;
++            }
++
++            float bestSquared = float.PositiveInfinity;
++            for (int candidateIndex = 0; candidateIndex < _proximityCandidates.Count; candidateIndex++)
++            {
++                Agent candidate = _proximityCandidates[candidateIndex];
++                if (candidate == null || candidate == player)
++                    continue;
++
++                try
++                {
++                    if (!candidate.IsActive() || candidate.Health <= 0f)
