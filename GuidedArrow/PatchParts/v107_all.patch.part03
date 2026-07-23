@@ -1,0 +1,86 @@
++
++            if (componentCount > 0)
+             {
+-                Vec3 position = tracked.Missile.GetPosition();
+-                Vec3 velocity = tracked.Missile.GetVelocity();
+-                if (!IsFinite(position) || !IsFinite(velocity) || velocity.LengthSquared <= Tiny)
+-                    return;
+-                tracked.VisualEntity.SetGlobalFrame(MakeProjectileVisualFrame(position, velocity));
++                RemovedNativeMeshSet set = new RemovedNativeMeshSet { Entity = entity };
++                for (int i = 0; i < componentCount; i++)
++                {
++                    try
++                    {
++                        MetaMesh mesh = entity.GetMetaMesh(i);
++                        if (mesh != null && mesh.IsValid)
++                            set.Meshes.Add(mesh);
++                    }
++                    catch { }
++                }
++
++                for (int i = 0; i < set.Meshes.Count; i++)
++                {
++                    try { entity.RemoveMultiMesh(set.Meshes[i]); }
++                    catch { }
++                }
++
++                if (set.Meshes.Count > 0)
++                    removedSets.Add(set);
++            }
++
++            int childCount = 0;
++            try { childCount = entity.ChildCount; }
++            catch { childCount = 0; }
++            for (int i = 0; i < childCount; i++)
++            {
++                try { CaptureAndRemoveNativeMeshes(entity.GetChild(i), removedSets); }
++                catch { }
+             }
+-            catch { }
+         }
+ 
+-        private static MatrixFrame MakeProjectileVisualFrame(Vec3 position, Vec3 velocity)
++        private static int CountRemovedNativeMeshes(TrackedMissile tracked)
+         {
+-            Vec3 forward = NormalizeSafe(velocity, new Vec3(0f, 1f, 0f));
+-            Vec3 side = Cross(forward, WorldUp);
+-            if (!IsFinite(side) || side.LengthSquared <= Tiny)
+-                side = Cross(forward, Math.Abs(forward.z) > 0.9f ? new Vec3(0f, 1f, 0f) : WorldUp);
+-            side = NormalizeSafe(side, new Vec3(1f, 0f, 0f));
+-            Vec3 up = NormalizeSafe(Cross(side, forward), WorldUp);
+-            Mat3 rotation = Mat3.Identity;
+-            rotation.s = side;
+-            rotation.f = forward;
+-            rotation.u = up;
+-            return new MatrixFrame(rotation, position);
++            int count = 0;
++            if (tracked == null)
++                return count;
++            for (int i = 0; i < tracked.RemovedNativeMeshes.Count; i++)
++                count += tracked.RemovedNativeMeshes[i].Meshes.Count;
++            return count;
++        }
++
++        private void UpdateFullDetailVisuals()
++        {
++            // The full-detail mesh now lives directly on Bannerlord's native missile entity.
++            // The engine therefore updates its position and orientation without a duplicate frame driver.
+         }
+ 
+         private void RemoveFullDetailVisual(TrackedMissile tracked)
+         {
+             if (tracked == null)
+                 return;
+-            if (tracked.NativeVisibilitySuppressed)
+-            {
+-                try
+-                {
+-                    if (tracked.NativeEntity != null)
+-                        tracked.NativeEntity.SetVisibilityExcludeParents(true);
+-                }
+-                catch { }
+-                tracked.NativeVisibilitySuppressed = false;
+-            }
++
+             try
+             {
