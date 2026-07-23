@@ -1,0 +1,220 @@
+            BeginKillCinematic(affectedAgent, source);
+        }
+
+        private void BeginKillCinematic(Agent victim, string source)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || victim == null)
+                return;
+
+            ResetTrackedVictim();
+            HideCrosshair();
+            _cinematicVictim = victim;
+            _missile = null;
+            _missileIndex = -1;
+            _cinematicElapsed = 0f;
+            _impactConfirmElapsed = 0f;
+            _restPollCountdown = 0f;
+            _lastRestPositionValid = false;
+            _settledElapsed = 0f;
+            _cinematicSawActiveRagdoll = false;
+            if (!IsFinite(_impactDirection) || _impactDirection.LengthSquared <= Tiny)
+                _impactDirection = _lastMissileDirection;
+            SetOwnTimeSpeed(Settings.Instance?.CinematicTimeSpeed ?? 0.10f);
+            _state = State.Cinematic;
+            Log("Kill cinematic started via " + source + ".");
+        }
+
+        private void TickCinematicDisplay(float dt)
+        {
+            Agent victim = _cinematicVictim;
+            if (victim == null)
+            {
+                BeginReturn("NoCinematicVictim");
+                return;
+            }
+
+            _cinematicElapsed += dt;
+
+            Vec3 center;
+            try { center = GetVisualPosition(victim) + WorldUp * 0.95f; }
+            catch
+            {
+                BeginReturn("VictimPositionUnavailable");
+                return;
+            }
+
+            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
+            Vec3 side = NormalizeSafe(Cross(WorldUp, incoming), new Vec3(1f, 0f, 0f));
+            float cameraDistance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
+            float orbit = (float)Math.Sin(_cinematicElapsed * 0.9f) * 0.75f;
+            Vec3 cameraPos = center - incoming * cameraDistance + side * (1.15f + orbit) + WorldUp * 0.65f;
+            Vec3 look = NormalizeSafe(center - cameraPos, incoming);
+            MatrixFrame desiredFrame = MakeCameraFrame(cameraPos, look, WorldUp);
+            ApplySmoothedCamera(desiredFrame, dt, 9f, 12f);
+
+            int mode = Settings.Instance?.CinematicMode ?? 2;
+            if (mode <= 0)
+            {
+                float fixedDuration = Clamp(Settings.Instance?.FixedCinematicDuration ?? 1.5f, 0.1f, 10f);
+                if (_cinematicElapsed >= fixedDuration)
+                    BeginReturn("FixedCinematicComplete");
+                return;
+            }
+
+            if (mode == 1)
+            {
+                TickSettledMode(victim, dt);
+                return;
+            }
+
+            TickFullFinalizationMode(victim, dt);
+        }
+
+        private void TickSettledMode(Agent victim, float dt)
+        {
+            _restPollCountdown -= dt;
+            if (_restPollCountdown > 0f)
+                return;
+            _restPollCountdown = RestPollInterval;
+
+            Vec3 position;
+            try { position = GetVisualPosition(victim); }
+            catch
+            {
+                BeginReturn("SettledVictimUnavailable");
+                return;
+            }
+
+            if (_lastRestPositionValid)
+            {
+                float movement = (position - _lastRestPosition).Length;
+                float threshold = Clamp(Settings.Instance?.SettledMotionThreshold ?? 0.025f, 0.002f, 0.20f);
+                if (movement <= threshold)
+                    _settledElapsed += RestPollInterval;
+                else
+                    _settledElapsed = 0f;
+            }
+
+            _lastRestPosition = position;
+            _lastRestPositionValid = true;
+
+            float hold = Clamp(Settings.Instance?.SettledHoldTime ?? 0.5f, 0.1f, 3f);
+            if (_cinematicElapsed >= 0.25f && _settledElapsed >= hold)
+            {
+                BeginReturn("CorpseSettled");
+                return;
+            }
+
+            if (_cinematicElapsed >= 12f)
+                BeginReturn("SettledModeFailsafe");
+        }
+
+        private void TickFullFinalizationMode(Agent victim, float dt)
+        {
+            float timeout = Clamp(Settings.Instance?.FullCinematicTimeout ?? 30f, 5f, 60f);
+            if (_cinematicElapsed >= timeout)
+            {
+                BeginReturn("FullModeFailsafe");
+                return;
+            }
+
+            _restPollCountdown -= dt;
+            if (_restPollCountdown > 0f)
+                return;
+            _restPollCountdown = RestPollInterval;
+
+            try
+            {
+                Skeleton skeleton = victim.AgentVisuals?.GetSkeleton();
+                if (skeleton == null)
+                    return;
+
+                RagdollState state = skeleton.GetCurrentRagdollState();
+                if (state == RagdollState.ActiveFirstTick || state == RagdollState.Active)
+                {
+                    _cinematicSawActiveRagdoll = true;
+                    return;
+                }
+
+                // Extreme Ragdoll v1.3.6 uses NeedsDeactivation immediately before
+                // EndRagdollAsCorpse(). Observe the same boundary without mutating the corpse.
+                if (state == RagdollState.NeedsDeactivation)
+                {
+                    BeginReturn("NativeCorpseFinalizationBoundary");
+                    return;
+                }
+
+                // Extreme Ragdoll and Bannerlord may finalize between our bounded 10 Hz samples.
+                // Disabled after an observed active ragdoll is the completed side of that crossing.
+                if (state == RagdollState.Disabled &&
+                    (_cinematicSawActiveRagdoll || _cinematicElapsed >= 0.75f))
+                {
+                    BeginReturn("NativeCorpseFinalizedBetweenSamples");
+                }
+            }
+            catch
+            {
+                // A transient missing visual/skeleton is not treated as finalization. The bounded
+                // timeout handles pathological cases without touching unrelated agents.
+            }
+        }
+
+        private void BeginReturn(string reason)
+        {
+            if (_state == State.Idle || _state == State.Returning)
+                return;
+
+            ResetTrackedVictim();
+            HideCrosshair();
+            _missile = null;
+            _missileIndex = -1;
+            _cinematicVictim = null;
+            RemoveOwnTimeRequest();
+
+            if (_cameraFrameValid)
+            {
+                _returnStartFrame = _cameraFrame;
+                _returnElapsed = 0f;
+                _releaseCameraAfterOverride = false;
+                _state = State.Returning;
+                Log("Return flight started: " + reason + ".");
+            }
+            else
+            {
+                _state = State.Idle;
+                Log("Returned without custom camera: " + reason + ".");
+            }
+        }
+
+        private void TickReturnDisplay(float dt)
+        {
+            Agent player = Mission?.MainAgent;
+            if (player == null)
+            {
+                ResetAll(false);
+                return;
+            }
+
+            float duration = Clamp(Settings.Instance?.ReturnDuration ?? 0.32f, 0.08f, 2f);
+            _returnElapsed += dt;
+            float t = Clamp(_returnElapsed / duration, 0f, 1f);
+            float eased = SmoothStep(t);
+
+            MatrixFrame target = BuildReturnTargetFrame(player);
+            MatrixFrame blended = BlendFrames(_returnStartFrame, target, eased);
+            SetMissionCamera(blended);
+
+            if (t >= 1f)
+            {
+                // Release only after UpdateOverridenCamera has submitted this final target frame.
+                // Otherwise MissionScreen can resume native ownership one frame too early.
+                _releaseCustomCameraNextDisplay = true;
+            }
+        }
+
+        private void CaptureReturnPose(Agent player)
+        {
+            if (Mission == null || player == null)
+                return;
+
+            MatrixFrame frame;
