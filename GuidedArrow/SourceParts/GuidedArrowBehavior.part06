@@ -1,0 +1,210 @@
+                Mission.SetCameraFrame(ref frame, 1f);
+            }
+            catch (Exception ex)
+            {
+                Log("Camera frame submission failed: " + ex.GetType().Name);
+            }
+        }
+
+        private MissionScreen ResolveMissionScreen()
+        {
+            try
+            {
+                if (MissionScreen != null)
+                    return MissionScreen;
+                return ScreenManager.TopScreen as MissionScreen;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void AcquireCustomCameraOwnership()
+        {
+            MissionScreen screen = ResolveMissionScreen();
+            if (screen == null)
+            {
+                if (!_cameraOwnershipFailureLogged)
+                {
+                    _cameraOwnershipFailureLogged = true;
+                    Log("Camera ownership unavailable: active MissionScreen not found.");
+                }
+                return;
+            }
+
+            EnsureCustomCameraOwnership(screen);
+        }
+
+        private void EnsureCustomCameraOwnership(MissionScreen screen)
+        {
+            if (screen == null)
+                return;
+
+            if (!_ownsCustomCamera)
+            {
+                _previousCustomCamera = screen.CustomCamera;
+                if (_ownedCustomCamera == null)
+                    _ownedCustomCamera = Camera.CreateCamera();
+
+                Camera source = _previousCustomCamera ?? screen.CombatCamera;
+                if (source != null)
+                    _ownedCustomCamera.FillParametersFrom(source);
+
+                _ownsCustomCamera = true;
+                _cameraOwnershipFailureLogged = false;
+                Log("Camera ownership acquired through MissionScreen.CustomCamera.");
+            }
+
+            if (!ReferenceEquals(screen.CustomCamera, _ownedCustomCamera))
+                screen.CustomCamera = _ownedCustomCamera;
+        }
+
+        private void ReleaseCustomCameraOwnership(string reason)
+        {
+            if (!_ownsCustomCamera)
+                return;
+
+            try
+            {
+                MissionScreen screen = ResolveMissionScreen();
+                if (screen != null && ReferenceEquals(screen.CustomCamera, _ownedCustomCamera))
+                    screen.CustomCamera = _previousCustomCamera;
+            }
+            catch { }
+
+            _ownsCustomCamera = false;
+            _previousCustomCamera = null;
+            Log("Camera ownership released: " + reason + ".");
+        }
+
+        private void SetOwnTimeSpeed(float requested)
+        {
+            if (Mission == null)
+                return;
+
+            float speed = Clamp(requested, SpeedSteps[0], SpeedSteps[SpeedSteps.Length - 1]);
+            if (_timeRequestActive && Math.Abs(speed - _requestedSpeed) < 0.0001f)
+                return;
+
+            RemoveOwnTimeRequest();
+            try
+            {
+                Mission.AddTimeSpeedRequest(new Mission.TimeSpeedRequest(speed, TimeRequestId));
+                _timeRequestActive = true;
+                _requestedSpeed = speed;
+            }
+            catch
+            {
+                _timeRequestActive = false;
+                _requestedSpeed = 1f;
+            }
+        }
+
+        private void RemoveOwnTimeRequest()
+        {
+            // Always issue the idempotent removal when a mission exists. This repairs local state if
+            // an earlier engine call succeeded but our bookkeeping was interrupted by an exception.
+            if (Mission != null)
+            {
+                try { Mission.RemoveTimeSpeedRequest(TimeRequestId); }
+                catch { }
+            }
+            _timeRequestActive = false;
+            _requestedSpeed = 1f;
+        }
+
+        private void StepTimeSpeed(int direction)
+        {
+            float current = _timeRequestActive ? _requestedSpeed : 1f;
+            int nearest = 0;
+            float best = float.MaxValue;
+            for (int i = 0; i < SpeedSteps.Length; i++)
+            {
+                float d = Math.Abs(SpeedSteps[i] - current);
+                if (d < best)
+                {
+                    best = d;
+                    nearest = i;
+                }
+            }
+
+            int next = nearest + direction;
+            if (next < 0) next = 0;
+            if (next >= SpeedSteps.Length) next = SpeedSteps.Length - 1;
+            SetOwnTimeSpeed(SpeedSteps[next]);
+        }
+
+        private void ResetAll(bool behaviorRemoving)
+        {
+            ResetTrackedVictim();
+            RemoveOwnTimeRequest();
+            HideCrosshair();
+            CleanupTrackedMissiles(true);
+            _pendingShotSeeds.Clear();
+            _preShotMissileIndices.Clear();
+            _cinematicVictim = null;
+            _cinematicArrowEntity = null;
+            _state = State.Idle;
+            _cameraFrameValid = false;
+            _releaseCameraAfterOverride = false;
+            _releaseCustomCameraNextDisplay = false;
+            ReleaseCustomCameraOwnership(behaviorRemoving ? "BehaviorRemoved" : "Reset");
+            _pendingAcquireElapsed = 0f;
+            _guidanceRealElapsed = 0f;
+            _impactConfirmElapsed = 0f;
+            _stoppedMissileElapsed = 0f;
+            _pendingYawInput = 0f;
+            _pendingPitchInput = 0f;
+            _cinematicElapsed = 0f;
+            _returnElapsed = 0f;
+            _returnDurationOverride = 0f;
+            _restPollCountdown = 0f;
+            _lastRestPositionValid = false;
+            _settledElapsed = 0f;
+            _cinematicSawActiveRagdoll = false;
+
+            if (behaviorRemoving)
+                _requestedSpeed = 1f;
+        }
+
+        private static Vec3 GetVisualPosition(Agent agent)
+        {
+            if (agent == null)
+                return Vec3.Zero;
+
+            try
+            {
+                MBAgentVisuals visuals = agent.AgentVisuals;
+                if (visuals != null)
+                {
+                    Vec3 position = visuals.GetGlobalFrame().origin;
+                    if (IsFinite(position))
+                        return position;
+                }
+            }
+            catch { }
+
+            try { return agent.Position; }
+            catch { return Vec3.Zero; }
+        }
+
+        private static bool IsArrowOrBolt(Mission.Missile missile)
+        {
+            if (missile == null)
+                return false;
+
+            // Weapon metadata moved slightly across Bannerlord versions. This is called only during
+            // the bounded acquisition window for a player shot, so a cached-free reflective probe is
+            // preferable to a version-specific hard dependency and has no steady-state cost.
+            try
+            {
+                object weapon = missile.Weapon;
+                string text = ExtractWeaponClassName(weapon);
+                if (!string.IsNullOrEmpty(text))
+                    return text.IndexOf("Arrow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           text.IndexOf("Bolt", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { }
+            return false;
+        }
