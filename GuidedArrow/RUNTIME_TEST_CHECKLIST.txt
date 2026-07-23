@@ -1,0 +1,12 @@
+Guided Arrow v1.0.3 runtime checklist
+
+1. Delete the previous GuidedArrow module folder before installation.
+2. Camera Mode 0: verify the view points along the arrow's flight path and does not look down.
+3. Camera Mode 1: verify distance and elevation remain locked while steering horizontally and vertically.
+4. Verify mouse-right turns right and mouse-left turns left.
+5. Toggle Show Crosshair and verify it appears only during active guidance.
+6. Verify Escape/right mouse removes the crosshair and restores the player camera.
+7. Verify terrain, shield and nonlethal hits restore normal mission speed automatically.
+8. Verify lethal hits enter the selected kill cinematic and then return.
+9. Verify RTS Camera state is restored after guidance.
+10. Verify mission exit leaves no custom camera, UI layer or time-speed request active.
