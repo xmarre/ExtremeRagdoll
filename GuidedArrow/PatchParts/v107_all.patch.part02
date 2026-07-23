@@ -1,0 +1,85 @@
+ 
+@@ -545,7 +561,7 @@ namespace GuidedArrow
+                 return;
+             }
+ 
+-            _guidanceRealElapsed += dt;
++            _guidanceRealElapsed += realDt;
+             float maximum = Clamp(Settings.Instance?.MaximumGuidanceTime ?? 35f, 5f, 120f);
+             if (_guidanceRealElapsed >= maximum)
+             {
+@@ -584,7 +600,7 @@ namespace GuidedArrow
+ 
+             if (movingCount <= 0f)
+             {
+-                _stoppedMissileElapsed += dt;
++                _stoppedMissileElapsed += realDt;
+                 if (_stoppedMissileElapsed >= StoppedMissileReturnDelay)
+                 {
+                     BeginReturn("SwarmStoppedWithoutImpactCallback", true);
+@@ -596,6 +612,7 @@ namespace GuidedArrow
+                 _stoppedMissileElapsed = 0f;
+             }
+ 
++            UpdateGuidanceTimeControl(position, realDt);
+             _lastMissileDirection = forward;
+             MatrixFrame desiredFrame = BuildProjectileCameraFrame(position, forward);
+             SetMissionCamera(desiredFrame);
+@@ -895,7 +912,7 @@ namespace GuidedArrow
+ 
+         private void ApplyFullDetailVisual(TrackedMissile tracked)
+         {
+-            if (tracked == null || !(Settings.Instance?.UseFullDetailProjectileModels ?? true) || Mission?.Scene == null)
++            if (tracked == null || !(Settings.Instance?.UseFullDetailProjectileModels ?? true))
+                 return;
+             try
+             {
+@@ -909,18 +926,18 @@ namespace GuidedArrow
+                 if (full == null || !full.IsValid)
+                     return;
+ 
+-                GameEntity visualEntity = GameEntity.CreateEmpty(Mission.Scene, true);
+-                if (visualEntity == null)
++                tracked.NativeEntity = nativeEntity;
++                CaptureAndRemoveNativeMeshes(nativeEntity, tracked.RemovedNativeMeshes);
++                if (tracked.RemovedNativeMeshes.Count == 0)
++                {
++                    tracked.NativeEntity = null;
++                    Log("Full-detail replacement skipped because no native missile meshes were found for #" + tracked.Index + ".");
+                     return;
+-                visualEntity.AddMultiMesh(full, true);
++                }
+ 
+-                tracked.NativeEntity = nativeEntity;
+-                tracked.VisualEntity = visualEntity;
++                nativeEntity.AddMultiMesh(full, true);
+                 tracked.FullDetailMesh = full;
+-                UpdateFullDetailVisual(tracked);
+-                nativeEntity.SetVisibilityExcludeParents(false);
+-                tracked.NativeVisibilitySuppressed = true;
+-                Log("Replaced simplified missile visual with full-detail mesh '" + meshName + "' for #" + tracked.Index + ".");
++                Log("Replaced " + CountRemovedNativeMeshes(tracked) + " native missile mesh component(s) with full-detail mesh '" + meshName + "' for #" + tracked.Index + ".");
+             }
+             catch (Exception ex)
+             {
+@@ -929,72 +946,91 @@ namespace GuidedArrow
+             }
+         }
+ 
+-        private void UpdateFullDetailVisuals()
++        private static void CaptureAndRemoveNativeMeshes(GameEntity entity, List<RemovedNativeMeshSet> removedSets)
+         {
+-            for (int i = _trackedMissiles.Count - 1; i >= 0; i--)
+-                UpdateFullDetailVisual(_trackedMissiles[i]);
+-        }
+-
+-        private void UpdateFullDetailVisual(TrackedMissile tracked)
+-        {
+-            if (tracked?.VisualEntity == null || tracked.Missile == null)
++            if (entity == null || removedSets == null)
+                 return;
+-            try
++
++            int componentCount = 0;
++            try { componentCount = entity.MultiMeshComponentCount; }
++            catch { componentCount = 0; }
