@@ -18,6 +18,24 @@ jobs:
           if (-not (Test-Path '.tmp/guided-arrow-v101-src.b64')) { throw 'Missing source payload' }
           [IO.File]::WriteAllBytes('guided-arrow-v101-src.tar.gz', [Convert]::FromBase64String((Get-Content -Raw '.tmp/guided-arrow-v101-src.b64')))
           tar -xzf guided-arrow-v101-src.tar.gz
+      - name: Add mission-view reference
+        shell: pwsh
+        run: |
+          $path = 'GuidedArrow/Source/GuidedArrow.csproj'
+          $text = [IO.File]::ReadAllText($path)
+          $text = $text.Replace(
+            '    <PackageReference Include="Bannerlord.ReferenceAssemblies.Core" Version="1.3.15.110062" />',
+            "    <PackageReference Include=\"Bannerlord.ReferenceAssemblies.Core\" Version=\"1.3.15.110062\" />`r`n    <PackageReference Include=\"Bannerlord.ReferenceAssemblies.Native\" Version=\"1.3.15.110062\" PrivateAssets=\"All\" />")
+          $reference = @'
+  <ItemGroup>
+    <Reference Include="TaleWorlds.MountAndBlade.View">
+      <HintPath>$(NuGetPackageRoot)bannerlord.referenceassemblies.native\1.3.15.110062\ref\net472\TaleWorlds.MountAndBlade.View.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+'@
+          $text = $text.Replace('</Project>', $reference + '</Project>')
+          [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
