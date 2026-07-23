@@ -1,0 +1,86 @@
+             _pendingShotSeeds.Clear();
+diff --git a/GuidedArrow/Source/Settings.cs b/GuidedArrow/Source/Settings.cs
+index 51c0f35..ed6e450 100644
+--- a/GuidedArrow/Source/Settings.cs
++++ b/GuidedArrow/Source/Settings.cs
+@@ -18,7 +18,7 @@ namespace GuidedArrow
+ 
+         [SettingPropertyGroup("General", GroupOrder = 0)]
+         [SettingPropertyFloatingInteger("Initial Guidance Time Speed", 0.05f, 1.0f, "0.00", Order = 1, RequireRestart = false,
+-            HintText = "Mission speed used when guidance starts. Q/E move through fixed speed steps from 0.05x to 1.00x.")]
++            HintText = "Legacy fixed guidance speed used only when Proximity Time Dilation is disabled. Q/E still move through fixed speed steps as a per-shot manual override.")]
+         public float InitialGuidanceTimeSpeed { get; set; } = 0.15f;
+ 
+         [SettingPropertyGroup("General", GroupOrder = 0)]
+@@ -36,6 +36,41 @@ namespace GuidedArrow
+             HintText = "Real-time failsafe duration before a missed projectile automatically returns the camera to the player.")]
+         public float MaximumGuidanceTime { get; set; } = 35f;
+ 
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyBool("Enable Proximity Time Dilation", Order = 5, RequireRestart = false,
++            HintText = "Starts guided shots at normal speed and progressively slows mission time as the guided swarm approaches the closest living enemy. Q/E activate a manual speed override for the remainder of the shot.")]
++        public bool EnableProximityTimeDilation { get; set; } = true;
++
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyFloatingInteger("Far / Launch Time Speed", 0.05f, 1.0f, "0.00", Order = 6, RequireRestart = false,
++            HintText = "Automatic time speed at launch, when no enemy is inside the slowdown radius, or at and beyond Slowdown Start Distance.")]
++        public float ProximityFarTimeSpeed { get; set; } = 1.0f;
++
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyFloatingInteger("Near Target Time Speed", 0.05f, 1.0f, "0.00", Order = 7, RequireRestart = false,
++            HintText = "Automatic time speed at and inside Full Slowdown Distance.")]
++        public float ProximityNearTimeSpeed { get; set; } = 0.10f;
++
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyFloatingInteger("Slowdown Start Distance", 5f, 150f, "0.0", Order = 8, RequireRestart = false,
++            HintText = "Distance in metres at which automatic slowdown begins. Farther enemies do not consume early-flight time.")]
++        public float ProximitySlowdownStartDistance { get; set; } = 45f;
++
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyFloatingInteger("Full Slowdown Distance", 0.5f, 30f, "0.0", Order = 9, RequireRestart = false,
++            HintText = "Distance in metres at which Near Target Time Speed is fully reached.")]
++        public float ProximityFullSlowdownDistance { get; set; } = 6f;
++
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyFloatingInteger("Enemy Scan Interval", 0.02f, 0.25f, "0.00", Order = 10, RequireRestart = false,
++            HintText = "Real-time interval between bounded proximity-map queries. The default is 0.05 seconds (20 queries per real second while guiding only).")]
++        public float ProximityScanInterval { get; set; } = 0.05f;
++
++        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
++        [SettingPropertyFloatingInteger("Time Response Rate", 1f, 30f, "0.0", Order = 11, RequireRestart = false,
++            HintText = "Exponential response rate for smooth speed changes. Higher values follow the distance curve faster; lower values ease more gradually.")]
++        public float ProximityTimeResponseRate { get; set; } = 12f;
++
+         [SettingPropertyGroup("Projectile Camera", GroupOrder = 1)]
+         [SettingPropertyInteger("Camera Mode", 0, 1, "0", Order = 10, RequireRestart = false,
+             HintText = "0 = First Person (camera travels as the arrow), 1 = Third Person (locked projectile-relative chase camera).")]
+@@ -125,6 +160,16 @@ namespace GuidedArrow
+             HintText = "Vertical angle of the orbiting camera around the embedded arrow and moving corpse.")]
+         public float CinematicElevationAngle { get; set; } = 18f;
+ 
++        [SettingPropertyGroup("Kill Cinematic", GroupOrder = 2)]
++        [SettingPropertyFloatingInteger("Adaptive Minimum Duration", 0.25f, 3f, "0.00", Order = 29, RequireRestart = false,
++            HintText = "Minimum real-time viewing duration for Modes 1 and 2. Prevents an already-static agent root or an early finalization state from snapping immediately back to the player.")]
++        public float AdaptiveCinematicMinimumDuration { get; set; } = 0.90f;
++
++        [SettingPropertyGroup("Kill Cinematic", GroupOrder = 2)]
++        [SettingPropertyFloatingInteger("Adaptive Maximum Duration", 1f, 8f, "0.00", Order = 30, RequireRestart = false,
++            HintText = "Hard real-time maximum for Modes 1 and 2. Mode 2 still observes native corpse finalization, but never holds the camera indefinitely waiting for a stationary corpse.")]
++        public float AdaptiveCinematicMaximumDuration { get; set; } = 3.25f;
++
+         [SettingPropertyGroup("Return Transition", GroupOrder = 3)]
+         [SettingPropertyFloatingInteger("Return Flight Duration", 0.08f, 2f, "0.00", Order = 30, RequireRestart = false,
+             HintText = "Duration of the eased camera flight back to the player. The camera travels back instead of teleporting.")]
+diff --git a/GuidedArrow/SubModule.xml b/GuidedArrow/SubModule.xml
+index c5d0813..0f45fb9 100644
+--- a/GuidedArrow/SubModule.xml
++++ b/GuidedArrow/SubModule.xml
+@@ -2,7 +2,7 @@
+ <Module>
+   <Name value="Guided Arrow" />
+   <Id value="GuidedArrow" />
+-  <Version value="v1.0.6" />
++  <Version value="v1.0.7" />
+   <DefaultModule value="false" />
+   <SingleplayerModule value="true" />
+   <MultiplayerModule value="false" />
