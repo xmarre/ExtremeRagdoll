@@ -1,0 +1,209 @@
+                        bestDistance = distance;
+                        best = _trackedMissiles[i];
+                    }
+                }
+                catch { }
+            }
+            return best;
+        }
+
+        private void RemoveTrackedMissile(TrackedMissile tracked, bool removeVisual)
+        {
+            if (tracked == null)
+                return;
+            if (removeVisual)
+                RemoveFullDetailVisual(tracked);
+            _trackedMissiles.Remove(tracked);
+            if (tracked.Index == _missileIndex)
+            {
+                _missile = _trackedMissiles.Count > 0 ? _trackedMissiles[0].Missile : null;
+                _missileIndex = _trackedMissiles.Count > 0 ? _trackedMissiles[0].Index : -1;
+            }
+        }
+
+        private void CleanupTrackedMissiles(bool removeVisuals)
+        {
+            if (removeVisuals)
+            {
+                for (int i = 0; i < _trackedMissiles.Count; i++)
+                    RemoveFullDetailVisual(_trackedMissiles[i]);
+            }
+            _trackedMissiles.Clear();
+            _missile = null;
+            _missileIndex = -1;
+        }
+
+        private bool TryGetSwarmCameraAnchor(out Vec3 position, out Vec3 forward, out float movingCount)
+        {
+            Vec3 positionSum = Vec3.Zero;
+            Vec3 directionSum = Vec3.Zero;
+            int validCount = 0;
+            movingCount = 0f;
+            for (int i = _trackedMissiles.Count - 1; i >= 0; i--)
+            {
+                TrackedMissile tracked = _trackedMissiles[i];
+                try
+                {
+                    Vec3 p = tracked.Missile.GetPosition();
+                    Vec3 v = tracked.Missile.GetVelocity();
+                    if (!IsFinite(p) || !IsFinite(v))
+                        continue;
+                    positionSum += p;
+                    if (v.LengthSquared > 0.0625f)
+                    {
+                        directionSum += NormalizeSafe(v, _lastMissileDirection);
+                        movingCount += 1f;
+                    }
+                    validCount++;
+                }
+                catch
+                {
+                    RemoveTrackedMissile(tracked, true);
+                }
+            }
+
+            if (validCount == 0)
+            {
+                position = Vec3.Zero;
+                forward = _lastMissileDirection;
+                return false;
+            }
+
+            position = positionSum / validCount;
+            forward = NormalizeSafe(directionSum, _lastMissileDirection);
+            return true;
+        }
+
+        private void ApplyFullDetailVisual(TrackedMissile tracked)
+        {
+            if (tracked == null || !(Settings.Instance?.UseFullDetailProjectileModels ?? true))
+                return;
+            try
+            {
+                GameEntity nativeEntity = tracked.Missile.Entity;
+                ItemObject item = tracked.Missile.Weapon.Item;
+                string meshName = item?.MultiMeshName;
+                if (nativeEntity == null || string.IsNullOrEmpty(meshName))
+                    return;
+
+                MetaMesh full = MetaMesh.GetCopy(meshName, false, true);
+                if (full == null || !full.IsValid)
+                    return;
+
+                tracked.NativeEntity = nativeEntity;
+                CaptureAndRemoveNativeMeshes(nativeEntity, tracked.RemovedNativeMeshes);
+                if (tracked.RemovedNativeMeshes.Count == 0)
+                {
+                    tracked.NativeEntity = null;
+                    Log("Full-detail replacement skipped because no native missile meshes were found for #" + tracked.Index + ".");
+                    return;
+                }
+
+                nativeEntity.AddMultiMesh(full, true);
+                tracked.FullDetailMesh = full;
+                Log("Replaced " + CountRemovedNativeMeshes(tracked) + " native missile mesh component(s) with full-detail mesh '" + meshName + "' for #" + tracked.Index + ".");
+            }
+            catch (Exception ex)
+            {
+                Log("Full-detail projectile replacement unavailable: " + ex.GetType().Name);
+                RemoveFullDetailVisual(tracked);
+            }
+        }
+
+        private static void CaptureAndRemoveNativeMeshes(GameEntity entity, List<RemovedNativeMeshSet> removedSets)
+        {
+            if (entity == null || removedSets == null)
+                return;
+
+            int componentCount = 0;
+            try { componentCount = entity.MultiMeshComponentCount; }
+            catch { componentCount = 0; }
+
+            if (componentCount > 0)
+            {
+                RemovedNativeMeshSet set = new RemovedNativeMeshSet { Entity = entity };
+                for (int i = 0; i < componentCount; i++)
+                {
+                    try
+                    {
+                        MetaMesh mesh = entity.GetMetaMesh(i);
+                        if (mesh != null && mesh.IsValid)
+                            set.Meshes.Add(mesh);
+                    }
+                    catch { }
+                }
+
+                for (int i = 0; i < set.Meshes.Count; i++)
+                {
+                    try { entity.RemoveMultiMesh(set.Meshes[i]); }
+                    catch { }
+                }
+
+                if (set.Meshes.Count > 0)
+                    removedSets.Add(set);
+            }
+
+            int childCount = 0;
+            try { childCount = entity.ChildCount; }
+            catch { childCount = 0; }
+            for (int i = 0; i < childCount; i++)
+            {
+                try { CaptureAndRemoveNativeMeshes(entity.GetChild(i), removedSets); }
+                catch { }
+            }
+        }
+
+        private static int CountRemovedNativeMeshes(TrackedMissile tracked)
+        {
+            int count = 0;
+            if (tracked == null)
+                return count;
+            for (int i = 0; i < tracked.RemovedNativeMeshes.Count; i++)
+                count += tracked.RemovedNativeMeshes[i].Meshes.Count;
+            return count;
+        }
+
+        private void UpdateFullDetailVisuals()
+        {
+            // The full-detail mesh now lives directly on Bannerlord's native missile entity.
+            // The engine therefore updates its position and orientation without a duplicate frame driver.
+        }
+
+        private void RemoveFullDetailVisual(TrackedMissile tracked)
+        {
+            if (tracked == null)
+                return;
+
+            try
+            {
+                if (tracked.NativeEntity != null && tracked.FullDetailMesh != null)
+                    tracked.NativeEntity.RemoveMultiMesh(tracked.FullDetailMesh);
+            }
+            catch { }
+
+            for (int setIndex = 0; setIndex < tracked.RemovedNativeMeshes.Count; setIndex++)
+            {
+                RemovedNativeMeshSet set = tracked.RemovedNativeMeshes[setIndex];
+                if (set?.Entity == null)
+                    continue;
+                for (int meshIndex = 0; meshIndex < set.Meshes.Count; meshIndex++)
+                {
+                    try { set.Entity.AddMultiMesh(set.Meshes[meshIndex], true); }
+                    catch { }
+                }
+            }
+
+            tracked.RemovedNativeMeshes.Clear();
+            tracked.FullDetailMesh = null;
+            tracked.NativeEntity = null;
+        }
+
+        private void UpdateImpactPendingCamera(Agent victim, float dt)
+        {
+            Vec3 focus = GetCinematicFocus(victim);
+            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
+            Vec3 side = NormalizeSafe(Cross(WorldUp, incoming), new Vec3(1f, 0f, 0f));
+            float distance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
+            Vec3 cameraPos = focus - incoming * distance + side * 0.75f + WorldUp * 0.55f;
+            ApplySmoothedCamera(MakeCameraFrame(cameraPos, NormalizeSafe(focus - cameraPos, incoming), WorldUp), dt, 18f, 20f);
+        }
