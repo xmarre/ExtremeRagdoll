@@ -33,6 +33,9 @@ jobs:
           $behavior = $behavior.Replace('return Path.Combine(docs, "Mount and Blade II Bannerlord", "Configs", "ModLogs", "GuidedArrow.log");', 'return System.IO.Path.Combine(docs, "Mount and Blade II Bannerlord", "Configs", "ModLogs", "GuidedArrow.log");')
           $behavior = $behavior.Replace('Directory.CreateDirectory(Path.GetDirectoryName(path));', 'Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));')
           [IO.File]::WriteAllText($behaviorPath, $behavior)
+      - name: Apply final lifecycle patch
+        shell: pwsh
+        run: python .tmp/patch_guided_arrow_v100.py
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
