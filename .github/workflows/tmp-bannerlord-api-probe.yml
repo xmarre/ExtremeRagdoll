@@ -19,9 +19,13 @@ jobs:
         shell: pwsh
         run: dotnet build ApiProbe/ApiProbe.csproj -c Release --no-restore --nologo
       - name: Run probe
+        continue-on-error: true
         shell: pwsh
-        run: '& ApiProbe/bin/Release/net472/ApiProbe.exe | Tee-Object -FilePath api-probe.txt'
+        run: |
+          & ApiProbe/bin/Release/net472/ApiProbe.exe *> api-probe.txt
+          Get-Content api-probe.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bannerlord-api-probe
           path: api-probe.txt
