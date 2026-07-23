@@ -1,0 +1,14 @@
+Guided Arrow v1.0.3 build report
+
+Target framework: .NET Framework 4.7.2
+Bannerlord references: 1.3.15.110062
+MCM reference: 5.12.1
+
+Changes under validation:
+- Correct Bannerlord camera-axis construction (-rotation.u is rendered forward).
+- First-person arrow camera.
+- Rigid third-person projectile-relative chase camera.
+- Optional Gauntlet crosshair layer.
+- Correct horizontal steering sign.
+
+Runtime testing remains required inside Bannerlord.
