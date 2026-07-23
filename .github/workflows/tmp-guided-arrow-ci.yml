@@ -15,8 +15,10 @@ jobs:
       - name: Materialize source
         shell: pwsh
         run: |
-          if (-not (Test-Path '.tmp/guided-arrow-src.b64')) { throw 'Missing staged source archive' }
-          [IO.File]::WriteAllBytes('guided-arrow-src.tar.gz', [Convert]::FromBase64String((Get-Content -Raw '.tmp/guided-arrow-src.b64')))
+          $raw = Get-Content -Raw '.github/workflows/tmp-guided-arrow-build.yml'
+          $match = [regex]::Match($raw, "@'\r?\n(?<b64>[A-Za-z0-9+/=]+)\r?\n'@")
+          if (-not $match.Success) { throw 'Embedded source archive not found' }
+          [IO.File]::WriteAllBytes('guided-arrow-src.tar.gz', [Convert]::FromBase64String($match.Groups['b64'].Value))
           tar -xzf guided-arrow-src.tar.gz
       - name: Restore
         shell: pwsh
