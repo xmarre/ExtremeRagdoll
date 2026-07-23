@@ -1,0 +1,94 @@
+using MCM.Abstractions.Attributes;
+using MCM.Abstractions.Attributes.v2;
+using MCM.Abstractions.Base.Global;
+
+namespace GuidedArrow
+{
+    public sealed class Settings : AttributeGlobalSettings<Settings>
+    {
+        public override string Id => "guided_arrow_v100";
+        public override string DisplayName => "Guided Arrow";
+        public override string FolderName => "GuidedArrow";
+        public override string FormatType => "json";
+
+        [SettingPropertyGroup("General", GroupOrder = 0)]
+        [SettingPropertyBool("Enable Guided Arrows", Order = 0, RequireRestart = false,
+            HintText = "Guide player-fired arrows and bolts with the mouse. Q slows time, E speeds it up, Esc or right mouse cancels guidance.")]
+        public bool Enabled { get; set; } = true;
+
+        [SettingPropertyGroup("General", GroupOrder = 0)]
+        [SettingPropertyFloatingInteger("Initial Guidance Time Speed", 0.05f, 1.0f, "0.00", Order = 1, RequireRestart = false,
+            HintText = "Legacy fixed guidance speed used only when Proximity Time Dilation is disabled. Q/E still move through fixed speed steps as a per-shot manual override.")]
+        public float InitialGuidanceTimeSpeed { get; set; } = 0.15f;
+
+        [SettingPropertyGroup("General", GroupOrder = 0)]
+        [SettingPropertyFloatingInteger("Minimum Turn Radius", 3f, 120f, "0.0", Order = 2, RequireRestart = false,
+            HintText = "Physical steering limit in metres. Lower values allow tighter curves; faster arrows still require proportionally more angular rate.")]
+        public float MinimumTurnRadius { get; set; } = 24f;
+
+        [SettingPropertyGroup("General", GroupOrder = 0)]
+        [SettingPropertyFloatingInteger("Mouse Steering Sensitivity", 0.10f, 4.0f, "0.00", Order = 3, RequireRestart = false,
+            HintText = "Direct mouse steering sensitivity. Input bends the current velocity only; there is no target-heading auto-centering or forward stabilization.")]
+        public float MouseSensitivity { get; set; } = 1.0f;
+
+        [SettingPropertyGroup("General", GroupOrder = 0)]
+        [SettingPropertyFloatingInteger("Maximum Guidance Time", 5f, 120f, "0.0", Order = 4, RequireRestart = false,
+            HintText = "Real-time failsafe duration before a missed projectile automatically returns the camera to the player.")]
+        public float MaximumGuidanceTime { get; set; } = 35f;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyBool("Enable Proximity Time Dilation", Order = 5, RequireRestart = false,
+            HintText = "Starts guided shots at normal speed and progressively slows mission time as the guided swarm approaches the closest living enemy. Q/E activate a manual speed override for the remainder of the shot.")]
+        public bool EnableProximityTimeDilation { get; set; } = true;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyFloatingInteger("Far / Launch Time Speed", 0.05f, 1.0f, "0.00", Order = 6, RequireRestart = false,
+            HintText = "Automatic time speed at launch, when no enemy is inside the slowdown radius, or at and beyond Slowdown Start Distance.")]
+        public float ProximityFarTimeSpeed { get; set; } = 1.0f;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyFloatingInteger("Near Target Time Speed", 0.05f, 1.0f, "0.00", Order = 7, RequireRestart = false,
+            HintText = "Automatic time speed at and inside Full Slowdown Distance.")]
+        public float ProximityNearTimeSpeed { get; set; } = 0.10f;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyFloatingInteger("Slowdown Start Distance", 5f, 150f, "0.0", Order = 8, RequireRestart = false,
+            HintText = "Distance in metres at which automatic slowdown begins. Farther enemies do not consume early-flight time.")]
+        public float ProximitySlowdownStartDistance { get; set; } = 45f;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyFloatingInteger("Full Slowdown Distance", 0.5f, 30f, "0.0", Order = 9, RequireRestart = false,
+            HintText = "Distance in metres at which Near Target Time Speed is fully reached.")]
+        public float ProximityFullSlowdownDistance { get; set; } = 6f;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyFloatingInteger("Enemy Scan Interval", 0.02f, 0.25f, "0.00", Order = 10, RequireRestart = false,
+            HintText = "Real-time interval between bounded proximity-map queries. The default is 0.05 seconds (20 queries per real second while guiding only).")]
+        public float ProximityScanInterval { get; set; } = 0.05f;
+
+        [SettingPropertyGroup("Proximity Time Dilation", GroupOrder = 1)]
+        [SettingPropertyFloatingInteger("Time Response Rate", 1f, 30f, "0.0", Order = 11, RequireRestart = false,
+            HintText = "Exponential response rate for smooth speed changes. Higher values follow the distance curve faster; lower values ease more gradually.")]
+        public float ProximityTimeResponseRate { get; set; } = 12f;
+
+        [SettingPropertyGroup("Projectile Camera", GroupOrder = 2)]
+        [SettingPropertyInteger("Camera Mode", 0, 1, "0", Order = 10, RequireRestart = false,
+            HintText = "0 = First Person (camera travels as the arrow), 1 = Third Person (locked projectile-relative chase camera).")]
+        public int ProjectileCameraMode { get; set; } = 1;
+
+        [SettingPropertyGroup("Projectile Camera", GroupOrder = 2)]
+        [SettingPropertyBool("Show Crosshair", Order = 11, RequireRestart = false,
+            HintText = "Shows a centered crosshair while actively guiding an arrow or bolt.")]
+        public bool ShowCrosshair { get; set; } = true;
+
+        [SettingPropertyGroup("Projectile Camera/First Person", GroupOrder = 2)]
+        [SettingPropertyFloatingInteger("Rear Offset", 0.01f, 1.50f, "0.00", Order = 12, RequireRestart = false,
+            HintText = "Places the first-person camera this far behind the projectile while looking exactly along its flight path.")]
+        public float FirstPersonRearOffset { get; set; } = 0.12f;
+
+        [SettingPropertyGroup("Projectile Camera/First Person", GroupOrder = 2)]
+        [SettingPropertyFloatingInteger("Vertical Offset", -0.50f, 0.50f, "0.00", Order = 13, RequireRestart = false,
+            HintText = "Small vertical offset in the arrow's local frame. Zero gives a true arrow-eye view.")]
+        public float FirstPersonVerticalOffset { get; set; } = 0f;
+
+        [SettingPropertyGroup("Projectile Camera/Third Person", GroupOrder = 3)]
