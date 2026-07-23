@@ -1,17 +1,23 @@
             _impactConfirmElapsed = 0f;
             _stoppedMissileElapsed = 0f;
 
-            // Terrain, shield and other victimless impacts are definite misses: start the fast
-            // camera return immediately instead of holding on the arrow in the ground.
+            // A partial split-arrow impact removes only that missile. Remaining arrows keep their
+            // shared guidance and camera until the swarm is exhausted or one of them confirms a kill.
             if (victim == null)
             {
-                BeginReturn("MissedImpact", true);
+                if (_trackedMissiles.Count > 0)
+                {
+                    UpdateCrosshairVisibility();
+                    Log("One swarm missile missed; " + _trackedMissiles.Count + " remain guided.");
+                    return;
+                }
+
+                HideCrosshair();
+                BeginReturn("SwarmMissed", true);
                 return;
             }
 
             TrackHitVictim(victim);
-            _state = State.ImpactPending;
-
             try
             {
                 float health = victim.Health;
@@ -23,7 +29,17 @@
             }
             catch { }
 
-            Log("Guided swarm impact awaiting one-frame kill confirmation.");
+            if (_trackedMissiles.Count > 0)
+            {
+                _state = State.Guiding;
+                UpdateCrosshairVisibility();
+                Log("One swarm missile hit without an immediate kill; remaining swarm continues.");
+                return;
+            }
+
+            HideCrosshair();
+            _state = State.ImpactPending;
+            Log("Final swarm impact awaiting one-frame kill confirmation.");
         }
 
         public override void OnMissileRemoved(int missileIndex)
@@ -34,7 +50,19 @@
 
             RemoveTrackedMissile(tracked, true);
             if (_state == State.Guiding && _trackedMissiles.Count == 0)
-                BeginReturn("SwarmRemovedWithoutImpact", true);
+            {
+                if (_pendingHitVictims.Count > 0)
+                {
+                    HideCrosshair();
+                    _impactConfirmElapsed = 0f;
+                    _state = State.ImpactPending;
+                    Log("Swarm exhausted; awaiting final kill confirmation.");
+                }
+                else
+                {
+                    BeginReturn("SwarmRemovedWithoutImpact", true);
+                }
+            }
         }
 
         public override void OnEarlyAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow blow)
@@ -52,8 +80,7 @@
             if (affectedAgent == null)
                 return;
 
-            if (ReferenceEquals(affectedAgent, _hitVictim))
-                ResetTrackedVictim();
+            RemoveTrackedVictim(affectedAgent);
 
             if (ReferenceEquals(affectedAgent, _cinematicVictim) && _state == State.Cinematic)
                 BeginReturn("CinematicVictimDeleted");
