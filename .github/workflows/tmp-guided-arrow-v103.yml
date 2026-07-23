@@ -15,11 +15,13 @@ jobs:
       - name: Materialize source
         shell: pwsh
         run: |
-          if (-not (Test-Path '.tmp/guided-arrow-v103-src.b64')) { throw 'Missing source payload' }
-          $raw = (Get-Content -Raw '.tmp/guided-arrow-v103-src.b64').Trim()
-          [IO.File]::WriteAllBytes('guided-arrow-v103-src.tar.gz', [Convert]::FromBase64String($raw))
+          $archive = '.tmp/guided-arrow-v103-src.tar.gz'
+          if (-not (Test-Path $archive)) { throw 'Missing source archive' }
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '9d6123c2c04482f443a107361784925f7f7c05bc502e4a08a6e7de8551477268'
+          if ($actual -ne $expected) { throw "Source archive hash mismatch: $actual" }
           New-Item -ItemType Directory -Force GuidedArrow | Out-Null
-          python -c "import tarfile; tarfile.open('guided-arrow-v103-src.tar.gz','r:gz').extractall('GuidedArrow')"
+          python -c "import tarfile; tarfile.open(r'.tmp/guided-arrow-v103-src.tar.gz','r:gz').extractall('GuidedArrow')"
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
