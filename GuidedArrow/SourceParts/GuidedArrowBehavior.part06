@@ -1,3 +1,54 @@
+        }
+
+        private MatrixFrame BuildReturnTargetFrame(Agent player)
+        {
+            Vec3 forward = NormalizeSafe(player.LookDirection, new Vec3(0f, 1f, 0f));
+            Vec3 right = NormalizeSafe(Cross(forward, WorldUp), new Vec3(1f, 0f, 0f));
+            Vec3 up = NormalizeSafe(Cross(right, forward), WorldUp);
+            Vec3 anchor = player.Position + WorldUp * 1.45f;
+            Vec3 position = anchor + right * _returnLocalRight + forward * _returnLocalForward + up * _returnLocalUp;
+
+            Vec3 cameraForward = FromLocal(_returnViewForwardLocal, right, forward, up);
+            Vec3 cameraUp = FromLocal(_returnViewUpLocal, right, forward, up);
+            return MakeCameraFrame(position, cameraForward, cameraUp);
+        }
+
+        private void ApplySmoothedCamera(MatrixFrame desired, float dt, float positionRate, float rotationRate)
+        {
+            if (!_cameraFrameValid)
+            {
+                _cameraFrame = desired;
+                _cameraFrameValid = true;
+                SetMissionCamera(_cameraFrame);
+                return;
+            }
+
+            float posT = 1f - (float)Math.Exp(-positionRate * Math.Max(0f, dt));
+            float rotT = 1f - (float)Math.Exp(-rotationRate * Math.Max(0f, dt));
+            Vec3 position = Lerp(_cameraFrame.origin, desired.origin, posT);
+            Vec3 forward = NormalizeSafe(Lerp(-_cameraFrame.rotation.u, -desired.rotation.u, rotT), -desired.rotation.u);
+            Vec3 up = NormalizeSafe(Lerp(_cameraFrame.rotation.f, desired.rotation.f, rotT), desired.rotation.f);
+            _cameraFrame = MakeCameraFrame(position, forward, up);
+            SetMissionCamera(_cameraFrame);
+        }
+
+        private void SetMissionCamera(MatrixFrame frame)
+        {
+            if (Mission == null)
+                return;
+            _cameraFrame = frame;
+            _cameraFrameValid = true;
+            try
+            {
+                MissionScreen screen = ResolveMissionScreen();
+                if (screen != null)
+                {
+                    EnsureCustomCameraOwnership(screen);
+                    if (_ownedCustomCamera != null)
+                        _ownedCustomCamera.Frame = frame;
+                    if (screen.CombatCamera != null)
+                        screen.CombatCamera.Frame = frame;
+                }
                 Mission.SetCameraFrame(ref frame, 1f);
             }
             catch (Exception ex)
@@ -157,54 +208,3 @@
             _pendingYawInput = 0f;
             _pendingPitchInput = 0f;
             _cinematicElapsed = 0f;
-            _returnElapsed = 0f;
-            _returnDurationOverride = 0f;
-            _restPollCountdown = 0f;
-            _lastRestPositionValid = false;
-            _settledElapsed = 0f;
-            _cinematicSawActiveRagdoll = false;
-
-            if (behaviorRemoving)
-                _requestedSpeed = 1f;
-        }
-
-        private static Vec3 GetVisualPosition(Agent agent)
-        {
-            if (agent == null)
-                return Vec3.Zero;
-
-            try
-            {
-                MBAgentVisuals visuals = agent.AgentVisuals;
-                if (visuals != null)
-                {
-                    Vec3 position = visuals.GetGlobalFrame().origin;
-                    if (IsFinite(position))
-                        return position;
-                }
-            }
-            catch { }
-
-            try { return agent.Position; }
-            catch { return Vec3.Zero; }
-        }
-
-        private static bool IsArrowOrBolt(Mission.Missile missile)
-        {
-            if (missile == null)
-                return false;
-
-            // Weapon metadata moved slightly across Bannerlord versions. This is called only during
-            // the bounded acquisition window for a player shot, so a cached-free reflective probe is
-            // preferable to a version-specific hard dependency and has no steady-state cost.
-            try
-            {
-                object weapon = missile.Weapon;
-                string text = ExtractWeaponClassName(weapon);
-                if (!string.IsNullOrEmpty(text))
-                    return text.IndexOf("Arrow", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                           text.IndexOf("Bolt", StringComparison.OrdinalIgnoreCase) >= 0;
-            }
-            catch { }
-            return false;
-        }
