@@ -1,0 +1,209 @@
+
+        private Vec3 GetCinematicFocus(Agent victim)
+        {
+            Vec3 corpseCenter = GetRagdollVisualPosition(victim);
+            if (TryGetBoneWorldPosition(victim, _cinematicCollisionBoneIndex, out Vec3 hitBone))
+                return Lerp(corpseCenter, hitBone, 0.72f);
+
+            GameEntity arrowEntity = _cinematicArrowEntity;
+            if (arrowEntity != null)
+            {
+                try
+                {
+                    Vec3 arrowPosition = arrowEntity.GlobalPosition;
+                    if (IsFinite(arrowPosition) && (arrowPosition - corpseCenter).LengthSquared <= 25f)
+                        return Lerp(corpseCenter, arrowPosition, 0.60f);
+                }
+                catch { }
+            }
+            return corpseCenter;
+        }
+
+        private void ResetCinematicBoneAnchor()
+        {
+            _cinematicCollisionBoneIndex = -1;
+        }
+
+        private static Vec3 GetRagdollVisualPosition(Agent victim)
+        {
+            if (victim == null)
+                return Vec3.Zero;
+            int spineIndex = GetMonsterBoneIndex(victim, "SpineUpperBoneIndex");
+            int pelvisIndex = GetMonsterBoneIndex(victim, "PelvisBoneIndex");
+            bool hasSpine = TryGetBoneWorldPosition(victim, spineIndex, out Vec3 spine);
+            bool hasPelvis = TryGetBoneWorldPosition(victim, pelvisIndex, out Vec3 pelvis);
+            if (hasSpine && hasPelvis)
+                return Lerp(pelvis, spine, 0.58f);
+            if (hasSpine)
+                return spine;
+            if (hasPelvis)
+                return pelvis;
+            return GetVisualPosition(victim) + WorldUp * 0.95f;
+        }
+
+        private static int GetMonsterBoneIndex(Agent victim, string propertyName)
+        {
+            try
+            {
+                object monster = victim?.Monster;
+                PropertyInfo property = monster?.GetType().GetProperty(propertyName, BindingFlags.Instance | BindingFlags.Public);
+                object value = property?.GetValue(monster, null);
+                if (value != null)
+                    return Convert.ToInt32(value);
+            }
+            catch { }
+            return -1;
+        }
+
+        private static bool TryGetBoneWorldPosition(Agent victim, int boneIndex, out Vec3 position)
+        {
+            position = Vec3.Zero;
+            if (victim == null || boneIndex < 0)
+                return false;
+            try
+            {
+                MBAgentVisuals visuals = victim.AgentVisuals;
+                Skeleton skeleton = visuals?.GetSkeleton();
+                if (visuals == null || skeleton == null)
+                    return false;
+                MethodInfo[] methods = skeleton.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public);
+                for (int i = 0; i < methods.Length; i++)
+                {
+                    MethodInfo method = methods[i];
+                    if (method.Name != "GetBoneEntitialFrame" && method.Name != "GetBoneEntitialFrameWithIndex")
+                        continue;
+                    ParameterInfo[] parameters = method.GetParameters();
+                    if (parameters.Length != 1)
+                        continue;
+                    object argument = Convert.ChangeType(boneIndex, parameters[0].ParameterType);
+                    object result = method.Invoke(skeleton, new[] { argument });
+                    if (!(result is MatrixFrame localFrame))
+                        continue;
+                    MatrixFrame rootFrame = visuals.GetGlobalFrame();
+                    position = rootFrame.origin
+                        + rootFrame.rotation.s * localFrame.origin.x
+                        + rootFrame.rotation.f * localFrame.origin.y
+                        + rootFrame.rotation.u * localFrame.origin.z;
+                    return IsFinite(position);
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void TrackHitVictim(Agent victim)
+        {
+            if (victim == null)
+                return;
+
+            _hitVictim = victim;
+            if (_pendingHitVictims.Contains(victim))
+                return;
+
+            try
+            {
+                victim.OnAgentHealthChanged += OnHitVictimHealthChanged;
+                _pendingHitVictims.Add(victim);
+            }
+            catch { }
+        }
+
+        private void RemoveTrackedVictim(Agent victim)
+        {
+            if (victim == null)
+                return;
+            if (_pendingHitVictims.Remove(victim))
+            {
+                try { victim.OnAgentHealthChanged -= OnHitVictimHealthChanged; }
+                catch { }
+            }
+            if (ReferenceEquals(_hitVictim, victim))
+                _hitVictim = _pendingHitVictims.Count > 0 ? _pendingHitVictims[_pendingHitVictims.Count - 1] : null;
+        }
+
+        private void ResetTrackedVictim()
+        {
+            for (int i = 0; i < _pendingHitVictims.Count; i++)
+            {
+                Agent victim = _pendingHitVictims[i];
+                try { if (victim != null) victim.OnAgentHealthChanged -= OnHitVictimHealthChanged; }
+                catch { }
+            }
+            _pendingHitVictims.Clear();
+            _hitVictim = null;
+        }
+
+        private void OnHitVictimHealthChanged(Agent agent, float oldHealth, float newHealth)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || agent == null || !_pendingHitVictims.Contains(agent))
+                return;
+            if (!IsFinite(oldHealth) || !IsFinite(newHealth) || oldHealth <= 0f)
+                return;
+            if (newHealth <= 0f)
+                BeginKillCinematic(agent, "OnAgentHealthChanged");
+        }
+
+        private void ConfirmRemovalKillFallback(Agent affectedAgent, Agent affectorAgent, AgentState state, string source)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || affectedAgent == null || !_pendingHitVictims.Contains(affectedAgent))
+                return;
+            if (state != AgentState.Killed)
+                return;
+            if (Mission != null && affectorAgent != null && affectorAgent != Mission.MainAgent)
+                return;
+
+            BeginKillCinematic(affectedAgent, source);
+        }
+
+        private void BeginKillCinematic(Agent victim, string source)
+        {
+            if ((_state != State.Guiding && _state != State.ImpactPending) || victim == null)
+                return;
+
+            ResetTrackedVictim();
+            HideCrosshair();
+            _cinematicVictim = victim;
+            CleanupTrackedMissiles(true);
+            _cinematicElapsed = 0f;
+            _cinematicLastTimestamp = Stopwatch.GetTimestamp();
+            _impactConfirmElapsed = 0f;
+            _restPollCountdown = 0f;
+            _lastRestPositionValid = false;
+            _settledElapsed = 0f;
+            _cinematicSawActiveRagdoll = false;
+            _returnDurationOverride = 0f;
+            if (!IsFinite(_impactDirection) || _impactDirection.LengthSquared <= Tiny)
+                _impactDirection = _lastMissileDirection;
+            ResetGuidanceTimeControl();
+            SetOwnTimeSpeed(Settings.Instance?.CinematicTimeSpeed ?? 0.10f);
+            _state = State.Cinematic;
+            Log("Kill cinematic started via " + source + ".");
+        }
+
+        private void TickCinematicDisplay(float dt)
+        {
+            Agent victim = _cinematicVictim;
+            if (victim == null)
+            {
+                BeginReturn("NoCinematicVictim");
+                return;
+            }
+
+            float realDt = GetCinematicRealDelta(dt);
+            _cinematicElapsed += realDt;
+
+            Vec3 center;
+            try { center = GetCinematicFocus(victim); }
+            catch
+            {
+                BeginReturn("VictimPositionUnavailable");
+                return;
+            }
+
+            Vec3 incoming = NormalizeSafe(_impactDirection, _lastMissileDirection);
+            Vec3 horizontalIncoming = incoming - WorldUp * Dot(incoming, WorldUp);
+            horizontalIncoming = NormalizeSafe(horizontalIncoming, new Vec3(0f, 1f, 0f));
+            float cameraDistance = Clamp(Settings.Instance?.CinematicCameraDistance ?? 4f, 1.5f, 12f);
+            float orbitSpeed = Clamp(Settings.Instance?.CinematicOrbitSpeed ?? 32f, -120f, 120f) * ((float)Math.PI / 180f);
+            float elevation = Clamp(Settings.Instance?.CinematicElevationAngle ?? 18f, -20f, 60f) * ((float)Math.PI / 180f);
+            Vec3 baseRadial = -horizontalIncoming;
