@@ -1,0 +1,220 @@
+using System;
+using System.IO;
+using System.Reflection;
+using TaleWorlds.Core;
+using TaleWorlds.Engine;
+using TaleWorlds.Engine.GauntletUI;
+using TaleWorlds.InputSystem;
+using TaleWorlds.GauntletUI.Data;
+using TaleWorlds.Library;
+using TaleWorlds.MountAndBlade;
+using TaleWorlds.MountAndBlade.View.MissionViews;
+using TaleWorlds.MountAndBlade.View.Screens;
+using TaleWorlds.ScreenSystem;
+
+namespace GuidedArrow
+{
+    public sealed class GuidedArrowBehavior : MissionView
+    {
+        private enum State
+        {
+            Idle,
+            WaitingForMissile,
+            Guiding,
+            ImpactPending,
+            Cinematic,
+            Returning
+        }
+
+        private const int TimeRequestId = 0x47415257; // "GARW"
+        private const float MissileAcquireWindow = 0.25f;
+        private const float RestPollInterval = 0.10f;
+        private const float ImpactKillConfirmationWindow = 0.12f;
+        private const float StoppedMissileReturnDelay = 0.10f;
+        private const float Tiny = 1e-6f;
+
+        private static readonly float[] SpeedSteps =
+        {
+            0.05f, 0.10f, 0.15f, 0.25f, 0.40f, 0.60f, 0.80f, 1.00f
+        };
+
+        private State _state;
+        private Mission.Missile _missile;
+        private int _missileIndex = -1;
+        private int _pendingForcedMissileIndex = -1;
+        private Vec3 _pendingShotPosition;
+        private Vec3 _pendingShotVelocity;
+        private float _pendingAcquireElapsed;
+        private float _guidanceRealElapsed;
+        private float _impactConfirmElapsed;
+        private float _stoppedMissileElapsed;
+        private Vec3 _desiredDirection;
+        private Vec3 _lastMissileDirection;
+
+        private MatrixFrame _cameraFrame;
+        private bool _cameraFrameValid;
+        private MatrixFrame _returnStartFrame;
+        private float _returnElapsed;
+        private bool _releaseCameraAfterOverride;
+        private bool _releaseCustomCameraNextDisplay;
+        private Camera _ownedCustomCamera;
+        private Camera _previousCustomCamera;
+        private bool _ownsCustomCamera;
+        private bool _cameraOwnershipFailureLogged;
+        private GauntletLayer _crosshairLayer;
+        private GauntletMovieIdentifier _crosshairMovie;
+        private MissionScreen _crosshairScreen;
+
+        // Camera pose captured relative to the player at shot time, then reconstructed around
+        // the live player during the return flight. This avoids an instant camera teleport.
+        private float _returnLocalRight;
+        private float _returnLocalForward;
+        private float _returnLocalUp;
+        private Vec3 _returnViewForwardLocal;
+        private Vec3 _returnViewUpLocal;
+
+        private Agent _hitVictim;
+        private Agent _cinematicVictim;
+        private Vec3 _impactDirection;
+        private Vec3 _impactPosition;
+        private float _cinematicElapsed;
+        private float _restPollCountdown;
+        private Vec3 _lastRestPosition;
+        private bool _lastRestPositionValid;
+        private float _settledElapsed;
+        private bool _cinematicSawActiveRagdoll;
+
+        private bool _timeRequestActive;
+        private float _requestedSpeed = 1f;
+
+        public override MissionBehaviorType BehaviorType => MissionBehaviorType.Other;
+
+        public override void OnBehaviorInitialize()
+        {
+            ResetAll(false);
+            Log("Mission behavior initialized.");
+        }
+
+        public override void OnRemoveBehavior()
+        {
+            ResetAll(true);
+            Log("Mission behavior removed.");
+        }
+
+        public override void OnAgentShootMissile(
+            Agent shooterAgent,
+            EquipmentIndex weaponIndex,
+            Vec3 position,
+            Vec3 velocity,
+            Mat3 orientation,
+            bool hasRigidBody,
+            int forcedMissileIndex)
+        {
+            if (!Enabled || Mission == null || shooterAgent == null || shooterAgent != Mission.MainAgent)
+                return;
+
+            // A new player projectile cleanly supersedes a stale previous guidance state.
+            ResetTrackedVictim();
+            RemoveOwnTimeRequest();
+            HideCrosshair();
+            ReleaseCustomCameraOwnership("NewShotSuperseded");
+
+            _missile = null;
+            _missileIndex = -1;
+            _pendingForcedMissileIndex = forcedMissileIndex;
+            _pendingShotPosition = position;
+            _pendingShotVelocity = velocity;
+            _pendingAcquireElapsed = 0f;
+            _guidanceRealElapsed = 0f;
+            _impactConfirmElapsed = 0f;
+            _stoppedMissileElapsed = 0f;
+            _releaseCameraAfterOverride = false;
+            _releaseCustomCameraNextDisplay = false;
+            _desiredDirection = NormalizeSafe(velocity, shooterAgent.LookDirection);
+            _lastMissileDirection = _desiredDirection;
+            CaptureReturnPose(shooterAgent);
+            _state = State.WaitingForMissile;
+
+            // Try immediately. If the native missile is inserted after this callback, the display
+            // tick retries for only a short bounded window; no persistent missile scans occur.
+            TryAcquireMissile();
+        }
+
+        public override void OnMissileHit(
+            Agent attacker,
+            Agent victim,
+            bool isCanceled,
+            AttackCollisionData collisionData)
+        {
+            if (_state != State.Guiding || isCanceled || attacker == null || Mission == null)
+                return;
+            if (attacker != Mission.MainAgent || !collisionData.IsMissile)
+                return;
+
+            // During guidance there is exactly one owned projectile. Do not depend on
+            // AffectorWeaponSlotOrMissileIndex here: across Bannerlord collision paths the field can
+            // represent either a weapon slot or a missile index, and embedded arrows are not removed
+            // promptly enough to serve as an impact signal.
+            _impactPosition = collisionData.CollisionGlobalPosition;
+            if (IsFinite(collisionData.MissileVelocity) && collisionData.MissileVelocity.LengthSquared > Tiny)
+                _impactDirection = NormalizeSafe(collisionData.MissileVelocity, _lastMissileDirection);
+            else
+                _impactDirection = _lastMissileDirection;
+
+            _missile = null;
+            HideCrosshair();
+            _impactConfirmElapsed = 0f;
+            _stoppedMissileElapsed = 0f;
+            _state = State.ImpactPending;
+
+            if (victim != null)
+            {
+                TrackHitVictim(victim);
+
+                // Some builds deliver the collision after damage has already been applied.
+                float health;
+                try { health = victim.Health; }
+                catch { health = 1f; }
+                if (IsFinite(health) && health <= 0f)
+                {
+                    BeginKillCinematic(victim, "OnMissileHitAlreadyDead");
+                    return;
+                }
+            }
+
+            Log("Guided projectile impact awaiting kill confirmation.");
+        }
+
+        public override void OnMissileRemoved(int missileIndex)
+        {
+            if (_missileIndex < 0 || missileIndex != _missileIndex)
+                return;
+
+            _missile = null;
+            _missileIndex = -1;
+
+            if (_state == State.Guiding)
+            {
+                BeginReturn("MissileRemovedWithoutImpact");
+            }
+            // ImpactPending intentionally owns a short confirmation window. Agent damage/removal
+            // callbacks can arrive immediately after native missile removal.
+        }
+
+        public override void OnEarlyAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow blow)
+        {
+            ConfirmRemovalKillFallback(affectedAgent, affectorAgent, agentState, "OnEarlyAgentRemoved");
+        }
+
+        public override void OnAgentRemoved(Agent affectedAgent, Agent affectorAgent, AgentState agentState, KillingBlow killingBlow)
+        {
+            ConfirmRemovalKillFallback(affectedAgent, affectorAgent, agentState, "OnAgentRemoved");
+        }
+
+        public override void OnAgentDeleted(Agent affectedAgent)
+        {
+            if (affectedAgent == null)
+                return;
+
+            if (ReferenceEquals(affectedAgent, _hitVictim))
+                ResetTrackedVictim();
