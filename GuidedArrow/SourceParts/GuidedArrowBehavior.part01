@@ -1,0 +1,220 @@
+
+            if (ReferenceEquals(affectedAgent, _cinematicVictim) && _state == State.Cinematic)
+                BeginReturn("CinematicVictimDeleted");
+        }
+
+        public override bool UpdateOverridenCamera(float dt)
+        {
+            bool ownsCamera = _cameraFrameValid &&
+                (_state == State.Guiding || _state == State.ImpactPending ||
+                 _state == State.Cinematic || _state == State.Returning);
+            if (!ownsCamera)
+                return base.UpdateOverridenCamera(dt);
+
+            MatrixFrame frame = _cameraFrame;
+            try
+            {
+                MissionScreen screen = ResolveMissionScreen();
+                if (screen != null)
+                {
+                    EnsureCustomCameraOwnership(screen);
+                    if (_ownedCustomCamera != null)
+                        _ownedCustomCamera.Frame = frame;
+                    if (screen.CombatCamera != null)
+                        screen.CombatCamera.Frame = frame;
+                }
+                Mission?.SetCameraFrame(ref frame, 1f);
+            }
+            catch (Exception ex)
+            {
+                Log("Camera override failed: " + ex.GetType().Name);
+                RemoveOwnTimeRequest();
+                _state = State.Idle;
+                _cameraFrameValid = false;
+                _releaseCameraAfterOverride = false;
+                ReleaseCustomCameraOwnership("CameraOverrideFailure");
+                return base.UpdateOverridenCamera(dt);
+            }
+
+            if (_releaseCameraAfterOverride)
+            {
+                _releaseCameraAfterOverride = false;
+                _releaseCustomCameraNextDisplay = true;
+            }
+
+            return true;
+        }
+
+        public override void OnMissionTick(float dt)
+        {
+            if (_state != State.Guiding || _missile == null || dt <= 0f)
+                return;
+
+            try
+            {
+                Vec3 velocity = _missile.GetVelocity();
+                float speedSq = velocity.LengthSquared;
+                if (!IsFinite(velocity) || !IsFinite(speedSq) || speedSq <= Tiny)
+                    return;
+
+                float speed = (float)Math.Sqrt(speedSq);
+                Vec3 currentDirection = velocity / speed;
+                float radius = Clamp(Settings.Instance?.MinimumTurnRadius ?? 24f, 3f, 120f);
+                float maxAngle = (speed / radius) * dt;
+                if (maxAngle > 1.2f)
+                    maxAngle = 1.2f;
+
+                Vec3 steered = RotateTowards(currentDirection, _desiredDirection, maxAngle);
+                Vec3 newVelocity = steered * speed;
+                _missile.SetVelocity(in newVelocity);
+                _lastMissileDirection = steered;
+            }
+            catch (Exception ex)
+            {
+                Log("Steering failed; returning camera. " + ex.GetType().Name);
+                BeginReturn("SteeringException");
+            }
+        }
+
+        public override void OnPreDisplayMissionTick(float dt)
+        {
+            if (Mission == null || dt < 0f)
+                return;
+
+            // Keep the final return frame owned for one complete render interval, then restore
+            // exactly the camera that was active before guidance.
+            if (_releaseCustomCameraNextDisplay)
+            {
+                _releaseCustomCameraNextDisplay = false;
+                ReleaseCustomCameraOwnership("ReturnComplete");
+                _releaseCameraAfterOverride = false;
+                _state = State.Idle;
+                _cameraFrameValid = false;
+                Log("Return flight complete.");
+                return;
+            }
+
+            switch (_state)
+            {
+                case State.WaitingForMissile:
+                    _pendingAcquireElapsed += dt;
+                    if (!TryAcquireMissile() && _pendingAcquireElapsed >= MissileAcquireWindow)
+                        ResetAll(false);
+                    break;
+
+                case State.Guiding:
+                    TickGuidanceDisplay(dt);
+                    break;
+
+                case State.ImpactPending:
+                    TickImpactPendingDisplay(dt);
+                    break;
+
+                case State.Cinematic:
+                    TickCinematicDisplay(dt);
+                    break;
+
+                case State.Returning:
+                    TickReturnDisplay(dt);
+                    break;
+            }
+        }
+
+        private bool Enabled => Settings.Instance?.Enabled ?? true;
+
+        private bool TryAcquireMissile()
+        {
+            if (_state != State.WaitingForMissile || Mission == null || Mission.MainAgent == null)
+                return false;
+
+            Mission.Missile best = null;
+            float bestScore = float.MaxValue;
+
+            try
+            {
+                foreach (Mission.Missile candidate in Mission.MissilesList)
+                {
+                    if (candidate == null || candidate.ShooterAgent != Mission.MainAgent)
+                        continue;
+
+                    int index;
+                    try { index = candidate.Index; }
+                    catch { continue; }
+
+                    if (_pendingForcedMissileIndex >= 0 && index != _pendingForcedMissileIndex)
+                        continue;
+                    if (!IsArrowOrBolt(candidate))
+                        continue;
+
+                    Vec3 position;
+                    Vec3 velocity;
+                    try
+                    {
+                        position = candidate.GetPosition();
+                        velocity = candidate.GetVelocity();
+                    }
+                    catch { continue; }
+
+                    float positionError = (position - _pendingShotPosition).LengthSquared;
+                    Vec3 candidateDir = NormalizeSafe(velocity, _desiredDirection);
+                    Vec3 shotDir = NormalizeSafe(_pendingShotVelocity, _desiredDirection);
+                    float directionPenalty = 1f - Clamp(Dot(candidateDir, shotDir), -1f, 1f);
+                    float score = positionError + directionPenalty * 4f;
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        best = candidate;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (best == null)
+                return false;
+
+            _missile = best;
+            _missileIndex = best.Index;
+            Vec3 velocityNow = best.GetVelocity();
+            _desiredDirection = NormalizeSafe(velocityNow, _desiredDirection);
+            _lastMissileDirection = _desiredDirection;
+            _state = State.Guiding;
+            _cameraFrameValid = false;
+            AcquireCustomCameraOwnership();
+            UpdateCrosshairVisibility();
+            SetOwnTimeSpeed(Settings.Instance?.InitialGuidanceTimeSpeed ?? 0.15f);
+            Log("Guidance started for missile #" + _missileIndex + ".");
+            return true;
+        }
+
+        private void TickGuidanceDisplay(float dt)
+        {
+            if (_missile == null)
+            {
+                BeginReturn("MissingTrackedMissile");
+                return;
+            }
+
+            _guidanceRealElapsed += dt;
+            float maximum = Clamp(Settings.Instance?.MaximumGuidanceTime ?? 35f, 5f, 120f);
+            if (_guidanceRealElapsed >= maximum)
+            {
+                BeginReturn("GuidanceTimeout");
+                return;
+            }
+
+            if (Mission.InputManager != null)
+            {
+                if (Mission.InputManager.IsKeyPressed(InputKey.Escape) ||
+                    Mission.InputManager.IsKeyPressed(InputKey.RightMouseButton))
+                {
+                    BeginReturn("UserCancelled");
+                    return;
+                }
+
+                if (Mission.InputManager.IsKeyPressed(InputKey.Q))
+                    StepTimeSpeed(-1);
+                if (Mission.InputManager.IsKeyPressed(InputKey.E))
+                    StepTimeSpeed(+1);
