@@ -1,0 +1,1 @@
+Guided Arrow v1.0.4 direct-steering compiler trigger after normalized source hash.
