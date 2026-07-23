@@ -1,0 +1,208 @@
+            _pendingAcquireElapsed = 0f;
+            _guidanceRealElapsed = 0f;
+            _impactConfirmElapsed = 0f;
+            _stoppedMissileElapsed = 0f;
+            _cinematicElapsed = 0f;
+            _returnElapsed = 0f;
+            _restPollCountdown = 0f;
+            _lastRestPositionValid = false;
+            _settledElapsed = 0f;
+            _cinematicSawActiveRagdoll = false;
+
+            if (behaviorRemoving)
+                _requestedSpeed = 1f;
+        }
+
+        private static Vec3 GetVisualPosition(Agent agent)
+        {
+            if (agent == null)
+                return Vec3.Zero;
+
+            try
+            {
+                MBAgentVisuals visuals = agent.AgentVisuals;
+                if (visuals != null)
+                {
+                    Vec3 position = visuals.GetGlobalFrame().origin;
+                    if (IsFinite(position))
+                        return position;
+                }
+            }
+            catch { }
+
+            try { return agent.Position; }
+            catch { return Vec3.Zero; }
+        }
+
+        private static bool IsArrowOrBolt(Mission.Missile missile)
+        {
+            if (missile == null)
+                return false;
+
+            // Weapon metadata moved slightly across Bannerlord versions. This is called only during
+            // the bounded acquisition window for a player shot, so a cached-free reflective probe is
+            // preferable to a version-specific hard dependency and has no steady-state cost.
+            try
+            {
+                object weapon = missile.Weapon;
+                string text = ExtractWeaponClassName(weapon);
+                if (!string.IsNullOrEmpty(text))
+                    return text.IndexOf("Arrow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                           text.IndexOf("Bolt", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            catch { }
+            return false;
+        }
+
+        private static string ExtractWeaponClassName(object weapon)
+        {
+            if (weapon == null)
+                return null;
+
+            Type type = weapon.GetType();
+            const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+            object usage = TryReadProperty(type, weapon, "CurrentUsageItem", Flags);
+            string result = TryReadWeaponClass(usage, Flags);
+            if (!string.IsNullOrEmpty(result))
+                return result;
+
+            object item = TryReadProperty(type, weapon, "Item", Flags);
+            if (item != null)
+            {
+                object primary = TryReadProperty(item.GetType(), item, "PrimaryWeapon", Flags);
+                result = TryReadWeaponClass(primary, Flags);
+                if (!string.IsNullOrEmpty(result))
+                    return result;
+
+                object itemType = TryReadProperty(item.GetType(), item, "ItemType", Flags);
+                if (itemType != null)
+                    return itemType.ToString();
+            }
+
+            return weapon.ToString();
+        }
+
+        private static string TryReadWeaponClass(object value, BindingFlags flags)
+        {
+            if (value == null)
+                return null;
+            object weaponClass = TryReadProperty(value.GetType(), value, "WeaponClass", flags);
+            return weaponClass?.ToString();
+        }
+
+        private static object TryReadProperty(Type type, object instance, string name, BindingFlags flags)
+        {
+            try { return type.GetProperty(name, flags)?.GetValue(instance, null); }
+            catch { return null; }
+        }
+
+        private static MatrixFrame BlendFrames(MatrixFrame a, MatrixFrame b, float t)
+        {
+            Vec3 position = Lerp(a.origin, b.origin, t);
+            Vec3 forward = NormalizeSafe(Lerp(-a.rotation.u, -b.rotation.u, t), -b.rotation.u);
+            Vec3 up = NormalizeSafe(Lerp(a.rotation.f, b.rotation.f, t), b.rotation.f);
+            return MakeCameraFrame(position, forward, up);
+        }
+
+        private static MatrixFrame MakeCameraFrame(Vec3 position, Vec3 viewForward, Vec3 upHint)
+        {
+            viewForward = NormalizeSafe(viewForward, new Vec3(0f, 1f, 0f));
+            Vec3 side = Cross(viewForward, upHint);
+            if (!IsFinite(side) || side.LengthSquared <= Tiny)
+                side = Cross(viewForward, Math.Abs(viewForward.z) > 0.9f ? new Vec3(0f, 1f, 0f) : WorldUp);
+            side = NormalizeSafe(side, new Vec3(1f, 0f, 0f));
+            Vec3 cameraUp = NormalizeSafe(Cross(side, viewForward), WorldUp);
+
+            // Bannerlord's render camera looks along -rotation.u. rotation.f is the camera's
+            // elevation/up axis; assigning world-up to u was the cause of the downward view.
+            Mat3 rotation = Mat3.Identity;
+            rotation.s = side;
+            rotation.f = cameraUp;
+            rotation.u = -viewForward;
+            return new MatrixFrame(rotation, position);
+        }
+
+        private static Vec3 RotateTowards(Vec3 current, Vec3 target, float maxAngle)
+        {
+            current = NormalizeSafe(current, target);
+            target = NormalizeSafe(target, current);
+            float dot = Clamp(Dot(current, target), -1f, 1f);
+            float angle = (float)Math.Acos(dot);
+            if (angle <= maxAngle || angle <= 1e-5f)
+                return target;
+
+            Vec3 axis = Cross(current, target);
+            if (axis.LengthSquared <= Tiny)
+            {
+                axis = Cross(current, WorldUp);
+                if (axis.LengthSquared <= Tiny)
+                    axis = new Vec3(1f, 0f, 0f);
+            }
+            return NormalizeSafe(RotateAroundAxis(current, NormalizeSafe(axis, WorldUp), maxAngle), target);
+        }
+
+        private static Vec3 RotateAroundAxis(Vec3 vector, Vec3 axis, float angle)
+        {
+            axis = NormalizeSafe(axis, WorldUp);
+            float c = (float)Math.Cos(angle);
+            float s = (float)Math.Sin(angle);
+            return vector * c + Cross(axis, vector) * s + axis * (Dot(axis, vector) * (1f - c));
+        }
+
+        private static Vec3 Cross(Vec3 a, Vec3 b)
+        {
+            return new Vec3(
+                a.y * b.z - a.z * b.y,
+                a.z * b.x - a.x * b.z,
+                a.x * b.y - a.y * b.x);
+        }
+
+        private static float Dot(Vec3 a, Vec3 b) => a.x * b.x + a.y * b.y + a.z * b.z;
+
+        private static Vec3 ToLocal(Vec3 value, Vec3 right, Vec3 forward, Vec3 up)
+            => new Vec3(Dot(value, right), Dot(value, forward), Dot(value, up));
+
+        private static Vec3 FromLocal(Vec3 local, Vec3 right, Vec3 forward, Vec3 up)
+            => right * local.x + forward * local.y + up * local.z;
+
+        private static Vec3 NormalizeSafe(Vec3 value, Vec3 fallback)
+        {
+            if (!IsFinite(value) || value.LengthSquared <= Tiny)
+                value = fallback;
+            float lengthSq = value.LengthSquared;
+            if (!IsFinite(lengthSq) || lengthSq <= Tiny)
+                return new Vec3(0f, 1f, 0f);
+            return value / (float)Math.Sqrt(lengthSq);
+        }
+
+        private static Vec3 Lerp(Vec3 a, Vec3 b, float t) => a + (b - a) * t;
+        private static float SmoothStep(float t) => t * t * (3f - 2f * t);
+        private static float Clamp(float v, float min, float max) => v < min ? min : (v > max ? max : v);
+        private static bool IsFinite(float v) => !float.IsNaN(v) && !float.IsInfinity(v);
+        private static bool IsFinite(Vec3 v) => IsFinite(v.x) && IsFinite(v.y) && IsFinite(v.z);
+        private static readonly Vec3 WorldUp = new Vec3(0f, 0f, 1f);
+
+        private static string LogPath
+        {
+            get
+            {
+                string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                return System.IO.Path.Combine(docs, "Mount and Blade II Bannerlord", "Configs", "ModLogs", "GuidedArrow.log");
+            }
+        }
+
+        private static void Log(string message)
+        {
+            if (!(Settings.Instance?.DebugLogging ?? false))
+                return;
+            try
+            {
+                string path = LogPath;
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                File.AppendAllText(path, DateTime.Now.ToString("O") + " " + message + Environment.NewLine);
+            }
+            catch { }
+        }
+    }
+}
