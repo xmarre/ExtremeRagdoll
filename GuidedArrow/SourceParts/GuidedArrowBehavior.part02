@@ -1,0 +1,210 @@
+
+            try
+            {
+                foreach (Mission.Missile candidate in Mission.MissilesList)
+                {
+                    if (_trackedMissiles.Count >= MaxTrackedSwarmMissiles)
+                        break;
+                    if (candidate == null || candidate.ShooterAgent != Mission.MainAgent || !IsArrowOrBolt(candidate))
+                        continue;
+
+                    int index;
+                    Vec3 position;
+                    Vec3 velocity;
+                    try
+                    {
+                        index = candidate.Index;
+                        position = candidate.GetPosition();
+                        velocity = candidate.GetVelocity();
+                    }
+                    catch { continue; }
+                    if (FindTrackedMissile(index) != null)
+                        continue;
+
+                    bool forcedMatch = false;
+                    bool trajectoryMatch = false;
+                    float bestScore = float.MaxValue;
+                    for (int i = 0; i < _pendingShotSeeds.Count; i++)
+                    {
+                        PendingShotSeed seed = _pendingShotSeeds[i];
+                        if (seed.ForcedIndex >= 0 && seed.ForcedIndex == index)
+                            forcedMatch = true;
+
+                        float positionError = (position - seed.Position).LengthSquared;
+                        Vec3 candidateDir = NormalizeSafe(velocity, _shotDirection);
+                        Vec3 seedDir = NormalizeSafe(seed.Velocity, _shotDirection);
+                        float directionDot = Dot(candidateDir, seedDir);
+                        if (positionError <= 9f && directionDot >= 0.55f)
+                        {
+                            trajectoryMatch = true;
+                            float score = positionError + (1f - directionDot) * 4f;
+                            if (score < bestScore) bestScore = score;
+                        }
+                    }
+
+                    if (!forcedMatch && !trajectoryMatch)
+                        continue;
+                    if (_preShotMissileIndices.Contains(index) && !forcedMatch && bestScore > 0.50f)
+                        continue;
+
+                    TrackedMissile tracked = new TrackedMissile { Missile = candidate, Index = index };
+                    _trackedMissiles.Add(tracked);
+                    ApplyFullDetailVisual(tracked);
+                    if (_missile == null)
+                    {
+                        _missile = candidate;
+                        _missileIndex = index;
+                        _lastMissileDirection = NormalizeSafe(velocity, _shotDirection);
+                    }
+                    Log("Added guided swarm missile #" + index + ".");
+                }
+            }
+            catch { }
+
+            if (_trackedMissiles.Count == 0)
+                return false;
+
+            if (_state == State.WaitingForMissile)
+            {
+                _pendingYawInput = 0f;
+                _pendingPitchInput = 0f;
+                _state = State.Guiding;
+                _cameraFrameValid = false;
+                AcquireCustomCameraOwnership();
+                UpdateCrosshairVisibility();
+                SetOwnTimeSpeed(Settings.Instance?.InitialGuidanceTimeSpeed ?? 0.15f);
+                Log("Guidance started for a swarm of " + _trackedMissiles.Count + " missile(s).");
+            }
+            return true;
+        }
+
+        private void TickGuidanceDisplay(float dt)
+        {
+            _pendingAcquireElapsed += Math.Max(0f, dt);
+            if (_pendingAcquireElapsed < MissileAcquireWindow)
+                TryAcquireMissiles();
+
+            if (_trackedMissiles.Count == 0)
+            {
+                BeginReturn("MissingTrackedSwarm", true);
+                return;
+            }
+
+            _guidanceRealElapsed += dt;
+            float maximum = Clamp(Settings.Instance?.MaximumGuidanceTime ?? 35f, 5f, 120f);
+            if (_guidanceRealElapsed >= maximum)
+            {
+                BeginReturn("GuidanceTimeout", true);
+                return;
+            }
+
+            if (Mission.InputManager != null)
+            {
+                if (Mission.InputManager.IsKeyPressed(InputKey.Escape) ||
+                    Mission.InputManager.IsKeyPressed(InputKey.RightMouseButton))
+                {
+                    BeginReturn("UserCancelled");
+                    return;
+                }
+
+                if (Mission.InputManager.IsKeyPressed(InputKey.Q)) StepTimeSpeed(-1);
+                if (Mission.InputManager.IsKeyPressed(InputKey.E)) StepTimeSpeed(+1);
+
+                float sensitivity = Clamp(Settings.Instance?.MouseSensitivity ?? 1f, 0.10f, 4f);
+                float yaw = -Mission.InputManager.GetMouseMoveX() * 0.0026f * sensitivity;
+                float pitch = -Mission.InputManager.GetMouseMoveY() * 0.0026f * sensitivity;
+                QueueDirectSteeringInput(yaw, pitch);
+            }
+
+            Vec3 position;
+            Vec3 forward;
+            float movingCount;
+            if (!TryGetSwarmCameraAnchor(out position, out forward, out movingCount))
+            {
+                BeginReturn("ProjectileCameraReadFailed", true);
+                return;
+            }
+
+            if (movingCount <= 0f)
+            {
+                _stoppedMissileElapsed += dt;
+                if (_stoppedMissileElapsed >= StoppedMissileReturnDelay)
+                {
+                    BeginReturn("SwarmStoppedWithoutImpactCallback", true);
+                    return;
+                }
+            }
+            else
+            {
+                _stoppedMissileElapsed = 0f;
+            }
+
+            _lastMissileDirection = forward;
+            MatrixFrame desiredFrame = BuildProjectileCameraFrame(position, forward);
+            SetMissionCamera(desiredFrame);
+            UpdateCrosshairVisibility();
+        }
+
+        private void TickImpactPendingDisplay(float dt)
+        {
+            _impactConfirmElapsed += Math.Max(0f, dt);
+            Agent victim = _hitVictim;
+
+            if (victim != null)
+            {
+                UpdateImpactPendingCamera(victim, dt);
+                try
+                {
+                    float health = victim.Health;
+                    if (IsFinite(health) && health <= 0f)
+                    {
+                        BeginKillCinematic(victim, "ImpactConfirmationHealthCheck");
+                        return;
+                    }
+                }
+                catch { }
+            }
+
+            if (_impactConfirmElapsed >= ImpactKillConfirmationWindow)
+                BeginReturn("ImpactWithoutKill", true);
+        }
+
+        private MatrixFrame BuildProjectileCameraFrame(Vec3 projectilePosition, Vec3 flightForward)
+        {
+            flightForward = NormalizeSafe(flightForward, _lastMissileDirection);
+            BuildFlightBasis(flightForward, out Vec3 right, out Vec3 localUp);
+
+            int mode = Settings.Instance?.ProjectileCameraMode ?? 1;
+            if (mode <= 0)
+            {
+                float rear = Clamp(Settings.Instance?.FirstPersonRearOffset ?? 0.12f, 0.01f, 1.50f);
+                float height = Clamp(Settings.Instance?.FirstPersonVerticalOffset ?? 0f, -0.50f, 0.50f);
+                Vec3 cameraPosition = projectilePosition - flightForward * rear + localUp * height;
+                return MakeCameraFrame(cameraPosition, flightForward, localUp);
+            }
+
+            float distance = Clamp(Settings.Instance?.CameraDistance ?? 3.4f, 0.5f, 15f);
+            float elevationDegrees = Clamp(Settings.Instance?.ThirdPersonElevationAngle ?? 12f, -30f, 60f);
+            float elevation = elevationDegrees * ((float)Math.PI / 180f);
+            float lookAhead = Clamp(Settings.Instance?.ThirdPersonLookAhead ?? 5f, 0f, 25f);
+
+            // The offset is constructed entirely in the projectile's local frame. When the arrow
+            // pitches or yaws, the complete chase rig follows with the same locked relationship.
+            Vec3 cameraPositionThird = projectilePosition
+                - flightForward * (distance * (float)Math.Cos(elevation))
+                + localUp * (distance * (float)Math.Sin(elevation));
+            Vec3 lookTarget = projectilePosition + flightForward * lookAhead;
+            Vec3 viewForward = NormalizeSafe(lookTarget - cameraPositionThird, flightForward);
+            return MakeCameraFrame(cameraPositionThird, viewForward, localUp);
+        }
+
+        private void BuildFlightBasis(Vec3 flightForward, out Vec3 right, out Vec3 localUp)
+        {
+            flightForward = NormalizeSafe(flightForward, new Vec3(0f, 1f, 0f));
+            right = Cross(flightForward, WorldUp);
+            if (!IsFinite(right) || right.LengthSquared <= 0.0001f)
+            {
+                // Near vertical flight, reuse the previous camera's right axis when possible to
+                // avoid an arbitrary 180-degree roll flip.
+                if (_cameraFrameValid && IsFinite(_cameraFrame.rotation.s) && _cameraFrame.rotation.s.LengthSquared > Tiny)
+                    right = _cameraFrame.rotation.s;
