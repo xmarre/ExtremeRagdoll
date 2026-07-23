@@ -1,3 +1,34 @@
+                float rear = Clamp(Settings.Instance?.FirstPersonRearOffset ?? 0.12f, 0.01f, 1.50f);
+                float height = Clamp(Settings.Instance?.FirstPersonVerticalOffset ?? 0f, -0.50f, 0.50f);
+                Vec3 cameraPosition = projectilePosition - flightForward * rear + localUp * height;
+                return MakeCameraFrame(cameraPosition, flightForward, localUp);
+            }
+
+            float distance = Clamp(Settings.Instance?.CameraDistance ?? 3.4f, 0.5f, 15f);
+            float elevationDegrees = Clamp(Settings.Instance?.ThirdPersonElevationAngle ?? 12f, -30f, 60f);
+            float elevation = elevationDegrees * ((float)Math.PI / 180f);
+            float lookAhead = Clamp(Settings.Instance?.ThirdPersonLookAhead ?? 5f, 0f, 25f);
+
+            // The offset is constructed entirely in the projectile's local frame. When the arrow
+            // pitches or yaws, the complete chase rig follows with the same locked relationship.
+            Vec3 cameraPositionThird = projectilePosition
+                - flightForward * (distance * (float)Math.Cos(elevation))
+                + localUp * (distance * (float)Math.Sin(elevation));
+            Vec3 lookTarget = projectilePosition + flightForward * lookAhead;
+            Vec3 viewForward = NormalizeSafe(lookTarget - cameraPositionThird, flightForward);
+            return MakeCameraFrame(cameraPositionThird, viewForward, localUp);
+        }
+
+        private void BuildFlightBasis(Vec3 flightForward, out Vec3 right, out Vec3 localUp)
+        {
+            flightForward = NormalizeSafe(flightForward, new Vec3(0f, 1f, 0f));
+            right = Cross(flightForward, WorldUp);
+            if (!IsFinite(right) || right.LengthSquared <= 0.0001f)
+            {
+                // Near vertical flight, reuse the previous camera's right axis when possible to
+                // avoid an arbitrary 180-degree roll flip.
+                if (_cameraFrameValid && IsFinite(_cameraFrame.rotation.s) && _cameraFrame.rotation.s.LengthSquared > Tiny)
+                    right = _cameraFrame.rotation.s;
                 else
                     right = Cross(flightForward, new Vec3(0f, 1f, 0f));
             }
@@ -177,34 +208,3 @@
                     RemoveFullDetailVisual(_trackedMissiles[i]);
             }
             _trackedMissiles.Clear();
-            _missile = null;
-            _missileIndex = -1;
-        }
-
-        private bool TryGetSwarmCameraAnchor(out Vec3 position, out Vec3 forward, out float movingCount)
-        {
-            Vec3 positionSum = Vec3.Zero;
-            Vec3 directionSum = Vec3.Zero;
-            int validCount = 0;
-            movingCount = 0f;
-            for (int i = _trackedMissiles.Count - 1; i >= 0; i--)
-            {
-                TrackedMissile tracked = _trackedMissiles[i];
-                try
-                {
-                    Vec3 p = tracked.Missile.GetPosition();
-                    Vec3 v = tracked.Missile.GetVelocity();
-                    if (!IsFinite(p) || !IsFinite(v))
-                        continue;
-                    positionSum += p;
-                    if (v.LengthSquared > 0.0625f)
-                    {
-                        directionSum += NormalizeSafe(v, _lastMissileDirection);
-                        movingCount += 1f;
-                    }
-                    validCount++;
-                }
-                catch
-                {
-                    RemoveTrackedMissile(tracked, true);
-                }
