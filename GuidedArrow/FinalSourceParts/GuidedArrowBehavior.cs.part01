@@ -1,0 +1,209 @@
+using System;
+using System.IO;
+using System.Reflection;
+using System.Diagnostics;
+using System.Collections.Generic;
+using TaleWorlds.Core;
+using TaleWorlds.Engine;
+using TaleWorlds.Engine.GauntletUI;
+using TaleWorlds.InputSystem;
+using TaleWorlds.GauntletUI.Data;
+using TaleWorlds.Library;
+using TaleWorlds.MountAndBlade;
+using TaleWorlds.MountAndBlade.View.MissionViews;
+using TaleWorlds.MountAndBlade.View.Screens;
+using TaleWorlds.ScreenSystem;
+
+namespace GuidedArrow
+{
+    public sealed class GuidedArrowBehavior : MissionView
+    {
+        private enum State
+        {
+            Idle,
+            WaitingForMissile,
+            Guiding,
+            ImpactPending,
+            Cinematic,
+            Returning
+        }
+
+        private sealed class PendingShotSeed
+        {
+            public int ForcedIndex;
+            public Vec3 Position;
+            public Vec3 Velocity;
+        }
+
+        private sealed class RemovedNativeMeshSet
+        {
+            public GameEntity Entity;
+            public readonly List<MetaMesh> Meshes = new List<MetaMesh>();
+        }
+
+        private sealed class TrackedMissile
+        {
+            public Mission.Missile Missile;
+            public int Index;
+            public GameEntity NativeEntity;
+            public MetaMesh FullDetailMesh;
+            public readonly List<RemovedNativeMeshSet> RemovedNativeMeshes = new List<RemovedNativeMeshSet>();
+        }
+
+        private sealed class CrosshairViewModel : ViewModel
+        {
+        }
+
+        private const int TimeRequestId = 0x47415257; // "GARW"
+        private const float MissileAcquireWindow = 0.25f;
+        private const float RestPollInterval = 0.10f;
+        private const float ImpactKillConfirmationWindow = 0.04f;
+        private const float StoppedMissileReturnDelay = 0.02f;
+        private const int MaxTrackedSwarmMissiles = 24;
+        private const float Tiny = 1e-6f;
+
+        private static readonly float[] SpeedSteps =
+        {
+            0.05f, 0.10f, 0.15f, 0.25f, 0.40f, 0.60f, 0.80f, 1.00f
+        };
+
+        private State _state;
+        private Mission.Missile _missile; // Camera leader only; steering operates on the complete swarm.
+        private int _missileIndex = -1;
+        private readonly List<TrackedMissile> _trackedMissiles = new List<TrackedMissile>();
+        private readonly List<PendingShotSeed> _pendingShotSeeds = new List<PendingShotSeed>();
+        private readonly HashSet<int> _preShotMissileIndices = new HashSet<int>();
+        private Vec3 _pendingShotPosition;
+        private Vec3 _pendingShotVelocity;
+        private float _pendingAcquireElapsed;
+        private float _guidanceRealElapsed;
+        private float _impactConfirmElapsed;
+        private float _stoppedMissileElapsed;
+        // Used only to identify the just-fired native projectile. Steering never seeks this
+        // heading after acquisition; mouse input is applied directly to the live velocity.
+        private Vec3 _shotDirection;
+        private Vec3 _lastMissileDirection;
+        private float _pendingYawInput;
+        private float _pendingPitchInput;
+
+        private readonly MBList<Agent> _proximityCandidates = new MBList<Agent>();
+        private float _proximityScanCountdown;
+        private float _proximityTargetSpeed = 1f;
+        private float _proximityCurrentSpeed = 1f;
+        private float _closestProximityDistance = float.PositiveInfinity;
+        private Agent _closestProximityEnemy;
+        private bool _manualTimeOverride;
+        private long _guidanceLastTimestamp;
+
+        private MatrixFrame _cameraFrame;
+        private bool _cameraFrameValid;
+        private MatrixFrame _returnStartFrame;
+        private float _returnElapsed;
+        private float _returnDurationOverride;
+        private bool _releaseCameraAfterOverride;
+        private bool _releaseCustomCameraNextDisplay;
+        private Camera _ownedCustomCamera;
+        private Camera _previousCustomCamera;
+        private bool _ownsCustomCamera;
+        private bool _cameraOwnershipFailureLogged;
+        private GauntletLayer _crosshairLayer;
+        private GauntletMovieIdentifier _crosshairMovie;
+        private CrosshairViewModel _crosshairDataSource;
+        private MissionScreen _crosshairScreen;
+
+        // Camera pose captured relative to the player at shot time, then reconstructed around
+        // the live player during the return flight. This avoids an instant camera teleport.
+        private float _returnLocalRight;
+        private float _returnLocalForward;
+        private float _returnLocalUp;
+        private Vec3 _returnViewForwardLocal;
+        private Vec3 _returnViewUpLocal;
+
+        private Agent _hitVictim;
+        private readonly List<Agent> _pendingHitVictims = new List<Agent>();
+        private Agent _cinematicVictim;
+        private GameEntity _cinematicArrowEntity;
+        private int _cinematicCollisionBoneIndex = -1;
+        private Vec3 _impactDirection;
+        private Vec3 _impactPosition;
+        private float _cinematicElapsed;
+        private long _cinematicLastTimestamp;
+        private float _restPollCountdown;
+        private Vec3 _lastRestPosition;
+        private bool _lastRestPositionValid;
+        private float _settledElapsed;
+        private bool _cinematicSawActiveRagdoll;
+
+        private bool _timeRequestActive;
+        private float _requestedSpeed = 1f;
+
+        public override MissionBehaviorType BehaviorType => MissionBehaviorType.Other;
+
+        public override void OnBehaviorInitialize()
+        {
+            ResetAll(false);
+            Log("Mission behavior initialized.");
+        }
+
+        public override void OnRemoveBehavior()
+        {
+            ResetAll(true);
+            Log("Mission behavior removed.");
+        }
+
+        public override void OnAgentShootMissile(
+            Agent shooterAgent,
+            EquipmentIndex weaponIndex,
+            Vec3 position,
+            Vec3 velocity,
+            Mat3 orientation,
+            bool hasRigidBody,
+            int forcedMissileIndex)
+        {
+            if (!Enabled || Mission == null || shooterAgent == null || shooterAgent != Mission.MainAgent)
+                return;
+
+            // TOR split-arrow abilities can emit several player missiles during the same bounded
+            // acquisition window. Append those callbacks to the active shot instead of resetting it.
+            if ((_state == State.WaitingForMissile || _state == State.Guiding) &&
+                _pendingAcquireElapsed < MissileAcquireWindow)
+            {
+                AddPendingShotSeed(forcedMissileIndex, position, velocity);
+                TryAcquireMissiles();
+                return;
+            }
+
+            ResetTrackedVictim();
+            RemoveOwnTimeRequest();
+            ResetGuidanceTimeControl();
+            HideCrosshair();
+            CleanupTrackedMissiles(true);
+            ReleaseCustomCameraOwnership("NewShotSuperseded");
+
+            _pendingShotSeeds.Clear();
+            CapturePreShotMissileIndices();
+            AddPendingShotSeed(forcedMissileIndex, position, velocity);
+            _pendingShotPosition = position;
+            _pendingShotVelocity = velocity;
+            _pendingAcquireElapsed = 0f;
+            _guidanceRealElapsed = 0f;
+            _impactConfirmElapsed = 0f;
+            _stoppedMissileElapsed = 0f;
+            _releaseCameraAfterOverride = false;
+            _releaseCustomCameraNextDisplay = false;
+            _returnDurationOverride = 0f;
+            _shotDirection = NormalizeSafe(velocity, shooterAgent.LookDirection);
+            _lastMissileDirection = _shotDirection;
+            _pendingYawInput = 0f;
+            _pendingPitchInput = 0f;
+            _cinematicArrowEntity = null;
+            ResetCinematicBoneAnchor();
+            CaptureReturnPose(shooterAgent);
+            _state = State.WaitingForMissile;
+
+            TryAcquireMissiles();
+        }
+
+        public override void OnMissileHit(
+            Agent attacker,
+            Agent victim,
