@@ -103,6 +103,7 @@ namespace GuidedArrow
         private Vec3 _returnViewUpLocal;
 
         private Agent _hitVictim;
+        private readonly List<Agent> _pendingHitVictims = new List<Agent>();
         private Agent _cinematicVictim;
         private GameEntity _cinematicArrowEntity;
         private Vec3 _impactDirection;
@@ -204,7 +205,6 @@ namespace GuidedArrow
             {
                 try { _cinematicArrowEntity = impactMissile.Missile?.Entity; }
                 catch { _cinematicArrowEntity = null; }
-                RemoveFullDetailVisual(impactMissile);
+                RemoveTrackedMissile(impactMissile, true);
             }
 
-            HideCrosshair();
