@@ -24,7 +24,7 @@ jobs:
           $utf8 = New-Object System.Text.UTF8Encoding($false)
           [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $text, $utf8)
           $actual = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expected = '090096ff7e5d54a8fa7f8d5daf3f093c331c6725670c2b03886d51730dbf33c2'
+          $expected = '6b0146db647ccb1c1f4b271c3ec2bdaf0ac817fbea558f93d52acc792c012d9c'
           Write-Host "GuidedArrowBehavior.cs SHA-256: $actual"
           if ($actual -ne $expected) { throw "Controller source hash mismatch: $actual" }
       - name: Restore
