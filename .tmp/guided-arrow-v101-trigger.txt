@@ -1,1 +1,1 @@
-Trigger v1.0.1 build with TaleWorlds.MountAndBlade.View reference, pass 2.
+Trigger v1.0.1 build with direct Native view project, pass 3.
