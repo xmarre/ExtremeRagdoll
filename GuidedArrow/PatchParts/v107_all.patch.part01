@@ -1,0 +1,85 @@
+diff --git a/GuidedArrow/Source/GuidedArrow.csproj b/GuidedArrow/Source/GuidedArrow.csproj
+index f6d76f1..3ed09e0 100644
+--- a/GuidedArrow/Source/GuidedArrow.csproj
++++ b/GuidedArrow/Source/GuidedArrow.csproj
+@@ -6,9 +6,9 @@
+     <AssemblyName>GuidedArrow</AssemblyName>
+     <RootNamespace>GuidedArrow</RootNamespace>
+     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+-    <Version>1.0.6</Version>
+-    <FileVersion>1.0.6.0</FileVersion>
+-    <AssemblyVersion>1.0.6.0</AssemblyVersion>
++    <Version>1.0.7</Version>
++    <FileVersion>1.0.7.0</FileVersion>
++    <AssemblyVersion>1.0.7.0</AssemblyVersion>
+     <Deterministic>true</Deterministic>
+     <DebugType>pdbonly</DebugType>
+     <Optimize>true</Optimize>
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+index 62afefa..8ae258b 100644
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -35,14 +35,19 @@ namespace GuidedArrow
+             public Vec3 Velocity;
+         }
+ 
++        private sealed class RemovedNativeMeshSet
++        {
++            public GameEntity Entity;
++            public readonly List<MetaMesh> Meshes = new List<MetaMesh>();
++        }
++
+         private sealed class TrackedMissile
+         {
+             public Mission.Missile Missile;
+             public int Index;
+             public GameEntity NativeEntity;
+-            public bool NativeVisibilitySuppressed;
+-            public GameEntity VisualEntity;
+             public MetaMesh FullDetailMesh;
++            public readonly List<RemovedNativeMeshSet> RemovedNativeMeshes = new List<RemovedNativeMeshSet>();
+         }
+ 
+         private sealed class CrosshairViewModel : ViewModel
+@@ -81,6 +86,15 @@ namespace GuidedArrow
+         private float _pendingYawInput;
+         private float _pendingPitchInput;
+ 
++        private readonly MBList<Agent> _proximityCandidates = new MBList<Agent>();
++        private float _proximityScanCountdown;
++        private float _proximityTargetSpeed = 1f;
++        private float _proximityCurrentSpeed = 1f;
++        private float _closestProximityDistance = float.PositiveInfinity;
++        private Agent _closestProximityEnemy;
++        private bool _manualTimeOverride;
++        private long _guidanceLastTimestamp;
++
+         private MatrixFrame _cameraFrame;
+         private bool _cameraFrameValid;
+         private MatrixFrame _returnStartFrame;
+@@ -161,6 +175,7 @@ namespace GuidedArrow
+ 
+             ResetTrackedVictim();
+             RemoveOwnTimeRequest();
++            ResetGuidanceTimeControl();
+             HideCrosshair();
+             CleanupTrackedMissiles(true);
+             ReleaseCustomCameraOwnership("NewShotSuperseded");
+@@ -527,7 +542,7 @@ namespace GuidedArrow
+                 _cameraFrameValid = false;
+                 AcquireCustomCameraOwnership();
+                 UpdateCrosshairVisibility();
+-                SetOwnTimeSpeed(Settings.Instance?.InitialGuidanceTimeSpeed ?? 0.15f);
++                InitializeGuidanceTimeControl();
+                 Log("Guidance started for a swarm of " + _trackedMissiles.Count + " missile(s).");
+             }
+             return true;
+@@ -535,7 +550,8 @@ namespace GuidedArrow
+ 
+         private void TickGuidanceDisplay(float dt)
+         {
+-            _pendingAcquireElapsed += Math.Max(0f, dt);
++            float realDt = GetGuidanceRealDelta(dt);
++            _pendingAcquireElapsed += realDt;
+             if (_pendingAcquireElapsed < MissileAcquireWindow)
+                 TryAcquireMissiles();
