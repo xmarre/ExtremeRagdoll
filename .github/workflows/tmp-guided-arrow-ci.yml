@@ -23,14 +23,16 @@ jobs:
       - name: Patch source for compiler pass
         shell: pwsh
         run: |
-          $sub = Get-Content -Raw 'GuidedArrow/Source/SubModule.cs'
-          $sub = $sub.Replace("            if (mission == null || mission.Mode == MissionMode.NoCombat)`r`n                return;", "            if (mission == null)`r`n                return;")
-          $sub = $sub.Replace("            if (mission == null || mission.Mode == MissionMode.NoCombat)`n                return;", "            if (mission == null)`n                return;")
-          Set-Content -Path 'GuidedArrow/Source/SubModule.cs' -Value $sub -NoNewline
-          $behavior = Get-Content -Raw 'GuidedArrow/Source/GuidedArrowBehavior.cs'
+          $subPath = 'GuidedArrow/Source/SubModule.cs'
+          $sub = [IO.File]::ReadAllText($subPath)
+          $sub = [regex]::Replace($sub, 'if\s*\(mission == null \|\| mission\.Mode == MissionMode\.NoCombat\)', 'if (mission == null)')
+          [IO.File]::WriteAllText($subPath, $sub)
+
+          $behaviorPath = 'GuidedArrow/Source/GuidedArrowBehavior.cs'
+          $behavior = [IO.File]::ReadAllText($behaviorPath)
           $behavior = $behavior.Replace('return Path.Combine(docs, "Mount and Blade II Bannerlord", "Configs", "ModLogs", "GuidedArrow.log");', 'return System.IO.Path.Combine(docs, "Mount and Blade II Bannerlord", "Configs", "ModLogs", "GuidedArrow.log");')
           $behavior = $behavior.Replace('Directory.CreateDirectory(Path.GetDirectoryName(path));', 'Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));')
-          Set-Content -Path 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Value $behavior -NoNewline
+          [IO.File]::WriteAllText($behaviorPath, $behavior)
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
