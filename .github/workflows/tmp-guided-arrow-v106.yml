@@ -12,15 +12,23 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Verify source
+      - name: Reconstruct and patch source
         shell: pwsh
         run: |
-          $source = 'GuidedArrow/Source/GuidedArrowBehavior.cs'
-          if (-not (Test-Path $source)) { throw 'Missing controller source' }
-          $actual = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expected = 'd109069714ec3404d4d55b19f3c63ae36c2809b4bbe6fb3c33b9027c86af2acc'
-          Write-Host "GuidedArrowBehavior.cs SHA-256: $actual"
-          if ($actual -ne $expected) { throw "Controller source hash mismatch: $actual" }
+          $parts = Get-ChildItem 'GuidedArrow/SourceParts/GuidedArrowBehavior.part*' | Sort-Object Name
+          if ($parts.Count -ne 8) { throw "Expected 8 v1.0.5 source parts, found $($parts.Count)" }
+          $text = ''
+          foreach ($part in $parts) {
+            $text += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n")
+          }
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $text, $utf8)
+          $baseHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($baseHash -ne '6b0146db647ccb1c1f4b271c3ec2bdaf0ac817fbea558f93d52acc792c012d9c') { throw "v1.0.5 source mismatch: $baseHash" }
+          python GuidedArrow/apply_v106.py
+          $finalHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "GuidedArrowBehavior.cs SHA-256: $finalHash"
+          if ($finalHash -ne '1ba687abc03afe518221ae5fbe553608052bdc382621e711290760c5d2e48264') { throw "v1.0.6 source mismatch: $finalHash" }
       - name: Restore
         shell: pwsh
         run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
