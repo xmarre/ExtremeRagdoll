@@ -92,9 +92,16 @@ jobs:
           $ErrorActionPreference = 'Stop'
           @'
           import base64,gzip,hashlib,pathlib
-          parts=sorted(pathlib.Path('GuidedArrow/v114c_payload').glob('part*.txt'))
-          encoded=''.join(p.read_text().strip() for p in parts)
-          assert len(parts)==4, len(parts)
+          paths=[
+            pathlib.Path('GuidedArrow/v114c_payload/part01.txt'),
+            pathlib.Path('GuidedArrow/v114c_payload/part02.txt'),
+            pathlib.Path('GuidedArrow/v114c_payload/part03.txt'),
+            pathlib.Path('GuidedArrow/v114d_payload/part04.txt'),
+            pathlib.Path('GuidedArrow/v114d_payload/part05.txt'),
+            pathlib.Path('GuidedArrow/v114d_payload/part06.txt'),
+            pathlib.Path('GuidedArrow/v114d_payload/part07.txt'),
+          ]
+          encoded=''.join(p.read_text().strip() for p in paths)
           encoded_hash=hashlib.sha256(encoded.encode()).hexdigest(); print('v114_encoded_sha256='+encoded_hash)
           assert encoded_hash=='e72d17d47496ae93b122aea6a84696cbf206c96423fa3022f3b69d3cc8659b3a', encoded_hash
           raw=gzip.decompress(base64.b64decode(encoded))
