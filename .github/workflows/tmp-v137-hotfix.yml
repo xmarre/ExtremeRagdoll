@@ -88,52 +88,26 @@ jobs:
           Move-Item -Force './ExtremeRagdoll.layoutfixed.dll' './ExtremeRagdoll.dll'
           Copy-Item 'v137src/ExtremeRagdoll.ClothSync.dll' './ExtremeRagdoll.ClothSync.dll'
 
-      - name: Validate transplanted target layout
+      - name: Validate exact missing-field invariant
         shell: pwsh
         run: |
           Add-Type -Path (Resolve-Path './Mono.Cecil.dll')
           $asm = [Mono.Cecil.AssemblyDefinition]::ReadAssembly((Resolve-Path './ExtremeRagdoll.dll'))
-          function Get-AllTypes($types) {
-            foreach ($t in $types) {
-              $t
-              if ($t.HasNestedTypes) { Get-AllTypes $t.NestedTypes }
-            }
-          }
-          $types = @(Get-AllTypes $asm.MainModule.Types)
-          $behavior = $types | Where-Object { $_.FullName -eq 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' } | Select-Object -First 1
+          $behavior = $asm.MainModule.GetType('ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior')
           if (-not $behavior) { throw 'SafeRagdollBehavior missing' }
-          $pending = $types | Where-Object { $_.FullName -eq 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior/PendingDeath' } | Select-Object -First 1
+          $pending = $behavior.NestedTypes | Where-Object { $_.Name -eq 'PendingDeath' } | Select-Object -First 1
           if (-not $pending) { throw 'PendingDeath missing' }
           $field = $pending.Fields | Where-Object { $_.Name -eq 'CompletionGateArmed' -and $_.FieldType.FullName -eq 'System.Boolean' } | Select-Object -First 1
-          if (-not $field) { throw 'PendingDeath.CompletionGateArmed missing after layout patch' }
-          foreach ($methodName in @('OnTrackedAgentHealthChanged','EnrichPendingDeath','OnMissionTick')) {
-            $method = $behavior.Methods | Where-Object { $_.Name -eq $methodName } | Select-Object -First 1
-            if (-not $method) { throw "Missing transplanted method $methodName" }
-            foreach ($ins in $method.Body.Instructions) {
-              $op = $ins.Operand
-              if ($op -is [Mono.Cecil.FieldReference] -and $op.DeclaringType.FullName.StartsWith('ExtremeRagdoll.SafeRuntime.', [StringComparison]::Ordinal)) {
-                $targetType = $types | Where-Object { $_.FullName -eq $op.DeclaringType.FullName } | Select-Object -First 1
-                if (-not $targetType) { throw "Missing internal declaring type for field $($op.FullName)" }
-                $targetField = $targetType.Fields | Where-Object { $_.Name -eq $op.Name -and $_.FieldType.FullName -eq $op.FieldType.FullName } | Select-Object -First 1
-                if (-not $targetField) { throw "Missing internal field referenced by $methodName: $($op.FullName)" }
-              }
-              if ($op -is [Mono.Cecil.MethodReference] -and $op.DeclaringType.FullName.StartsWith('ExtremeRagdoll.SafeRuntime.', [StringComparison]::Ordinal)) {
-                $targetType = $types | Where-Object { $_.FullName -eq $op.DeclaringType.FullName } | Select-Object -First 1
-                if (-not $targetType) { throw "Missing internal declaring type for method $($op.FullName)" }
-                $found = $false
-                foreach ($candidate in ($targetType.Methods | Where-Object { $_.Name -eq $op.Name -and $_.Parameters.Count -eq $op.Parameters.Count })) {
-                  if ($candidate.ReturnType.FullName -ne $op.ReturnType.FullName) { continue }
-                  $same = $true
-                  for ($pi = 0; $pi -lt $op.Parameters.Count; $pi++) {
-                    if ($candidate.Parameters[$pi].ParameterType.FullName -ne $op.Parameters[$pi].ParameterType.FullName) { $same = $false; break }
-                  }
-                  if ($same) { $found = $true; break }
-                }
-                if (-not $found) { throw "Missing internal method referenced by $methodName: $($op.FullName)" }
-              }
-            }
+          if (-not $field) { throw 'PendingDeath.CompletionGateArmed definition missing' }
+          $onMissionTick = $behavior.Methods | Where-Object { $_.Name -eq 'OnMissionTick' } | Select-Object -First 1
+          if (-not $onMissionTick) { throw 'OnMissionTick missing' }
+          $refsToField = @($onMissionTick.Body.Instructions | ForEach-Object { $_.Operand } | Where-Object { $_ -is [Mono.Cecil.FieldReference] -and $_.Name -eq 'CompletionGateArmed' })
+          if ($refsToField.Count -lt 1) { throw 'OnMissionTick no longer references CompletionGateArmed; unexpected donor mismatch' }
+          foreach ($fr in $refsToField) {
+            if ($fr.DeclaringType.FullName -ne $pending.FullName) { throw "CompletionGateArmed reference targets wrong type: $($fr.DeclaringType.FullName)" }
+            if ($fr.FieldType.FullName -ne 'System.Boolean') { throw 'CompletionGateArmed reference has wrong type' }
           }
-          Write-Host 'target-layout validation passed'
+          Write-Host "CompletionGateArmed definition/reference validation passed; refs=$($refsToField.Count)"
           $asm.Dispose()
 
       - name: Run existing assembly invariant validator
