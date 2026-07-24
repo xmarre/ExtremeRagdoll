@@ -1,0 +1,1 @@
+v1.0.20 build target: remove native Bannerlord mission crosshair/reticle during Guided Arrow camera ownership while preserving the mod's own optional crosshair and restoring only views suspended by Guided Arrow.
