@@ -1,0 +1,135 @@
+name: Temporary Guided Arrow v1.0.17 Compiler
+
+on:
+  pull_request:
+    paths:
+      - 'GuidedArrow/.v117-compile-trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Reconstruct exact v1.0.16 baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $parts=Get-ChildItem 'GuidedArrow/v109_payload/part*.txt' | Sort-Object Name
+          if($parts.Count -ne 5){throw "Expected 5 v109 parts"}
+          $encoded=($parts|%{Get-Content $_.FullName -Raw}) -join ''
+          [IO.File]::WriteAllBytes('v109.zip',[Convert]::FromBase64String($encoded))
+          Expand-Archive v109.zip v117src -Force
+          python -c "import base64,gzip,pathlib; names=['v110.patch','slot.patch','visibility.patch','v111.patch']; src=['GuidedArrow/v110.patch.gz.b64','GuidedArrow/v110-slot-fix.patch.gz.b64','GuidedArrow/v110-public-visibility-fix.patch.gz.b64','GuidedArrow/v111.patch.gz.b64']; [pathlib.Path(n).write_bytes(gzip.decompress(base64.b64decode(pathlib.Path(s).read_text().strip()))) for n,s in zip(names,src)]"
+          Push-Location v117src
+          git init | Out-Null
+          git config core.whitespace cr-at-eol
+          foreach($patch in @('..\v110.patch','..\slot.patch','..\visibility.patch','..\v111.patch')){git apply --check $patch;if($LASTEXITCODE-ne 0){throw "check $patch"};git apply $patch;if($LASTEXITCODE-ne 0){throw "apply $patch"}}
+          Pop-Location
+          @'
+          import base64,gzip,hashlib,pathlib
+          def make(out, paths, encsha, rawsha):
+              e=''.join(pathlib.Path(p).read_text().strip() for p in paths)
+              assert hashlib.sha256(e.encode()).hexdigest()==encsha
+              r=gzip.decompress(base64.b64decode(e))
+              assert hashlib.sha256(r).hexdigest()==rawsha
+              pathlib.Path(out).write_bytes(r)
+          make('v112.patch',[str(p) for p in sorted(pathlib.Path('GuidedArrow/v112_payload').glob('part*.txt'))],'09f3869fb3e7eb26e64840d72806bf73f9ec4e607472f85d7506a61c4df535ed','f94c435ca30696e71b7bf7b9df9d75c20405a294d8b6a3f9a454f270ef7c2ec3')
+          make('v113.patch',[str(p) for p in sorted(pathlib.Path('GuidedArrow/v113_payload').glob('part*.txt'))],'732359dbafb7fe1c246f13e3e8e8829c955f059ce8f96eda72e57c75d9779193','ba6a37e0b3816536e4a38d667c2dbbdcff4c0aeb1bb20bf6e9da2284b020504e')
+          make('v114.patch',['GuidedArrow/v114c_payload/part01.txt','GuidedArrow/v114c_payload/part02.txt','GuidedArrow/v114c_payload/part03.txt','GuidedArrow/v114d_payload/part04.txt','GuidedArrow/v114d_payload/part05.txt','GuidedArrow/v114d_payload/part06.txt','GuidedArrow/v114d_payload/part07.txt'],'e72d17d47496ae93b122aea6a84696cbf206c96423fa3022f3b69d3cc8659b3a','b6e9997f36f1f8021e3d68a752030c6658f5665569ce4abc97fe4104574abef5')
+          make('v115.patch',[str(p) for p in sorted(pathlib.Path('GuidedArrow/v115_payload').glob('part*.txt'))],'5fc3606bddd34659e48e13820f7fe89e4e21bd335a05929f9d388c4e819408b5','cc23f5084c6a1b300c9e6f2a1e177d482869b159db5fbea87170bc62ae005e5f')
+          make('v116.patch',['GuidedArrow/v116_payload/part01.txt','GuidedArrow/v116b_payload/part02.txt','GuidedArrow/v116b_payload/part03.txt','GuidedArrow/v116b_payload/part04.txt'],'eb6d77f25ab9d6673b53bce1eed3af2da3271157876d40690c4676d722364a7f','6703715f281323394cb2540d4082a4b870f379ab8e7a20b5340ac7d83ce6e643')
+          '@ | Set-Content -Encoding UTF8 reconstruct.py
+          python reconstruct.py
+          Push-Location v117src
+          foreach($patch in @('..\v112.patch','..\v113.patch','..\v114.patch','..\v115.patch','..\v116.patch')){git apply --check $patch;if($LASTEXITCODE-ne 0){throw "check $patch"};git apply $patch;if($LASTEXITCODE-ne 0){throw "apply $patch"}}
+          Pop-Location
+          $sm='v117src/GuidedArrow/SubModule.xml'
+          $t=[IO.File]::ReadAllText($sm).Replace('v1.0.13','v1.0.16').Replace('v1.0.14','v1.0.16').Replace('v1.0.15','v1.0.16')
+          [IO.File]::WriteAllText($sm,$t,[Text.UTF8Encoding]::new($false))
+
+      - name: Verify exact v1.0.16 baseline hash
+        shell: pwsh
+        run: |
+          @'
+          import hashlib,pathlib
+          root=pathlib.Path('v117src/GuidedArrow/Source');h=hashlib.sha256()
+          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
+              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
+          d=h.hexdigest();print('v116_source_sha256='+d);assert d=='62b21bec6b70b735bfc5d145229ef15ab2f2540aa4f29d8b7932752ab0c224b4'
+          '@ | Set-Content -Encoding UTF8 verify116.py
+          python verify116.py
+
+      - name: Apply exact v1.0.17 patch
+        shell: pwsh
+        run: |
+          @'
+          import base64,gzip,hashlib,pathlib
+          parts=sorted(pathlib.Path('GuidedArrow/v117_payload').glob('part*.txt'))
+          assert len(parts)==3,len(parts)
+          e=''.join(p.read_text().strip() for p in parts)
+          eh=hashlib.sha256(e.encode()).hexdigest();print('v117_encoded_sha256='+eh);assert eh=='0f0e893b2dd8951e70027732d178004e262b8407ffb7baa51d4835aa7cccb00e'
+          r=gzip.decompress(base64.b64decode(e))
+          rh=hashlib.sha256(r).hexdigest();print('v117_patch_sha256='+rh);assert rh=='dbe7e9b16a1835e85cc271e6bea08967cd8248310a7ca949572b721907fcb794'
+          pathlib.Path('v117.patch').write_bytes(r)
+          '@ | Set-Content -Encoding UTF8 reconstruct117.py
+          python reconstruct117.py
+          Push-Location v117src
+          git apply --check '..\v117.patch';if($LASTEXITCODE-ne 0){throw 'v117 check failed'}
+          git apply '..\v117.patch';if($LASTEXITCODE-ne 0){throw 'v117 apply failed'}
+          Pop-Location
+
+      - name: Verify exact v1.0.17 source and semantics
+        shell: pwsh
+        run: |
+          $project=Get-Content 'v117src/GuidedArrow/Source/GuidedArrow.csproj' -Raw
+          $behavior=Get-Content 'v117src/GuidedArrow/Source/GuidedArrowBehavior.cs' -Raw
+          $submodule=Get-Content 'v117src/GuidedArrow/SubModule.xml' -Raw
+          foreach($n in @('<Version>1.0.17</Version>','<FileVersion>1.0.17.0</FileVersion>','<AssemblyVersion>1.0.17.0</AssemblyVersion>')){if(-not $project.Contains($n)){throw "Missing $n"}}
+          if(-not $submodule.Contains('<Version value="v1.0.17" />')){throw 'SubModule not v1.0.17'}
+          foreach($n in @('IdentityEntity','IsSameNativeMissileAfterImpact','CameraOwnerNativeIdentityRecycled','KnownConfirmedKill','RestoreNativeCameraAfterGuidance','native missile continuity broke')){if(-not $behavior.Contains($n)){throw "Missing semantic marker $n"}}
+          foreach($forbidden in @('BuildImpactConfirmationCameraFrame','InitializeImpactConfirmationCamera','UpdateImpactConfirmationCamera','UpdateImpactPendingCamera','_victimCameraPreviewActive','screen.CombatCamera.Frame = frame;')){if($behavior.Contains($forbidden)){throw "Forbidden legacy path still present: $forbidden"}}
+          @'
+          import hashlib,pathlib
+          root=pathlib.Path('v117src/GuidedArrow/Source');h=hashlib.sha256()
+          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
+              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
+          d=h.hexdigest();print('v117_source_sha256='+d);pathlib.Path('source_hash.txt').write_text(d+'\n');assert d=='e0245301c984f8a27ccf1cca0b0b82c0f7fcbf7609b1c9a72a6397b985cb24bb'
+          '@ | Set-Content -Encoding UTF8 verify117.py
+          python verify117.py
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore 'v117src/GuidedArrow/Source/GuidedArrow.csproj'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build 'v117src/GuidedArrow/Source/GuidedArrow.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath compiler.log
+          if($LASTEXITCODE-ne 0){exit $LASTEXITCODE}
+
+      - name: Collect exact outputs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force compiled | Out-Null
+          if(Test-Path 'v117src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll'){Copy-Item 'v117src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll' compiled/GuidedArrow.dll}
+          if(Test-Path 'v117src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb'){Copy-Item 'v117src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb' compiled/GuidedArrow.pdb}
+          if(Test-Path 'v117src/GuidedArrow/Source'){Copy-Item 'v117src/GuidedArrow/Source' compiled/Source -Recurse}
+          if(Test-Path 'v117src/GuidedArrow/SubModule.xml'){Copy-Item 'v117src/GuidedArrow/SubModule.xml' compiled/SubModule.xml}
+          if(Test-Path compiler.log){Copy-Item compiler.log compiled/compiler.log}
+          if(Test-Path source_hash.txt){Copy-Item source_hash.txt compiled/source_hash.txt}
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.17-compiled
+          path: compiled
+          if-no-files-found: warn
