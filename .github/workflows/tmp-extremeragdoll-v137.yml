@@ -1,9 +1,0 @@
-name: Disabled temporary Extreme Ragdoll v1.3.7 compiler
-on:
-  workflow_dispatch:
-
-jobs:
-  noop:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "Disabled; superseded by tmp-extremeragdoll-v137-current.yml"
