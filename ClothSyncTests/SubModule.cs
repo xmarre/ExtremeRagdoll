@@ -19,6 +19,7 @@ namespace ExtremeRagdoll.ClothSyncTests
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
             mission.AddMissionBehavior(new ClothSyncTestBehavior());
+            mission.AddMissionBehavior(new AgentClothOwnerTestBehavior());
         }
     }
 }
