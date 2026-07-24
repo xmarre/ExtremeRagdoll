@@ -37,7 +37,7 @@ jobs:
           }
           Pop-Location
 
-      - name: Verify v1.0.11 baseline hash
+      - name: Verify exact v1.0.11 baseline hash
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -52,11 +52,25 @@ jobs:
           '@ | Set-Content -Encoding UTF8 'verify_v111.py'
           python verify_v111.py
 
-      - name: Apply exact v1.0.12 patch
+      - name: Reconstruct and apply exact v1.0.12 patch
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -c "import base64,gzip,pathlib,hashlib; p=pathlib.Path('GuidedArrow/v112-final.patch.gz.b64'); raw=gzip.decompress(base64.b64decode(p.read_text().strip())); d=hashlib.sha256(raw).hexdigest(); print('v112_patch_sha256='+d); assert d=='f94c435ca30696e71b7bf7b9df9d75c20405a294d8b6a3f9a454f270ef7c2ec3'; pathlib.Path('v112.patch').write_bytes(raw)"
+          @'
+          import base64, gzip, hashlib, pathlib
+          parts=sorted(pathlib.Path('GuidedArrow/v112_payload').glob('part*.txt'))
+          assert len(parts)==4, f'Expected 4 v1.0.12 payload parts, found {len(parts)}'
+          encoded=''.join(p.read_text() for p in parts)
+          encoded_hash=hashlib.sha256(encoded.encode('ascii')).hexdigest()
+          print('v112_b64_sha256='+encoded_hash)
+          assert encoded_hash=='09f3869fb3e7eb26e64840d72806bf73f9ec4e607472f85d7506a61c4df535ed', encoded_hash
+          raw=gzip.decompress(base64.b64decode(encoded))
+          patch_hash=hashlib.sha256(raw).hexdigest()
+          print('v112_patch_sha256='+patch_hash)
+          assert patch_hash=='f94c435ca30696e71b7bf7b9df9d75c20405a294d8b6a3f9a454f270ef7c2ec3', patch_hash
+          pathlib.Path('v112.patch').write_bytes(raw)
+          '@ | Set-Content -Encoding UTF8 'reconstruct_v112.py'
+          python reconstruct_v112.py
           Push-Location 'v112src'
           git apply --check '..\v112.patch'
           if ($LASTEXITCODE -ne 0) { throw 'v1.0.12 patch check failed.' }
