@@ -1,0 +1,38 @@
+name: Temporary ExtremeRagdoll ClothSync Decompile
+
+on:
+  push:
+    branches:
+      - 'tmp/extremeragdoll-v137-cloth-sync-tests'
+
+permissions:
+  contents: read
+
+jobs:
+  decompile:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify exact shipped companion
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash 'input/ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "clothsync_sha256=$hash"
+          if ($hash -ne '04a1b4ca8a7f46514a5499ada259b8e9b6af7c4db8ac13d0c8210bd867f028f2') { throw "Unexpected ClothSync binary: $hash" }
+      - name: Install ILSpy command line
+        shell: pwsh
+        run: dotnet tool install --global ilspycmd
+      - name: Decompile exact companion
+        shell: pwsh
+        run: |
+          ilspycmd -p -o decompiled 'input/ExtremeRagdoll.ClothSync.dll'
+          Get-ChildItem decompiled -Recurse | Select-Object FullName
+      - name: Upload decompiled source
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-ClothSync-v136-decompiled
+          path: decompiled
+          if-no-files-found: error
