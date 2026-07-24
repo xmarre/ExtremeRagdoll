@@ -2,12 +2,16 @@ name: Temporary Guided Arrow v1.0.21 Universal Compatibility Build
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/guided-arrow-v121-universal-compat.yml'
+    paths: ['.github/workflows/guided-arrow-v121-universal-compat.yml']
 
 permissions:
   contents: read
   actions: read
+
+env:
+  BASE_ARTIFACT: '8607961542'
+  BASE_SOURCE_SHA: '964d214fc8fc5f0e3d03294c8b3db69f05e02720b3ccd817a94357743301d686'
+  RELEASE_SOURCE_SHA: '316e7d0116b542ca25334ee8a28c7323e527e6e14e7cf1f97388b1d6909e7875'
 
 jobs:
   release:
@@ -15,97 +19,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Download exact successful v1.0.20 artifact
+        with: { dotnet-version: '8.0.x' }
+      - name: Download exact v1.0.20 baseline
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        env: { GITHUB_TOKEN: '${{ github.token }}' }
         run: |
-          $ErrorActionPreference='Stop'
-          $headers=@{
-            Authorization="Bearer $env:GITHUB_TOKEN"
-            Accept='application/vnd.github+json'
-            'X-GitHub-Api-Version'='2022-11-28'
-          }
-          Invoke-WebRequest -Uri 'https://api.github.com/repos/xmarre/ExtremeRagdoll/actions/artifacts/8607961542/zip' -Headers $headers -OutFile 'v120artifact.zip'
-          Expand-Archive 'v120artifact.zip' 'work' -Force
-          if(-not (Test-Path 'work/Source/GuidedArrow.csproj')){throw 'v1.0.20 source missing'}
-          if(-not (Test-Path 'work/SubModule.xml')){throw 'v1.0.20 SubModule.xml missing'}
-
-      - name: Verify exact v1.0.20 source baseline
+          $h=@{Authorization="Bearer $env:GITHUB_TOKEN";Accept='application/vnd.github+json';'X-GitHub-Api-Version'='2022-11-28'}
+          Invoke-WebRequest -Uri "https://api.github.com/repos/xmarre/ExtremeRagdoll/actions/artifacts/$env:BASE_ARTIFACT/zip" -Headers $h -OutFile base.zip
+          Expand-Archive base.zip work -Force
+      - name: Verify baseline and apply metadata-only v1.0.21 bump
         shell: pwsh
         run: |
           @'
           import hashlib,pathlib
-          root=pathlib.Path('work/Source');h=hashlib.sha256()
-          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
-              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
-          d=h.hexdigest();print('v120_source_sha256='+d);assert d=='964d214fc8fc5f0e3d03294c8b3db69f05e02720b3ccd817a94357743301d686'
-          '@ | Set-Content -Encoding UTF8 verify120.py
-          python verify120.py
-
-      - name: Apply universal v1.0.21 release metadata only
-        shell: pwsh
-        run: |
-          $ErrorActionPreference='Stop'
-          $p='work/Source/GuidedArrow.csproj'
-          $s=Get-Content $p -Raw
-          foreach($n in @('<Version>1.0.20</Version>','<FileVersion>1.0.20.0</FileVersion>','<AssemblyVersion>1.0.20.0</AssemblyVersion>')){if(-not $s.Contains($n)){throw "Missing $n"}}
-          $s=$s.Replace('<Version>1.0.20</Version>','<Version>1.0.21</Version>')
-          $s=$s.Replace('<FileVersion>1.0.20.0</FileVersion>','<FileVersion>1.0.21.0</FileVersion>')
-          $s=$s.Replace('<AssemblyVersion>1.0.20.0</AssemblyVersion>','<AssemblyVersion>1.0.21.0</AssemblyVersion>')
-          Set-Content -Path $p -Value $s -Encoding UTF8
-          $p='work/SubModule.xml'
-          $s=Get-Content $p -Raw
-          if(-not $s.Contains('<Version value="v1.0.20" />')){throw 'SubModule baseline version missing'}
-          $s=$s.Replace('<Version value="v1.0.20" />','<Version value="v1.0.21" />')
-          Set-Content -Path $p -Value $s -Encoding UTF8
-
-      - name: Verify exact v1.0.21 source and oldest-reference invariant
-        shell: pwsh
-        run: |
-          @'
-          import hashlib,pathlib
-          root=pathlib.Path('work/Source');h=hashlib.sha256()
-          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
-              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
-          d=h.hexdigest();print('v121_source_sha256='+d);assert d=='b10f6aad6f4e30cd34b758a4b63c6c98911c8dfc75b6ced7a7215ace2fe9db3d'
-          pathlib.Path('source_hash.txt').write_text(d+'\n')
-          cs=(root/'GuidedArrow.csproj').read_text()
-          assert '1.3.15.110062' in cs
-          assert '1.4.7.117484' not in cs
-          '@ | Set-Content -Encoding UTF8 verify121.py
-          python verify121.py
-
-      - name: Restore production references
-        shell: pwsh
-        run: dotnet restore 'work/Source/GuidedArrow.csproj'
-
+          root=pathlib.Path('work/Source')
+          def treehash():
+              h=hashlib.sha256()
+              for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
+                  h.update(p.relative_to(root).as_posix().encode());h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
+              return h.hexdigest()
+          before=treehash();print('baseline='+before);assert before=='964d214fc8fc5f0e3d03294c8b3db69f05e02720b3ccd817a94357743301d686'
+          p=root/'GuidedArrow.csproj';b=p.read_bytes()
+          reps=[(b'<Version>1.0.20</Version>',b'<Version>1.0.21</Version>'),(b'<FileVersion>1.0.20.0</FileVersion>',b'<FileVersion>1.0.21.0</FileVersion>'),(b'<AssemblyVersion>1.0.20.0</AssemblyVersion>',b'<AssemblyVersion>1.0.21.0</AssemblyVersion>')]
+          for a,c in reps: assert a in b;b=b.replace(a,c)
+          p.write_bytes(b)
+          p=pathlib.Path('work/SubModule.xml');b=p.read_bytes();a=b'<Version value="v1.0.20" />';assert a in b;p.write_bytes(b.replace(a,b'<Version value="v1.0.21" />'))
+          after=treehash();print('release='+after);assert after=='316e7d0116b542ca25334ee8a28c7323e527e6e14e7cf1f97388b1d6909e7875'
+          pathlib.Path('source_hash.txt').write_text(after+'\n')
+          cs=(root/'GuidedArrow.csproj').read_text();assert '1.3.15.110062' in cs and '1.4.7.117484' not in cs
+          '@ | Set-Content -Encoding UTF8 prepare.py
+          python prepare.py
       - name: Build production DLL against oldest supported API 1.3.15
         shell: pwsh
         run: |
-          dotnet build 'work/Source/GuidedArrow.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath compiler-release.log
+          dotnet restore work/Source/GuidedArrow.csproj
+          dotnet build work/Source/GuidedArrow.csproj -c Release --no-restore 2>&1 | Tee-Object compiler-release.log
           if($LASTEXITCODE-ne 0){exit $LASTEXITCODE}
-
-      - name: Collect exact release outputs
+      - name: Collect production outputs
         shell: pwsh
         run: |
-          $ErrorActionPreference='Stop'
           New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.dll' release/GuidedArrow.dll
-          Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.pdb' release/GuidedArrow.pdb
-          Copy-Item 'work/Source' release/Source -Recurse
-          Remove-Item 'release/Source/bin','release/Source/obj' -Recurse -Force -ErrorAction SilentlyContinue
-          Copy-Item 'work/SubModule.xml' release/SubModule.xml
-          Copy-Item compiler-release.log release/compiler-release.log
-          Copy-Item source_hash.txt release/source_hash.txt
-          Get-FileHash release/GuidedArrow.dll -Algorithm SHA256 | Format-List | Out-File release/dll_hash.txt
-          Get-FileHash release/GuidedArrow.pdb -Algorithm SHA256 | Format-List | Out-File release/pdb_hash.txt
-
-      - name: Upload production outputs
-        uses: actions/upload-artifact@v4
+          Copy-Item work/Source/bin/Release/net472/GuidedArrow.dll release/GuidedArrow.dll
+          Copy-Item work/Source/bin/Release/net472/GuidedArrow.pdb release/GuidedArrow.pdb
+          Copy-Item work/Source release/Source -Recurse
+          Remove-Item release/Source/bin,release/Source/obj -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item work/SubModule.xml release/SubModule.xml
+          Copy-Item source_hash.txt,compiler-release.log release/
+          (Get-FileHash release/GuidedArrow.dll -Algorithm SHA256).Hash.ToLower() | Set-Content release/dll_sha256.txt
+          (Get-FileHash release/GuidedArrow.pdb -Algorithm SHA256).Hash.ToLower() | Set-Content release/pdb_sha256.txt
+      - uses: actions/upload-artifact@v4
         with:
           name: GuidedArrow-v1.0.21-production-oldest-api
           path: release
@@ -116,69 +78,42 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        bannerlord:
-          - '1.3.15.110062'
-          - '1.4.0.112726-beta'
-          - '1.4.1.113228-beta'
-          - '1.4.2.113809-beta'
-          - '1.4.3.114169-beta'
-          - '1.4.4.114449-beta'
-          - '1.4.5.115026'
-          - '1.4.6.115628'
-          - '1.4.7.117484'
+        bannerlord: ['1.3.15.110062','1.4.0.112726-beta','1.4.1.113228-beta','1.4.2.113809-beta','1.4.3.114169-beta','1.4.4.114449-beta','1.4.5.115026','1.4.6.115628','1.4.7.117484']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Download exact successful v1.0.20 artifact
+        with: { dotnet-version: '8.0.x' }
+      - name: Download exact v1.0.20 baseline
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        env: { GITHUB_TOKEN: '${{ github.token }}' }
         run: |
-          $ErrorActionPreference='Stop'
-          $headers=@{
-            Authorization="Bearer $env:GITHUB_TOKEN"
-            Accept='application/vnd.github+json'
-            'X-GitHub-Api-Version'='2022-11-28'
-          }
-          Invoke-WebRequest -Uri 'https://api.github.com/repos/xmarre/ExtremeRagdoll/actions/artifacts/8607961542/zip' -Headers $headers -OutFile 'v120artifact.zip'
-          Expand-Archive 'v120artifact.zip' 'work' -Force
-
-      - name: Verify baseline and prepare identical v1.0.21 source for ${{ matrix.bannerlord }}
+          $h=@{Authorization="Bearer $env:GITHUB_TOKEN";Accept='application/vnd.github+json';'X-GitHub-Api-Version'='2022-11-28'}
+          Invoke-WebRequest -Uri "https://api.github.com/repos/xmarre/ExtremeRagdoll/actions/artifacts/$env:BASE_ARTIFACT/zip" -Headers $h -OutFile base.zip
+          Expand-Archive base.zip work -Force
+      - name: Prepare identical code for ${{ matrix.bannerlord }} API compile
         shell: pwsh
-        env:
-          TARGET_VERSION: ${{ matrix.bannerlord }}
+        env: { TARGET_VERSION: '${{ matrix.bannerlord }}' }
         run: |
-          $ErrorActionPreference='Stop'
           @'
-          import hashlib,pathlib
+          import hashlib,os,pathlib
           root=pathlib.Path('work/Source');h=hashlib.sha256()
           for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
-              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
+              h.update(p.relative_to(root).as_posix().encode());h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
           assert h.hexdigest()=='964d214fc8fc5f0e3d03294c8b3db69f05e02720b3ccd817a94357743301d686'
-          '@ | Set-Content -Encoding UTF8 verifybase.py
-          python verifybase.py
-          $p='work/Source/GuidedArrow.csproj'
-          $s=Get-Content $p -Raw
-          $s=$s.Replace('<Version>1.0.20</Version>','<Version>1.0.21</Version>')
-          $s=$s.Replace('<FileVersion>1.0.20.0</FileVersion>','<FileVersion>1.0.21.0</FileVersion>')
-          $s=$s.Replace('<AssemblyVersion>1.0.20.0</AssemblyVersion>','<AssemblyVersion>1.0.21.0</AssemblyVersion>')
-          if($env:TARGET_VERSION -ne '1.3.15.110062'){$s=$s.Replace('1.3.15.110062',$env:TARGET_VERSION)}
-          Set-Content -Path $p -Value $s -Encoding UTF8
-
-      - name: Restore ${{ matrix.bannerlord }} references
-        shell: pwsh
-        run: dotnet restore 'work/Source/GuidedArrow.csproj'
-
-      - name: Compile identical source against ${{ matrix.bannerlord }}
+          p=root/'GuidedArrow.csproj';b=p.read_bytes()
+          for a,c in [(b'<Version>1.0.20</Version>',b'<Version>1.0.21</Version>'),(b'<FileVersion>1.0.20.0</FileVersion>',b'<FileVersion>1.0.21.0</FileVersion>'),(b'<AssemblyVersion>1.0.20.0</AssemblyVersion>',b'<AssemblyVersion>1.0.21.0</AssemblyVersion>')]: assert a in b;b=b.replace(a,c)
+          target=os.environ['TARGET_VERSION'].encode()
+          if target!=b'1.3.15.110062': b=b.replace(b'1.3.15.110062',target)
+          p.write_bytes(b)
+          '@ | Set-Content -Encoding UTF8 prepare-compat.py
+          python prepare-compat.py
+      - name: Compile against ${{ matrix.bannerlord }}
         shell: pwsh
         run: |
-          dotnet build 'work/Source/GuidedArrow.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath 'compiler-${{ matrix.bannerlord }}.log'
+          dotnet restore work/Source/GuidedArrow.csproj
+          dotnet build work/Source/GuidedArrow.csproj -c Release --no-restore 2>&1 | Tee-Object 'compiler-${{ matrix.bannerlord }}.log'
           if($LASTEXITCODE-ne 0){exit $LASTEXITCODE}
-
-      - name: Upload compatibility compiler log
+      - name: Upload compatibility log
         if: always()
         uses: actions/upload-artifact@v4
         with:
