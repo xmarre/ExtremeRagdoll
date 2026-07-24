@@ -1,9 +1,10 @@
 name: Temporary ExtremeRagdoll ClothSync Decompile
 
 on:
-  push:
-    branches:
-      - 'tmp/extremeragdoll-v137-cloth-sync-tests'
+  pull_request:
+    paths:
+      - 'input/ExtremeRagdoll.ClothSync.dll'
+      - '.github/workflows/tmp-extremeragdoll-clothsync-decompile.yml'
 
 permissions:
   contents: read
