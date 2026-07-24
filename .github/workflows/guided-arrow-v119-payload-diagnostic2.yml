@@ -1,0 +1,39 @@
+name: Guided Arrow v1.0.19 Payload Diagnostic 2
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/guided-arrow-v119-payload-diagnostic2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect payload without failing
+        shell: pwsh
+        run: |
+          @'
+          import base64,gzip,hashlib,pathlib,traceback
+          out=[]
+          p=pathlib.Path('GuidedArrow/v119.patch.gz.b64')
+          raw=p.read_bytes(); s=p.read_text().strip()
+          out += [f'file_len={len(raw)}',f'stripped_len={len(s)}',f'file_sha256={hashlib.sha256(raw).hexdigest()}',f'stripped_sha256={hashlib.sha256(s.encode()).hexdigest()}']
+          try:
+              r=gzip.decompress(base64.b64decode(s))
+              out += [f'patch_len={len(r)}',f'patch_sha256={hashlib.sha256(r).hexdigest()}']
+          except Exception as e:
+              out += [f'decompress_error={e!r}']
+          pathlib.Path('diagnostic.txt').write_text('\n'.join(out)+'\n')
+          print('\n'.join(out))
+          '@ | Set-Content -Encoding UTF8 diagnose.py
+          python diagnose.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: GuidedArrow-v119-payload-diagnostic2
+          path: diagnostic.txt
+          if-no-files-found: error
