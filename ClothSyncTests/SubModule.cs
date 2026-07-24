@@ -22,6 +22,7 @@ namespace ExtremeRagdoll.ClothSyncTests
             mission.AddMissionBehavior(new AgentClothOwnerTestBehavior());
             mission.AddMissionBehavior(new VisualTickCatchUpBehavior());
             mission.AddMissionBehavior(new ClothSafeVelocityGovernorBehavior());
+            mission.AddMissionBehavior(new VerifiedClothTargetBehavior());
         }
     }
 }
