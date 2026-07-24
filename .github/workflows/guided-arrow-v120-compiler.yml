@@ -1,6 +1,13 @@
 name: Temporary Guided Arrow v1.0.20 Compiler
 
 on:
+  push:
+    branches:
+      - 'tmp/guided-arrow-v120-native-crosshair-fix'
+    paths:
+      - '.github/workflows/guided-arrow-v120-compiler.yml'
+      - 'GuidedArrow/v120_apply.py.gz.b64'
+      - 'GuidedArrow/.v120-compile-trigger'
   pull_request:
     paths:
       - '.github/workflows/guided-arrow-v120-compiler.yml'
