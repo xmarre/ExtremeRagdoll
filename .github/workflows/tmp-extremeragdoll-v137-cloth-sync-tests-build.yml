@@ -1,0 +1,51 @@
+name: Temporary ExtremeRagdoll v1.3.7 Cloth Sync Tests Build
+
+on:
+  pull_request:
+    paths:
+      - 'ClothSyncTests/**'
+      - '.github/workflows/tmp-extremeragdoll-v137-cloth-sync-tests-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore 'ClothSyncTests/ExtremeRagdoll.ClothSyncTests.csproj'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build 'ClothSyncTests/ExtremeRagdoll.ClothSyncTests.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath compiler.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify isolated output
+        shell: pwsh
+        run: |
+          $dll = 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.dll'
+          if (-not (Test-Path $dll)) { throw 'Compiled test DLL missing.' }
+          $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "cloth_sync_tests_sha256=$hash"
+          New-Item -ItemType Directory -Force compiled | Out-Null
+          Copy-Item $dll compiled/
+          if (Test-Path 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.pdb') { Copy-Item 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.pdb' compiled/ }
+          Copy-Item 'ClothSyncTests/*.cs' compiled/ -Force
+          Copy-Item 'ClothSyncTests/*.csproj' compiled/ -Force
+          Copy-Item compiler.log compiled/
+          Set-Content -Path compiled/sha256.txt -Value $hash
+
+      - name: Upload compiled test submodule
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.3.7-ClothSyncTests-compiled
+          path: compiled
+          if-no-files-found: error
