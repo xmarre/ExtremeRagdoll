@@ -10,7 +10,8 @@ namespace ExtremeRagdoll.ClothSyncTests
     internal sealed class ClothSyncTestBehavior : MissionBehavior
     {
         private const float StabilizationWindow = 0.35f;
-        private const float PendingLifetime = 3.0f;
+        private const float PendingLifetime = 12.0f;
+        private const float LowSpeedRetainWindow = 1.0f;
 
         private sealed class TrackedCorpse
         {
@@ -18,6 +19,11 @@ namespace ExtremeRagdoll.ClothSyncTests
             public float CapturedAt;
             public float RagdollSeenAt = -1f;
             public bool ClothResetAttempted;
+            public bool HasLastVisualPosition;
+            public Vec3 LastVisualPosition;
+            public float LastHighSpeedAt = -1f;
+            public bool ForcedVelocityWasWritten;
+            public bool DistanceClampWasWritten;
         }
 
         private readonly List<TrackedCorpse> _tracked = new List<TrackedCorpse>(16);
@@ -42,6 +48,9 @@ namespace ExtremeRagdoll.ClothSyncTests
             if (_timerStateApplied && _lastTimerRequested)
                 TrySetTimerBasedForcedSkeletonUpdates(false);
 
+            for (int i = _tracked.Count - 1; i >= 0; i--)
+                RestoreHighSpeedOverrides(_tracked[i]);
+
             _tracked.Clear();
             _rendererController = null;
             _setTimerBasedUpdates = null;
@@ -55,8 +64,7 @@ namespace ExtremeRagdoll.ClothSyncTests
                 return;
 
             Settings settings = TryGetSettings();
-            if (settings == null ||
-                (!settings.ForceBoneFramesDuringRagdollStabilization && !settings.OneShotClothResetOnRagdoll))
+            if (settings == null || !NeedsPerCorpseTracking(settings))
                 return;
 
             for (int i = 0; i < _tracked.Count; i++)
@@ -65,11 +73,15 @@ namespace ExtremeRagdoll.ClothSyncTests
                     return;
             }
 
-            _tracked.Add(new TrackedCorpse
+            TrackedCorpse tracked = new TrackedCorpse
             {
                 Agent = affected,
                 CapturedAt = Mission.CurrentTime
-            });
+            };
+
+            TryCaptureVisualPosition(affected, out tracked.LastVisualPosition);
+            tracked.HasLastVisualPosition = TryCaptureVisualPosition(affected, out tracked.LastVisualPosition);
+            _tracked.Add(tracked);
         }
 
         public override void OnMissionTick(float dt)
@@ -83,10 +95,10 @@ namespace ExtremeRagdoll.ClothSyncTests
 
             SyncTimerBasedForcedSkeletonUpdates(settings.TimerBasedForcedSkeletonUpdates);
 
-            bool forceFrames = settings.ForceBoneFramesDuringRagdollStabilization;
-            bool resetCloth = settings.OneShotClothResetOnRagdoll;
-            if (!forceFrames && !resetCloth)
+            if (!NeedsPerCorpseTracking(settings))
             {
+                for (int i = _tracked.Count - 1; i >= 0; i--)
+                    RestoreHighSpeedOverrides(_tracked[i]);
                 _tracked.Clear();
                 return;
             }
@@ -98,59 +110,301 @@ namespace ExtremeRagdoll.ClothSyncTests
                 Agent agent = tracked.Agent;
                 if (agent == null || now - tracked.CapturedAt > PendingLifetime)
                 {
+                    RestoreHighSpeedOverrides(tracked);
                     _tracked.RemoveAt(i);
                     continue;
                 }
 
-                Skeleton skeleton;
-                try
-                {
-                    skeleton = agent.AgentVisuals?.GetSkeleton();
-                }
-                catch
-                {
-                    skeleton = null;
-                }
-
-                if (skeleton == null || !skeleton.IsValid)
-                    continue;
-
-                if (!IsRagdollActive(skeleton))
+                Skeleton skeleton = TryGetSkeleton(agent);
+                if (skeleton == null || !skeleton.IsValid || !IsRagdollActive(skeleton))
                     continue;
 
                 if (tracked.RagdollSeenAt < 0f)
                     tracked.RagdollSeenAt = now;
 
-                if (resetCloth && !tracked.ClothResetAttempted)
-                {
-                    tracked.ClothResetAttempted = true;
-                    try
-                    {
-                        skeleton.ForceUpdateBoneFrames();
-                        skeleton.ResetCloths();
-                        skeleton.ForceUpdateBoneFrames();
-                    }
-                    catch
-                    {
-                    }
-                }
+                RunPreviousDiagnostics(settings, tracked, skeleton, now);
+                RunHighSpeedDiagnostics(settings, tracked, dt, now);
 
-                if (forceFrames && now - tracked.RagdollSeenAt <= StabilizationWindow)
-                {
-                    try
-                    {
-                        skeleton.ForceUpdateBoneFrames();
-                    }
-                    catch
-                    {
-                    }
-                }
+                bool previousDiagnosticsFinished =
+                    (!settings.ForceBoneFramesDuringRagdollStabilization || now - tracked.RagdollSeenAt > StabilizationWindow) &&
+                    (!settings.OneShotClothResetOnRagdoll || tracked.ClothResetAttempted);
 
-                bool forceWindowFinished = !forceFrames || now - tracked.RagdollSeenAt > StabilizationWindow;
-                bool resetFinished = !resetCloth || tracked.ClothResetAttempted;
-                if (forceWindowFinished && resetFinished)
+                bool highSpeedDiagnosticsEnabled =
+                    settings.HighSpeedClothVelocityCompensation ||
+                    settings.DiagnosticZeroClothVelocity ||
+                    settings.HighSpeedClothDistanceClamp;
+
+                bool highSpeedWindowFinished = !highSpeedDiagnosticsEnabled ||
+                    (tracked.LastHighSpeedAt >= 0f && now - tracked.LastHighSpeedAt > LowSpeedRetainWindow);
+
+                if (previousDiagnosticsFinished && highSpeedWindowFinished)
+                {
+                    RestoreHighSpeedOverrides(tracked);
                     _tracked.RemoveAt(i);
+                }
             }
+        }
+
+        private static bool NeedsPerCorpseTracking(Settings settings)
+        {
+            return settings.ForceBoneFramesDuringRagdollStabilization ||
+                   settings.OneShotClothResetOnRagdoll ||
+                   settings.HighSpeedClothVelocityCompensation ||
+                   settings.DiagnosticZeroClothVelocity ||
+                   settings.HighSpeedClothDistanceClamp;
+        }
+
+        private static Skeleton TryGetSkeleton(Agent agent)
+        {
+            try
+            {
+                return agent.AgentVisuals?.GetSkeleton();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void RunPreviousDiagnostics(Settings settings, TrackedCorpse tracked, Skeleton skeleton, float now)
+        {
+            if (settings.OneShotClothResetOnRagdoll && !tracked.ClothResetAttempted)
+            {
+                tracked.ClothResetAttempted = true;
+                try
+                {
+                    skeleton.ForceUpdateBoneFrames();
+                    skeleton.ResetCloths();
+                    skeleton.ForceUpdateBoneFrames();
+                }
+                catch
+                {
+                }
+            }
+
+            if (settings.ForceBoneFramesDuringRagdollStabilization &&
+                tracked.RagdollSeenAt >= 0f &&
+                now - tracked.RagdollSeenAt <= StabilizationWindow)
+            {
+                try
+                {
+                    skeleton.ForceUpdateBoneFrames();
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        private static void RunHighSpeedDiagnostics(Settings settings, TrackedCorpse tracked, float dt, float now)
+        {
+            Agent agent = tracked.Agent;
+            Vec3 physicsVelocity = Vec3.Zero;
+            bool hasPhysicsVelocity = false;
+            try
+            {
+                physicsVelocity = agent.GetRealGlobalVelocity();
+                hasPhysicsVelocity = true;
+            }
+            catch
+            {
+            }
+
+            Vec3 currentVisualPosition;
+            bool hasCurrentVisualPosition = TryCaptureVisualPosition(agent, out currentVisualPosition);
+            Vec3 measuredVelocity = Vec3.Zero;
+            bool hasMeasuredVelocity = false;
+            if (hasCurrentVisualPosition && tracked.HasLastVisualPosition && dt > 0.000001f)
+            {
+                float invDt = 1f / dt;
+                measuredVelocity = new Vec3(
+                    (currentVisualPosition.x - tracked.LastVisualPosition.x) * invDt,
+                    (currentVisualPosition.y - tracked.LastVisualPosition.y) * invDt,
+                    (currentVisualPosition.z - tracked.LastVisualPosition.z) * invDt);
+                hasMeasuredVelocity = true;
+            }
+
+            if (hasCurrentVisualPosition)
+            {
+                tracked.LastVisualPosition = currentVisualPosition;
+                tracked.HasLastVisualPosition = true;
+            }
+
+            Vec3 selectedVelocity;
+            bool hasSelectedVelocity;
+            if (settings.UseMeasuredVisualDisplacementVelocity)
+            {
+                selectedVelocity = hasMeasuredVelocity ? measuredVelocity : physicsVelocity;
+                hasSelectedVelocity = hasMeasuredVelocity || hasPhysicsVelocity;
+            }
+            else
+            {
+                selectedVelocity = hasPhysicsVelocity ? physicsVelocity : measuredVelocity;
+                hasSelectedVelocity = hasPhysicsVelocity || hasMeasuredVelocity;
+            }
+
+            float speed = hasSelectedVelocity ? Length(selectedVelocity) : 0f;
+            float threshold = Math.Max(0f, settings.ActivationSpeedThreshold);
+            bool highSpeed = hasSelectedVelocity && speed >= threshold;
+
+            if (highSpeed)
+            {
+                tracked.LastHighSpeedAt = now;
+                Vec3 forcedVelocity = settings.DiagnosticZeroClothVelocity ? Vec3.Zero : selectedVelocity;
+
+                bool writeVelocity = settings.DiagnosticZeroClothVelocity || settings.HighSpeedClothVelocityCompensation;
+                bool writeDistance = settings.HighSpeedClothDistanceClamp;
+                ApplyToAllClothSimulators(agent, forcedVelocity, writeVelocity,
+                    Clamp(settings.ClothMaxDistanceMultiplier, 0.05f, 1f), writeDistance);
+
+                if (writeVelocity)
+                    tracked.ForcedVelocityWasWritten = true;
+                if (writeDistance)
+                    tracked.DistanceClampWasWritten = true;
+            }
+            else
+            {
+                if (tracked.ForcedVelocityWasWritten || tracked.DistanceClampWasWritten)
+                    RestoreHighSpeedOverrides(tracked);
+            }
+        }
+
+        private static bool TryCaptureVisualPosition(Agent agent, out Vec3 position)
+        {
+            position = Vec3.Zero;
+            try
+            {
+                if (agent?.AgentVisuals == null)
+                    return false;
+
+                position = agent.AgentVisuals.GetGlobalFrame().origin;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void RestoreHighSpeedOverrides(TrackedCorpse tracked)
+        {
+            if (tracked == null || tracked.Agent == null)
+                return;
+
+            if (!tracked.ForcedVelocityWasWritten && !tracked.DistanceClampWasWritten)
+                return;
+
+            ApplyToAllClothSimulators(
+                tracked.Agent,
+                Vec3.Zero,
+                tracked.ForcedVelocityWasWritten,
+                1f,
+                tracked.DistanceClampWasWritten);
+
+            tracked.ForcedVelocityWasWritten = false;
+            tracked.DistanceClampWasWritten = false;
+        }
+
+        private static void ApplyToAllClothSimulators(
+            Agent agent,
+            Vec3 forcedVelocity,
+            bool setForcedVelocity,
+            float maxDistanceMultiplier,
+            bool setMaxDistanceMultiplier)
+        {
+            if ((!setForcedVelocity && !setMaxDistanceMultiplier) || agent == null)
+                return;
+
+            GameEntity root;
+            try
+            {
+                root = agent.AgentVisuals?.GetEntity();
+            }
+            catch
+            {
+                root = null;
+            }
+
+            if (root == null)
+                return;
+
+            ApplyToEntityAndChildren(root, forcedVelocity, setForcedVelocity,
+                maxDistanceMultiplier, setMaxDistanceMultiplier);
+        }
+
+        private static void ApplyToEntityAndChildren(
+            GameEntity entity,
+            Vec3 forcedVelocity,
+            bool setForcedVelocity,
+            float maxDistanceMultiplier,
+            bool setMaxDistanceMultiplier)
+        {
+            if (entity == null)
+                return;
+
+            try
+            {
+                int clothCount = entity.ClothSimulatorComponentCount;
+                for (int i = 0; i < clothCount; i++)
+                {
+                    ClothSimulatorComponent cloth = entity.GetClothSimulator(i);
+                    if (cloth == null)
+                        continue;
+
+                    try
+                    {
+                        if (setForcedVelocity)
+                            cloth.SetForcedVelocity(in forcedVelocity);
+                        if (setMaxDistanceMultiplier)
+                            cloth.SetMaxDistanceMultiplier(maxDistanceMultiplier);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            int childCount;
+            try
+            {
+                childCount = entity.ChildCount;
+            }
+            catch
+            {
+                return;
+            }
+
+            for (int i = 0; i < childCount; i++)
+            {
+                GameEntity child;
+                try
+                {
+                    child = entity.GetChild(i);
+                }
+                catch
+                {
+                    child = null;
+                }
+
+                if (child != null)
+                    ApplyToEntityAndChildren(child, forcedVelocity, setForcedVelocity,
+                        maxDistanceMultiplier, setMaxDistanceMultiplier);
+            }
+        }
+
+        private static float Length(Vec3 value)
+        {
+            return (float)Math.Sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
+        }
+
+        private static float Clamp(float value, float min, float max)
+        {
+            if (value < min)
+                return min;
+            return value > max ? max : value;
         }
 
         private static Settings TryGetSettings()
