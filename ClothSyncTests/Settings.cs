@@ -6,7 +6,7 @@ namespace ExtremeRagdoll.ClothSyncTests
 {
     public sealed class Settings : AttributeGlobalSettings<Settings>
     {
-        public override string Id => "ExtremeRagdoll_ClothSyncTests_v139";
+        public override string Id => "ExtremeRagdoll_ClothSyncTests_v140";
         public override string DisplayName => "Extreme Ragdoll - Cloth Sync Tests";
         public override string FolderName => "ExtremeRagdoll";
         public override string FormatType => "json";
@@ -40,28 +40,30 @@ namespace ExtremeRagdoll.ClothSyncTests
         [SettingPropertyBool("High-Speed Cloth Distance Clamp", Order = 13, RequireRestart = false)]
         public bool HighSpeedClothDistanceClamp { get; set; } = false;
 
-        [SettingPropertyGroup("High-Speed Hard Rebase")]
-        [SettingPropertyBool("Invalidate Previous Cloth Frames", Order = 20, RequireRestart = false,
-            HintText = "While a ragdolled corpse exceeds the activation speed, invalidates the previous frame on cloth-owning visual entities every mission tick.")]
+        [SettingPropertyGroup("Previous High-Speed Hard Rebase")]
+        [SettingPropertyBool("Invalidate Previous Cloth Frames", Order = 20, RequireRestart = false)]
         public bool HighSpeedInvalidatePreviousFrames { get; set; } = false;
 
-        [SettingPropertyGroup("High-Speed Hard Rebase")]
-        [SettingPropertyBool("Continuous Cloth Hard Reset", Order = 21, RequireRestart = false,
-            HintText = "While above the activation speed, marks every cloth simulator on the corpse visual hierarchy as reset-required each mission tick to prevent accumulated spatial debt.")]
+        [SettingPropertyGroup("Previous High-Speed Hard Rebase")]
+        [SettingPropertyBool("Continuous Cloth Hard Reset", Order = 21, RequireRestart = false)]
         public bool HighSpeedContinuousClothReset { get; set; } = false;
 
-        [SettingPropertyGroup("High-Speed Hard Rebase")]
-        [SettingPropertyBool("Teleport-Rebase Cloth Entities", Order = 22, RequireRestart = false,
-            HintText = "Strongest diagnostic. Rewrites each cloth-owning entity's current global frame as a teleport every high-speed tick, then optionally combines with the other rebase toggles.")]
+        [SettingPropertyGroup("Previous High-Speed Hard Rebase")]
+        [SettingPropertyBool("Teleport-Rebase Cloth Entities", Order = 22, RequireRestart = false)]
         public bool HighSpeedTeleportRebase { get; set; } = false;
 
+        [SettingPropertyGroup("Direct Agent Cloth Ownership Test")]
+        [SettingPropertyBool("Detach Agent Cloth During High-Speed Flight", Order = 40, RequireRestart = false,
+            HintText = "Directly clears the killed Agent's actual _capeClothSimulator via SetCapeClothSimulator/null while corpse speed exceeds the activation threshold, then restores/rebinds it after slowdown. This bypasses generic GameEntity cloth enumeration.")]
+        public bool HighSpeedDirectAgentClothDetach { get; set; } = false;
+
         [SettingPropertyGroup("High-Speed Thresholds")]
-        [SettingPropertyFloatingInteger("Activation Speed Threshold", 0f, 100f, "0.0 m/s", Order = 30, RequireRestart = false,
-            HintText = "All high-speed diagnostics and hard-rebase tests apply only while corpse speed is at or above this threshold.")]
+        [SettingPropertyFloatingInteger("Activation Speed Threshold", 0f, 100f, "0.0 m/s", Order = 50, RequireRestart = false,
+            HintText = "All high-speed diagnostics apply only while corpse speed is at or above this threshold.")]
         public float ActivationSpeedThreshold { get; set; } = 6f;
 
         [SettingPropertyGroup("High-Speed Thresholds")]
-        [SettingPropertyFloatingInteger("Cloth Max Distance Multiplier", 0.05f, 1f, "0.00x", Order = 31, RequireRestart = false)]
+        [SettingPropertyFloatingInteger("Cloth Max Distance Multiplier", 0.05f, 1f, "0.00x", Order = 51, RequireRestart = false)]
         public float ClothMaxDistanceMultiplier { get; set; } = 0.35f;
     }
 }
