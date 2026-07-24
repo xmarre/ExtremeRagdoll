@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.MountAndBlade;
 
@@ -38,8 +39,6 @@ namespace ExtremeRagdoll.ClothSyncTests
 
         public override void OnRemoveBehavior()
         {
-            // The controller is mission-scoped. Explicitly undo our global diagnostic
-            // while it is still reachable so a live mission cannot retain the test state.
             if (_timerStateApplied && _lastTimerRequested)
                 TrySetTimerBasedForcedSkeletonUpdates(false);
 
@@ -124,8 +123,6 @@ namespace ExtremeRagdoll.ClothSyncTests
 
                 if (resetCloth && !tracked.ClothResetAttempted)
                 {
-                    // Exactly one reset attempt per corpse. Refresh before and after the
-                    // reset so the cloth rebase consumes current ragdoll bone transforms.
                     tracked.ClothResetAttempted = true;
                     try
                     {
@@ -135,7 +132,6 @@ namespace ExtremeRagdoll.ClothSyncTests
                     }
                     catch
                     {
-                        // Diagnostic path only: never destabilize the death pipeline.
                     }
                 }
 
@@ -147,7 +143,6 @@ namespace ExtremeRagdoll.ClothSyncTests
                     }
                     catch
                     {
-                        // Keep the experiment isolated from mission logic failures.
                     }
                 }
 
