@@ -1,0 +1,116 @@
+name: Temporary Guided Arrow v1.0.19 Direct Compiler
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/guided-arrow-v119-direct-compiler.yml'
+      - 'GuidedArrow/v119_apply.py.gz.b64'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download exact successful v1.0.18 compiler artifact
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $headers=@{
+            Authorization="Bearer $env:GITHUB_TOKEN"
+            Accept='application/vnd.github+json'
+            'X-GitHub-Api-Version'='2022-11-28'
+          }
+          Invoke-WebRequest -Uri 'https://api.github.com/repos/xmarre/ExtremeRagdoll/actions/artifacts/8606567749/zip' -Headers $headers -OutFile 'v118artifact.zip'
+          Expand-Archive 'v118artifact.zip' 'work' -Force
+          if(-not (Test-Path 'work/Source/GuidedArrow.csproj')){throw 'v1.0.18 source missing from artifact'}
+          if(-not (Test-Path 'work/SubModule.xml')){throw 'v1.0.18 SubModule.xml missing from artifact'}
+
+      - name: Verify exact v1.0.18 source baseline
+        shell: pwsh
+        run: |
+          @'
+          import hashlib,pathlib
+          root=pathlib.Path('work/Source');h=hashlib.sha256()
+          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
+              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
+          d=h.hexdigest();print('v118_source_sha256='+d);assert d=='64f41c0e9cf03660a7a0a56f1f1765ed04b0ccba9eb9bb428fe545773f1e4e06'
+          '@ | Set-Content -Encoding UTF8 verify118.py
+          python verify118.py
+
+      - name: Apply exact v1.0.19 release patch script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          import base64,gzip,hashlib,pathlib
+          e=pathlib.Path('GuidedArrow/v119_apply.py.gz.b64').read_text().strip()
+          eh=hashlib.sha256(e.encode()).hexdigest();print('apply_encoded_sha256='+eh);assert eh=='3f4acecc590757c56f651150b58510e6ca191d09658e224f0f76fee07864beab'
+          r=gzip.decompress(base64.b64decode(e))
+          rh=hashlib.sha256(r).hexdigest();print('apply_script_sha256='+rh);assert rh=='7479067736edea5306c4b84d130b3d88b27f24e38aa54260f049986264bf76c4'
+          pathlib.Path('apply_v119.py').write_bytes(r)
+          '@ | Set-Content -Encoding UTF8 decode_apply.py
+          python decode_apply.py
+          Push-Location work
+          python '..\apply_v119.py'
+          if($LASTEXITCODE-ne 0){throw 'v1.0.19 apply script failed'}
+          Pop-Location
+
+      - name: Verify exact v1.0.19 source defaults and semantics
+        shell: pwsh
+        run: |
+          $project=Get-Content 'work/Source/GuidedArrow.csproj' -Raw
+          $behavior=Get-Content 'work/Source/GuidedArrowBehavior.cs' -Raw
+          $settings=Get-Content 'work/Source/Settings.cs' -Raw
+          $submodule=Get-Content 'work/SubModule.xml' -Raw
+          foreach($n in @('<Version>1.0.19</Version>','<FileVersion>1.0.19.0</FileVersion>','<AssemblyVersion>1.0.19.0</AssemblyVersion>')){if(-not $project.Contains($n)){throw "Missing $n"}}
+          if(-not $submodule.Contains('<Version value="v1.0.19" />')){throw 'SubModule not v1.0.19'}
+          foreach($n in @('hideFirstPersonCameraOwner','tracked.VisualEntity.SetVisibilityExcludeParents(!hideFirstPersonCameraOwner)','(Settings.Instance?.ProjectileCameraMode ?? 1) == 0')){if(-not $behavior.Contains($n)){throw "Missing first-person visual fix marker: $n"}}
+          foreach($n in @('public bool ShowCrosshair { get; set; } = false;','public int SplitArrowFormationMode { get; set; } = 1;','public int CinematicTriggerMode { get; set; } = 1;','public int CinematicMode { get; set; } = 1;','public float MouseSensitivity { get; set; } = 0.49829796f;','public float ProximityNearTimeSpeed { get; set; } = 0.202393547f;','public float ProximityTimeResponseRate { get; set; } = 30.0f;','public float ProximityMaximumExtraSlowdown { get; set; } = 0.75f;','public float AdaptiveCinematicMaximumDuration { get; set; } = 4.0f;')){if(-not $settings.Contains($n)){throw "Missing release default marker: $n"}}
+          @'
+          import hashlib,pathlib
+          root=pathlib.Path('work/Source');h=hashlib.sha256()
+          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
+              rel=p.relative_to(root).as_posix().encode();h.update(rel);h.update(b'\0');h.update(p.read_bytes());h.update(b'\0')
+          d=h.hexdigest();print('v119_source_sha256='+d);pathlib.Path('source_hash.txt').write_text(d+'\n');assert d=='684de986bd377d660172f8632c63c51c635a46986371f5e643045830a8548568'
+          '@ | Set-Content -Encoding UTF8 verify119.py
+          python verify119.py
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore 'work/Source/GuidedArrow.csproj'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build 'work/Source/GuidedArrow.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath compiler.log
+          if($LASTEXITCODE-ne 0){exit $LASTEXITCODE}
+
+      - name: Collect exact outputs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force compiled | Out-Null
+          if(Test-Path 'work/Source/bin/Release/net472/GuidedArrow.dll'){Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.dll' compiled/GuidedArrow.dll}
+          if(Test-Path 'work/Source/bin/Release/net472/GuidedArrow.pdb'){Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.pdb' compiled/GuidedArrow.pdb}
+          if(Test-Path 'work/Source'){Copy-Item 'work/Source' compiled/Source -Recurse}
+          if(Test-Path 'work/SubModule.xml'){Copy-Item 'work/SubModule.xml' compiled/SubModule.xml}
+          if(Test-Path compiler.log){Copy-Item compiler.log compiled/compiler.log}
+          if(Test-Path source_hash.txt){Copy-Item source_hash.txt compiled/source_hash.txt}
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.19-direct-compiled
+          path: compiled
+          if-no-files-found: error
