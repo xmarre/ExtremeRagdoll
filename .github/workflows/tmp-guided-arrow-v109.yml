@@ -37,11 +37,23 @@ jobs:
           Write-Host "Source archive SHA-256: $archiveHash"
           if ($archiveHash -ne 'cb3c1237db829c8ee13631c4da91219f119fd299a9d8b8658eb3bdd0a246b21b') { throw "Source archive mismatch: $archiveHash" }
           Expand-Archive -Path 'v109_source.zip' -DestinationPath 'v109src' -Force
-          $behaviorHash = (Get-FileHash 'v109src/GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          # The public 1.3.15 GameEntity wrapper does not expose SetVisibility(bool). Remove only
+          # that secondary call; persistent per-frame SetVisibilityExcludeParents(false) remains.
+          $sourcePath = 'v109src/GuidedArrow/Source/GuidedArrowBehavior.cs'
+          $sourceText = [IO.File]::ReadAllText($sourcePath)
+          $old = "            // SetVisibility is also reapplied because the native missile presentation may refresh`n            // its ordinary visibility independently of the exclude-parent flag during flight.`n            try { entity.SetVisibility(false); }`n            catch { }`n"
+          $new = "            // Reapply the public local visibility flag every display frame because Bannerlord can`n            // refresh native missile presentation visibility after the initial spawn.`n"
+          if (-not $sourceText.Contains($old)) { throw 'Expected SetVisibility source block not found.' }
+          $sourceText = $sourceText.Replace($old, $new)
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          [IO.File]::WriteAllText($sourcePath, $sourceText, $utf8)
+
+          $behaviorHash = (Get-FileHash $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
           $settingsHash = (Get-FileHash 'v109src/GuidedArrow/Source/Settings.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "GuidedArrowBehavior.cs SHA-256: $behaviorHash"
           Write-Host "Settings.cs SHA-256: $settingsHash"
-          if ($behaviorHash -ne '3f4431b24f271bf9ff922ed06563900f68d687e36a736ba886b8eef57fb24ccd') { throw "Controller mismatch: $behaviorHash" }
+          if ($behaviorHash -ne '6d441cbf9d13af3b0ff0bb11178051d8f8f87c31d3af020e37748053dde657fb') { throw "Controller mismatch: $behaviorHash" }
           if ($settingsHash -ne 'f732cd554df6bbe1426debfa3009aee93adb029da61c060d36691a74cea23b7d') { throw "Settings mismatch: $settingsHash" }
       - name: Restore
         shell: pwsh
