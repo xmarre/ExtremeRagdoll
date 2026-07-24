@@ -1,0 +1,129 @@
+name: Temporary Extreme Ragdoll v1.3.7 Current Compiler
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    if: startsWith(github.head_ref, 'tmp/extremeragdoll-v137-')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '3.1.426'
+
+      - name: Reconstruct and verify reviewed payload
+        shell: pwsh
+        run: |
+          $parts = Get-ChildItem 'v137_payload2/p*.txt' | Sort-Object Name
+          if ($parts.Count -ne 13) { throw "Expected 13 payload parts, found $($parts.Count)" }
+          $expectedPartHashes = @(
+            '2a2edc9efa668f5bbdbe7dea5f4b41dc3194022ed4f6f15e015685d2fec5b8fd',
+            '63cf538886a1b42fa8c204d6be2b76359273f982e074e316c1f3a487eb5d28af',
+            '0812d514633cc39353d6889b57add12445731c068ef23d07c53d4154250c5686',
+            '06c71ef2456b6a403dd22aeae2c2bc41f043097974bb8a1c62f9d2f80d4d997f',
+            '394104138a2b645f3df269c59c64bf3bfaaf3dd9b5e4b711f50d75c8cbba385c',
+            '1fd90d797ac110090cdd8909d983165730b493a3d070d70e4dac75d130ca4063',
+            '878d32d428ff81a624aca1d7d0bc94fe46e1c947e0acc1620b734084335d41d2',
+            'd6aa10e3d4be2c71e1e28d278f809122faec1d02ad81f45889f0fffcd969037a',
+            '5b55410d4bc021c068eb6ce89e8af8f142c5f93b498909fec2d4763612a69f14',
+            '95d462b2a62ee895ab80eecb2c8f0eb700af09bdce5f3e6e83704d1f60c2e34f',
+            'f9597a5b7917127a1c31a7e05c96710f6b3e99d79e5193924b238f049eb5e62a',
+            'd3c2c3d3a27005807d14a9b973bfdfeb81d673e5d1f672a4fa1fc8bee3fd934c',
+            '01c4b064bc98fb30264dab5fb94c0d6a5466194132dbdac721fb779e94a1f9a7'
+          )
+          $b64 = ''
+          for ($i = 0; $i -lt $parts.Count; $i++) {
+            $text = (Get-Content -Raw $parts[$i].FullName).Trim()
+            $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($text))).Replace('-','').ToLowerInvariant()
+            Write-Host "part[$i]=$hash"
+            if ($hash -ne $expectedPartHashes[$i]) { throw "Part $i hash mismatch: $hash" }
+            $b64 += $text
+          }
+          [IO.File]::WriteAllBytes('v137_payload.zip', [Convert]::FromBase64String($b64))
+          $archiveHash = (Get-FileHash 'v137_payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "payload_sha256=$archiveHash"
+          if ($archiveHash -ne 'e03a5bde095d4100f16502f5bde1bc002282f54a04d339bf299e218979a9c318') { throw "Payload mismatch: $archiveHash" }
+          Expand-Archive -Path 'v137_payload.zip' -DestinationPath 'v137src' -Force
+          if ((Get-FileHash 'v137src/SafeSubModule.cs' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '84e0f3fc78f455ce60ffcab905386619553a0d6c6ec550a2819a4d6eec3ed39f') { throw 'SafeSubModule source mismatch.' }
+          if ((Get-FileHash 'v137src/V1.3.7_FROM_V1.3.6.patch' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'bb841decaae17edb25dd70ffc0224de712d9cdbe9ff948f0b449bd7786ccc397') { throw 'Patch mismatch.' }
+          if ((Get-FileHash 'v137src/baseline.dll' -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'a822f40a8f58e1b537c3947b976e1bed39850ef93a52f41fe980718bead2105a') { throw 'Wrong v1.3.6 baseline main.' }
+          if ((Get-FileHash 'v137src/ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant() -ne '04a1b4ca8a7f46514a5499ada259b8e9b6af7c4db8ac13d0c8210bd867f028f2') { throw 'Wrong v1.3.6 helper.' }
+
+      - name: Compile donor against isolated Bannerlord signature stubs
+        shell: pwsh
+        run: |
+          $dotnet = (Get-Command dotnet).Source
+          $root = Split-Path -Parent $dotnet
+          $sdk = (Get-ChildItem "$root/sdk" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName
+          $csc = Join-Path $sdk 'Roslyn/bincore/csc.dll'
+          $refRoot = ((Get-ChildItem "$root/packs/Microsoft.NETCore.App.Ref" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName + '/ref/netcoreapp3.1')
+          $refs = Get-ChildItem $refRoot -Filter '*.dll' | ForEach-Object { "/r:$($_.FullName)" }
+          New-Item -ItemType Directory -Force refs | Out-Null
+          $common = @('/nologo','/noconfig','/nostdlib','/deterministic+','/optimize+','/debug-','/langversion:7.3','/target:library','/nowarn:1701')
+          & $dotnet $csc @common @refs '/out:refs/TaleWorlds.Library.dll' 'v137src/ReferenceStubs/TaleWorlds.Library.Stub.cs'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $dotnet $csc @common @refs '/out:refs/TaleWorlds.Core.dll' 'v137src/ReferenceStubs/TaleWorlds.Core.Stub.cs'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $dotnet $csc @common @refs '/r:refs/TaleWorlds.Library.dll' '/out:refs/TaleWorlds.Engine.dll' 'v137src/ReferenceStubs/TaleWorlds.Engine.Stub.cs'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $dotnet $csc @common @refs '/r:refs/TaleWorlds.Library.dll' '/r:refs/TaleWorlds.Core.dll' '/r:refs/TaleWorlds.Engine.dll' '/out:refs/TaleWorlds.MountAndBlade.dll' 'v137src/ReferenceStubs/TaleWorlds.MountAndBlade.Stub.cs'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $dotnet $csc @common @refs '/out:refs/MCMv5.dll' 'v137src/ReferenceStubs/MCMv5.Stub.cs'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $dotnet $csc @common @refs '/r:refs/TaleWorlds.Library.dll' '/r:refs/TaleWorlds.Core.dll' '/r:refs/TaleWorlds.Engine.dll' '/r:refs/TaleWorlds.MountAndBlade.dll' '/r:refs/MCMv5.dll' '/r:v137src/ExtremeRagdoll.ClothSync.dll' '/out:ExtremeRagdoll.Donor.dll' 'v137src/SafeSubModule.cs'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Transplant only three reviewed method bodies
+        shell: pwsh
+        run: |
+          nuget install Mono.Cecil -Version 0.11.5 -OutputDirectory packages -DirectDownload -NonInteractive
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cecil = (Get-ChildItem 'packages/Mono.Cecil.0.11.5/lib' -Recurse -Filter 'Mono.Cecil.dll' | Where-Object { $_.FullName -match 'netstandard2.0' } | Select-Object -First 1).FullName
+          if (-not $cecil) { throw 'Mono.Cecil.dll not found' }
+          $dotnet = (Get-Command dotnet).Source
+          $root = Split-Path -Parent $dotnet
+          $sdk = (Get-ChildItem "$root/sdk" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName
+          $csc = Join-Path $sdk 'Roslyn/bincore/csc.dll'
+          $refRoot = ((Get-ChildItem "$root/packs/Microsoft.NETCore.App.Ref" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName + '/ref/netcoreapp3.1')
+          $refs = Get-ChildItem $refRoot -Filter '*.dll' | ForEach-Object { "/r:$($_.FullName)" }
+          & $dotnet $csc /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:exe /nowarn:1701 @refs "/r:$cecil" '/out:TransplantMethodsFlexible.dll' 'v137src/TransplantMethodsFlexible.cs'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item 'v137src/PatchOverride.runtimeconfig.json' 'TransplantMethodsFlexible.runtimeconfig.json'
+          Copy-Item $cecil 'Mono.Cecil.dll'
+          & $dotnet './TransplantMethodsFlexible.dll' './ExtremeRagdoll.Donor.dll' 'v137src/baseline.dll' './ExtremeRagdoll.dll' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnTrackedAgentHealthChanged' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'EnrichPendingDeath' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnMissionTick'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item 'v137src/ExtremeRagdoll.ClothSync.dll' './ExtremeRagdoll.ClothSync.dll'
+
+      - name: Validate final assembly invariants
+        shell: pwsh
+        run: |
+          $dotnet = (Get-Command dotnet).Source
+          $root = Split-Path -Parent $dotnet
+          $sdk = (Get-ChildItem "$root/sdk" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName
+          $csc = Join-Path $sdk 'Roslyn/bincore/csc.dll'
+          $refRoot = ((Get-ChildItem "$root/packs/Microsoft.NETCore.App.Ref" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName + '/ref/netcoreapp3.1')
+          $refs = Get-ChildItem $refRoot -Filter '*.dll' | ForEach-Object { "/r:$($_.FullName)" }
+          $cecil = (Resolve-Path './Mono.Cecil.dll').Path
+          & $dotnet $csc /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:exe /nowarn:1701 @refs "/r:$cecil" '/out:ValidateAssemblies.dll' 'v137src/ValidateAssemblies.cs'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item 'v137src/ValidateAssemblies.runtimeconfig.json' 'ValidateAssemblies.runtimeconfig.json'
+          & $dotnet './ValidateAssemblies.dll' './ExtremeRagdoll.dll' './ExtremeRagdoll.ClothSync.dll'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $helperHash = (Get-FileHash './ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($helperHash -ne '04a1b4ca8a7f46514a5499ada259b8e9b6af7c4db8ac13d0c8210bd867f028f2') { throw 'Helper changed unexpectedly.' }
+          $mainHash = (Get-FileHash './ExtremeRagdoll.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($mainHash -eq 'a822f40a8f58e1b537c3947b976e1bed39850ef93a52f41fe980718bead2105a') { throw 'Patched main is byte-identical to baseline.' }
+          Write-Host "main_sha256=$mainHash"
+          Write-Host "helper_sha256=$helperHash"
+
+      - name: Package compiler output
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Copy-Item './ExtremeRagdoll.dll' 'artifact/ExtremeRagdoll.dll'
+          Copy-Item './ExtremeRagdoll.ClothSync.dll' 'artifact/ExtremeRagdoll.ClothSync.dll'
+          Copy-Item 'v137src/SafeSubModule.cs' 'artifact/SafeSubModule.cs'
+          Copy-Item 'v137src/V1.3.7_FROM_V1.3.6.patch' 'artifact/V1.3.7_FROM_V1.3.6.patch'
+          Get-FileHash artifact/* -Algorithm SHA256 | Sort-Object Path | Format-Table -AutoSize | Out-String | Set-Content artifact/SHA256SUMS.txt
+          Compress-Archive -Path artifact/* -DestinationPath ExtremeRagdoll-v1.3.7-compiler-output.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.3.7-compiler-output
+          path: ExtremeRagdoll-v1.3.7-compiler-output.zip
