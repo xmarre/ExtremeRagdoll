@@ -1,0 +1,96 @@
+name: Temporary Guided Arrow v1.0.8 Compiler
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    if: startsWith(github.head_ref, 'tmp/guided-arrow-v108-')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Materialize v1.0.7 and apply v1.0.8
+        shell: pwsh
+        run: |
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $behaviorParts = Get-ChildItem 'GuidedArrow/FinalSourceParts/GuidedArrowBehavior.cs.part*' | Sort-Object Name
+          if ($behaviorParts.Count -ne 10) { throw "Expected 10 v1.0.7 controller parts, found $($behaviorParts.Count)" }
+          $behaviorText = ''
+          foreach ($part in $behaviorParts) { $behaviorText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
+          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrowBehavior.cs', $behaviorText, $utf8)
+
+          $settingsParts = Get-ChildItem 'GuidedArrow/FinalSourceParts/Settings.cs.part*' | Sort-Object Name
+          if ($settingsParts.Count -ne 2) { throw "Expected 2 v1.0.7 Settings parts, found $($settingsParts.Count)" }
+          $settingsText = ''
+          foreach ($part in $settingsParts) { $settingsText += (Get-Content -Raw $part.FullName).Replace("`r`n", "`n") }
+          [IO.File]::WriteAllText('GuidedArrow/Source/Settings.cs', $settingsText, $utf8)
+
+          $projectText = (Get-Content -Raw 'GuidedArrow/FinalSourceParts/GuidedArrow.csproj').Replace("`r`n", "`n")
+          [IO.File]::WriteAllText('GuidedArrow/Source/GuidedArrow.csproj', $projectText, $utf8)
+          $submoduleText = (Get-Content -Raw 'GuidedArrow/FinalSourceParts/SubModule.xml').Replace("`r`n", "`n")
+          [IO.File]::WriteAllText('GuidedArrow/SubModule.xml', $submoduleText, $utf8)
+
+          $v107Hash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($v107Hash -ne '28e009be6fd7a19c9e988ccad7fae4b986afeb12b78700426a1b12544ca993ec') { throw "v1.0.7 controller mismatch: $v107Hash" }
+
+          python GuidedArrow/apply_v108.py
+          if ($LASTEXITCODE -ne 0) { throw "v1.0.8 patch failed with exit code $LASTEXITCODE" }
+
+          $behaviorHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrowBehavior.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $settingsHash = (Get-FileHash 'GuidedArrow/Source/Settings.cs' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $projectHash = (Get-FileHash 'GuidedArrow/Source/GuidedArrow.csproj' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $submoduleHash = (Get-FileHash 'GuidedArrow/SubModule.xml' -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "GuidedArrowBehavior.cs SHA-256: $behaviorHash"
+          Write-Host "Settings.cs SHA-256: $settingsHash"
+          Write-Host "GuidedArrow.csproj SHA-256: $projectHash"
+          Write-Host "SubModule.xml SHA-256: $submoduleHash"
+          if ($behaviorHash -ne '0878e1d6db843cbe4c77143b565c7cfafe912a01073131899658f13b37e4f8e1') { throw "v1.0.8 controller mismatch: $behaviorHash" }
+          if ($settingsHash -ne '18dae0bce9c78ccb24f91a6a856d9db758f81a1b8f7c0d40cad6fe46cae759c2') { throw "v1.0.8 Settings mismatch: $settingsHash" }
+          if ($projectHash -ne '203ef5581c85739459ae45a60e2fcc0e914f33342483e176fded904f1e851f67') { throw "v1.0.8 project mismatch: $projectHash" }
+          if ($submoduleHash -ne '187e9fe0dc46b8942bfc6041ac08fff6e4ea79b2b502c682cd921c30b9258e02') { throw "v1.0.8 SubModule mismatch: $submoduleHash" }
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore GuidedArrow/Source/GuidedArrow.csproj
+      - name: Build
+        id: compile
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          & dotnet build GuidedArrow/Source/GuidedArrow.csproj -c Release --no-restore --nologo *> build.log
+          $exitCode = $LASTEXITCODE
+          Get-Content build.log
+          if ($exitCode -ne 0) { 'BUILD_FAILED=1' | Out-File -FilePath $env:GITHUB_ENV -Append }
+      - name: Upload compiler log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.8-compiler-log
+          path: build.log
+      - name: Package
+        if: env.BUILD_FAILED != '1'
+        shell: pwsh
+        run: |
+          $module = 'package/GuidedArrow'
+          New-Item -ItemType Directory -Force "$module/bin/Win64_Shipping_Client" | Out-Null
+          New-Item -ItemType Directory -Force "$module/Source" | Out-Null
+          New-Item -ItemType Directory -Force "$module/GUI/Prefabs" | Out-Null
+          Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll "$module/bin/Win64_Shipping_Client/"
+          if (Test-Path GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb) { Copy-Item GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb "$module/bin/Win64_Shipping_Client/" }
+          Copy-Item GuidedArrow/SubModule.xml $module/
+          Copy-Item GuidedArrow/Source/*.cs "$module/Source/"
+          Copy-Item GuidedArrow/Source/GuidedArrow.csproj "$module/Source/"
+          Copy-Item GuidedArrow/GUI/Prefabs/*.xml "$module/GUI/Prefabs/"
+          Compress-Archive -Path $module -DestinationPath GuidedArrow-v1.0.8-Bannerlord-1.3.15-Safe-Projectile-Visual-Fix.zip -Force
+      - name: Upload package
+        if: env.BUILD_FAILED != '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.8-Bannerlord-1.3.15-Safe-Projectile-Visual-Fix
+          path: GuidedArrow-v1.0.8-Bannerlord-1.3.15-Safe-Projectile-Visual-Fix.zip
+      - name: Fail on compiler errors
+        if: env.BUILD_FAILED == '1'
+        shell: pwsh
+        run: exit 1
