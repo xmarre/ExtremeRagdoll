@@ -1,4 +1,4 @@
-name: Temporary ExtremeRagdoll v1.3.7 Cloth Sync Tests Build
+name: Temporary ExtremeRagdoll v1.3.8 High-Speed Cloth Tests Build
 
 on:
   pull_request:
@@ -47,7 +47,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.7-ClothSyncTests-compiled
+          name: ExtremeRagdoll-v1.3.8-HighSpeedClothTests-compiled
           path: compiled
           if-no-files-found: error
       - name: Fail if build failed
