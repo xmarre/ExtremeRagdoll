@@ -116,7 +116,11 @@ jobs:
           git apply '..\v114.patch'
           if ($LASTEXITCODE -ne 0) { throw 'v1.0.14 patch apply failed.' }
           Pop-Location
-          python -c "from pathlib import Path; p=Path('v114src/GuidedArrow/SubModule.xml'); b=p.read_bytes(); old=b'<Version value=\"v1.0.13\" />'; new=b'<Version value=\"v1.0.14\" />'; assert old in b, 'v1.0.13 SubModule marker not found'; p.write_bytes(b.replace(old,new,1))"
+          $submodulePath = 'v114src/GuidedArrow/SubModule.xml'
+          $submoduleText = [IO.File]::ReadAllText($submodulePath)
+          if (-not $submoduleText.Contains('v1.0.13')) { throw 'v1.0.13 SubModule marker not found.' }
+          $submoduleText = $submoduleText.Replace('v1.0.13', 'v1.0.14')
+          [IO.File]::WriteAllText($submodulePath, $submoduleText, [Text.UTF8Encoding]::new($false))
 
       - name: Verify exact v1.0.14 source and semantics
         shell: pwsh
