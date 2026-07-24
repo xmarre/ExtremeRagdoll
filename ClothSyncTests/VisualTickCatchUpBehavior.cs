@@ -71,7 +71,7 @@ namespace ExtremeRagdoll.ClothSyncTests
 
             float now = Mission.CurrentTime;
             float threshold = Math.Max(0f, settings.ActivationSpeedThreshold);
-            int substeps = Math.Max(1, Math.Min(8, settings.VisualTickCatchUpSubsteps));
+            int substeps = Math.Max(1, Math.Min(8, (int)Math.Round(settings.VisualTickCatchUpSubsteps)));
 
             for (int i = _tracked.Count - 1; i >= 0; i--)
             {
