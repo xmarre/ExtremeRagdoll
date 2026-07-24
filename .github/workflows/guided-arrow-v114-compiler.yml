@@ -96,10 +96,10 @@ jobs:
           encoded=''.join(p.read_text().strip() for p in parts)
           assert len(parts)==1, len(parts)
           encoded_hash=hashlib.sha256(encoded.encode()).hexdigest(); print('v114_encoded_sha256='+encoded_hash)
-          assert encoded_hash=='89322dfd725c92520ca5ebf2c378230b07154f7610bac646c274259be9f765fe', encoded_hash
+          assert encoded_hash=='4d9e2bec0d3a98121b2b4f3a9a639105d4d03749ee06f6aec79b100573cfbb3e', encoded_hash
           raw=gzip.decompress(base64.b64decode(encoded))
           raw_hash=hashlib.sha256(raw).hexdigest(); print('v114_patch_sha256='+raw_hash)
-          assert raw_hash=='763f2ba22a21ba811ffbe15fde0a14702059e1d5810953cae29b0c963ed7355d', raw_hash
+          assert raw_hash=='ed7666bacca6e143c05961e04175cd7a46aa5bbc964897664e545bf0aae3f39a', raw_hash
           pathlib.Path('v114.patch').write_bytes(raw)
           '@ | Set-Content -Encoding UTF8 'reconstruct_v114.py'
           python reconstruct_v114.py
