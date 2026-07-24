@@ -1,0 +1,13 @@
+diff --git a/GuidedArrow/Source/Settings.cs b/GuidedArrow/Source/Settings.cs
+index 33c1f54..a227181 100644
+--- a/GuidedArrow/Source/Settings.cs
++++ b/GuidedArrow/Source/Settings.cs
+@@ -58,7 +58,7 @@ namespace GuidedArrow
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+         [SettingPropertyText("Autoguidance Hotkey", Order = 1, RequireRestart = false,
+-            HintText = "Enter the Bannerlord key name to use for autoguidance, for example F8, U, X, D1, MiddleMouseButton or XButton1. The key is read live in missions and does not require a restart. Choose a key that is not bound to an unwanted vanilla action.")]
++            HintText = "Enter the Bannerlord key name to use for autoguidance, for example F8, U, X, D1, MiddleMouseButton or X1MouseButton. The key is read live in missions and does not require a restart. Choose a key that is not bound to an unwanted vanilla action.")]
+         public string AutoguidanceHotkeyName { get; set; } = "F8";
+ 
+         // Retained for backward-compatible deserialization of v1.1.0 MCM JSON. It is no longer
