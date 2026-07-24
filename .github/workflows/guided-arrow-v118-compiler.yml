@@ -85,9 +85,10 @@ jobs:
           pathlib.Path('v118.patch').write_bytes(r)
           '@ | Set-Content -Encoding UTF8 reconstruct118.py
           python reconstruct118.py
-          Push-Location v118src
-          git apply --check '..\v118.patch';if($LASTEXITCODE-ne 0){throw 'v118 check failed'}
-          git apply '..\v118.patch';if($LASTEXITCODE-ne 0){throw 'v118 apply failed'}
+          $patchPath=(Resolve-Path 'v118.patch').Path
+          Push-Location 'v118src/GuidedArrow'
+          git apply --check $patchPath;if($LASTEXITCODE-ne 0){throw 'v118 check failed'}
+          git apply $patchPath;if($LASTEXITCODE-ne 0){throw 'v118 apply failed'}
           Pop-Location
 
       - name: Verify exact v1.0.18 source and semantics
