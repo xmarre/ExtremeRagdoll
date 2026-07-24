@@ -1,0 +1,125 @@
+name: Build Guided Arrow v1.1.1 Authoritative
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Reconstruct verified v1.1.0 baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = Get-ChildItem 'tools/ga110/p*.b64' | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 baseline payload chunks, found $($parts.Count)" }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $zip = Join-Path $env:RUNNER_TEMP 'GuidedArrow-v1.1.0-source-ci.zip'
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') {
+            throw "Baseline source payload hash mismatch: $hash"
+          }
+          $src = Join-Path $env:RUNNER_TEMP 'ga-src'
+          Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
+          "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Apply exact v1.1.1 patch and verify final source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $checkoutPatch = (Resolve-Path 'tools/ga111-authoritative.patch').Path
+          $patch = Join-Path $env:RUNNER_TEMP 'ga111-authoritative-lf.patch'
+          $text = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText($patch, $text, [Text.UTF8Encoding]::new($false))
+          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne '83eb8f335b6597011e629d759877230c7f7ff085305e8cdd4344542599d5621c') {
+            throw "Authoritative patch hash mismatch: $patchHash"
+          }
+
+          $root = Split-Path $env:GA_SRC -Parent
+          Push-Location $root
+          try {
+            git init | Out-Null
+            git config core.autocrlf false
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'git apply --check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'git apply failed' }
+          } finally { Pop-Location }
+
+          $expected = @{
+            'Source\Settings.cs' = '9e6a6c27591aa60d4c1f04ab2e1c83e8eea892600490ec1e598a2f35b89894f5'
+            'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
+            'Source\GuidedArrowBehavior.cs' = 'eb377f6a95206a788499dc9991fd36d585f81087b2d2ea70280395adf77f05a6'
+            'Source\GuidedArrow.csproj' = 'f3e6956567c5513d7b1b3c3dfa21899793f72375ec8dc6b6bc8751b591dc1296'
+            'SubModule.xml' = 'ee43bae55deaa46e11eb2979a081fd2a04f364a80012a5761cfc8b518522b1c3'
+          }
+          foreach ($rel in $expected.Keys) {
+            $path = Join-Path $env:GA_SRC $rel
+            $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected[$rel]) { throw "Final source hash mismatch for $rel. Expected $($expected[$rel]), got $actual" }
+          }
+
+      - name: Restore exact Bannerlord 1.3.15 and MCM references
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet restore GuidedArrow.csproj --nologo 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+
+      - name: Build release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+
+      - name: Verify assembly metadata and stage artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:GA_SRC\Source\bin\Release\net472"
+          $dll = Join-Path $out 'GuidedArrow.dll'
+          $pdb = Join-Path $out 'GuidedArrow.pdb'
+          if (!(Test-Path $dll)) { throw "Missing compiled DLL: $dll" }
+          if (!(Test-Path $pdb)) { throw "Missing compiled PDB: $pdb" }
+          $asm = [Reflection.AssemblyName]::GetAssemblyName($dll)
+          if ($asm.Version.ToString() -ne '1.1.1.0') { throw "Unexpected assembly version: $($asm.Version)" }
+          $vi = (Get-Item $dll).VersionInfo
+          $dllHash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "AssemblyVersion=$($asm.Version)",
+            "FileVersion=$($vi.FileVersion)",
+            "ProductVersion=$($vi.ProductVersion)",
+            "DLL_SHA256=$dllHash",
+            "PATCH_SHA256=$patchHash"
+          ) | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Encoding utf8
+          $stage = Join-Path $env:RUNNER_TEMP 'artifact'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item $dll,$pdb -Destination $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Destination $stage
+
+      - name: Upload compiled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.1-compiled-authoritative
+          path: ${{ runner.temp }}\artifact
+          if-no-files-found: error
+          retention-days: 7
