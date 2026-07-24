@@ -1,7 +1,7 @@
-name: Temporary v1.3.7 Layout Hotfix Compiler
+name: Temporary v1.3.8 Exact Hit Bone Compiler
 on:
   pull_request:
-    branches: [ tmp/extremeragdoll-v137-hotfix-base ]
+    branches: [ tmp/extremeragdoll-v138-base ]
 
 jobs:
   build:
@@ -21,19 +21,18 @@ jobs:
           [IO.File]::WriteAllBytes('v137_payload.zip', [Convert]::FromBase64String($b64))
           $payloadHash = (Get-FileHash 'v137_payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($payloadHash -ne 'e03a5bde095d4100f16502f5bde1bc002282f54a04d339bf299e218979a9c318') { throw "Payload SHA-256 mismatch: $payloadHash" }
-          Expand-Archive 'v137_payload.zip' 'v137src' -Force
+          Expand-Archive 'v137_payload.zip' 'v138src' -Force
           $checks = @{
-            'v137src/baseline.dll' = 'a822f40a8f58e1b537c3947b976e1bed39850ef93a52f41fe980718bead2105a'
-            'v137src/ExtremeRagdoll.ClothSync.dll' = '04a1b4ca8a7f46514a5499ada259b8e9b6af7c4db8ac13d0c8210bd867f028f2'
-            'v137src/SafeSubModule.cs' = '84e0f3fc78f455ce60ffcab905386619553a0d6c6ec550a2819a4d6eec3ed39f'
-            'v137src/V1.3.7_FROM_V1.3.6.patch' = 'bb841decaae17edb25dd70ffc0224de712d9cdbe9ff948f0b449bd7786ccc397'
+            'v138src/baseline.dll' = 'a822f40a8f58e1b537c3947b976e1bed39850ef93a52f41fe980718bead2105a'
+            'v138src/ExtremeRagdoll.ClothSync.dll' = '04a1b4ca8a7f46514a5499ada259b8e9b6af7c4db8ac13d0c8210bd867f028f2'
+            'v138src/SafeSubModule.cs' = '84e0f3fc78f455ce60ffcab905386619553a0d6c6ec550a2819a4d6eec3ed39f'
           }
           foreach ($entry in $checks.GetEnumerator()) {
             $actual = (Get-FileHash $entry.Key -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($actual -ne $entry.Value) { throw "Hash mismatch for $($entry.Key): $actual" }
           }
 
-      - name: Compile patched donor against isolated signature stubs
+      - name: Compile donor against isolated signature stubs
         shell: pwsh
         run: |
           $dotnet = (Get-Command dotnet).Source
@@ -45,14 +44,14 @@ jobs:
           New-Item -ItemType Directory -Force refs | Out-Null
           $common = @('/nologo','/noconfig','/nostdlib','/deterministic+','/optimize+','/debug-','/langversion:7.3','/target:library','/nowarn:1701')
           function C([string[]]$a) { & $dotnet $csc @common @refs @a; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
-          C @('/out:refs/TaleWorlds.Library.dll','v137src/ReferenceStubs/TaleWorlds.Library.Stub.cs')
-          C @('/out:refs/TaleWorlds.Core.dll','v137src/ReferenceStubs/TaleWorlds.Core.Stub.cs')
-          C @('/r:refs/TaleWorlds.Library.dll','/out:refs/TaleWorlds.Engine.dll','v137src/ReferenceStubs/TaleWorlds.Engine.Stub.cs')
-          C @('/r:refs/TaleWorlds.Library.dll','/r:refs/TaleWorlds.Core.dll','/r:refs/TaleWorlds.Engine.dll','/out:refs/TaleWorlds.MountAndBlade.dll','v137src/ReferenceStubs/TaleWorlds.MountAndBlade.Stub.cs')
-          C @('/out:refs/MCMv5.dll','v137src/ReferenceStubs/MCMv5.Stub.cs')
-          C @('/r:refs/TaleWorlds.Library.dll','/r:refs/TaleWorlds.Core.dll','/r:refs/TaleWorlds.Engine.dll','/r:refs/TaleWorlds.MountAndBlade.dll','/r:refs/MCMv5.dll','/r:v137src/ExtremeRagdoll.ClothSync.dll','/out:ExtremeRagdoll.Donor.dll','v137src/SafeSubModule.cs')
+          C @('/out:refs/TaleWorlds.Library.dll','v138src/ReferenceStubs/TaleWorlds.Library.Stub.cs')
+          C @('/out:refs/TaleWorlds.Core.dll','v138src/ReferenceStubs/TaleWorlds.Core.Stub.cs')
+          C @('/r:refs/TaleWorlds.Library.dll','/out:refs/TaleWorlds.Engine.dll','v138src/ReferenceStubs/TaleWorlds.Engine.Stub.cs')
+          C @('/r:refs/TaleWorlds.Library.dll','/r:refs/TaleWorlds.Core.dll','/r:refs/TaleWorlds.Engine.dll','/out:refs/TaleWorlds.MountAndBlade.dll','v138src/ReferenceStubs/TaleWorlds.MountAndBlade.Stub.cs')
+          C @('/out:refs/MCMv5.dll','v138src/ReferenceStubs/MCMv5.Stub.cs')
+          C @('/r:refs/TaleWorlds.Library.dll','/r:refs/TaleWorlds.Core.dll','/r:refs/TaleWorlds.Engine.dll','/r:refs/TaleWorlds.MountAndBlade.dll','/r:refs/MCMv5.dll','/r:v138src/ExtremeRagdoll.ClothSync.dll','/out:ExtremeRagdoll.Donor.dll','v138src/SafeSubModule.cs')
 
-      - name: Transplant reviewed methods and restore required target type layout
+      - name: Transplant only lethal-shot lifecycle methods
         shell: pwsh
         run: |
           nuget install Mono.Cecil -Version 0.11.5 -OutputDirectory packages -DirectDownload -NonInteractive
@@ -65,50 +64,40 @@ jobs:
           $csc = Join-Path $sdk 'Roslyn/bincore/csc.dll'
           $refRoot = ((Get-ChildItem "$root/packs/Microsoft.NETCore.App.Ref" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName + '/ref/netcoreapp3.1')
           $refs = Get-ChildItem $refRoot -Filter '*.dll' | ForEach-Object { "/r:$($_.FullName)" }
-          & $dotnet $csc /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:exe /nowarn:1701 @refs "/r:$cecil" '/out:TransplantMethodsFlexible.dll' 'v137src/TransplantMethodsFlexible.cs'
+          & $dotnet $csc /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:exe /nowarn:1701 @refs "/r:$cecil" '/out:TransplantMethodsFlexible.dll' 'v138src/TransplantMethodsFlexible.cs'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item 'v137src/PatchOverride.runtimeconfig.json' 'TransplantMethodsFlexible.runtimeconfig.json'
+          Copy-Item 'v138src/PatchOverride.runtimeconfig.json' 'TransplantMethodsFlexible.runtimeconfig.json'
           Copy-Item $cecil 'Mono.Cecil.dll'
-          & $dotnet './TransplantMethodsFlexible.dll' './ExtremeRagdoll.Donor.dll' 'v137src/baseline.dll' './ExtremeRagdoll.dll' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnTrackedAgentHealthChanged' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'EnrichPendingDeath' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnMissionTick'
+          & $dotnet './TransplantMethodsFlexible.dll' './ExtremeRagdoll.Donor.dll' 'v138src/baseline.dll' './ExtremeRagdoll.dll' `
+            'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnTrackedAgentHealthChanged' `
+            'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'EnrichPendingDeath'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Type -Path (Resolve-Path './Mono.Cecil.dll')
-          $asm = [Mono.Cecil.AssemblyDefinition]::ReadAssembly((Resolve-Path './ExtremeRagdoll.dll'))
-          $behavior = $asm.MainModule.GetType('ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior')
-          if (-not $behavior) { throw 'SafeRagdollBehavior missing' }
-          $pending = $behavior.NestedTypes | Where-Object { $_.Name -eq 'PendingDeath' } | Select-Object -First 1
-          if (-not $pending) { throw 'PendingDeath missing' }
-          $field = $pending.Fields | Where-Object { $_.Name -eq 'CompletionGateArmed' } | Select-Object -First 1
-          if (-not $field) {
-            $field = [Mono.Cecil.FieldDefinition]::new('CompletionGateArmed', [Mono.Cecil.FieldAttributes]::Assembly, $asm.MainModule.TypeSystem.Boolean)
-            $pending.Fields.Add($field)
-          }
-          if ($field.FieldType.FullName -ne 'System.Boolean') { throw 'CompletionGateArmed has wrong type' }
-          $asm.Write('./ExtremeRagdoll.layoutfixed.dll')
-          $asm.Dispose()
-          Move-Item -Force './ExtremeRagdoll.layoutfixed.dll' './ExtremeRagdoll.dll'
-          Copy-Item 'v137src/ExtremeRagdoll.ClothSync.dll' './ExtremeRagdoll.ClothSync.dll'
+          Copy-Item 'v138src/ExtremeRagdoll.ClothSync.dll' './ExtremeRagdoll.ClothSync.dll'
 
-      - name: Validate exact missing-field invariant
+      - name: Validate exact hit-bone routing regression is absent
         shell: pwsh
         run: |
           Add-Type -Path (Resolve-Path './Mono.Cecil.dll')
-          $asm = [Mono.Cecil.AssemblyDefinition]::ReadAssembly((Resolve-Path './ExtremeRagdoll.dll'))
-          $behavior = $asm.MainModule.GetType('ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior')
-          if (-not $behavior) { throw 'SafeRagdollBehavior missing' }
-          $pending = $behavior.NestedTypes | Where-Object { $_.Name -eq 'PendingDeath' } | Select-Object -First 1
-          if (-not $pending) { throw 'PendingDeath missing' }
-          $field = $pending.Fields | Where-Object { $_.Name -eq 'CompletionGateArmed' -and $_.FieldType.FullName -eq 'System.Boolean' } | Select-Object -First 1
-          if (-not $field) { throw 'PendingDeath.CompletionGateArmed definition missing' }
-          $onMissionTick = $behavior.Methods | Where-Object { $_.Name -eq 'OnMissionTick' } | Select-Object -First 1
-          if (-not $onMissionTick) { throw 'OnMissionTick missing' }
-          $refsToField = @($onMissionTick.Body.Instructions | ForEach-Object { $_.Operand } | Where-Object { $_ -is [Mono.Cecil.FieldReference] -and $_.Name -eq 'CompletionGateArmed' })
-          if ($refsToField.Count -lt 1) { throw 'OnMissionTick no longer references CompletionGateArmed; unexpected donor mismatch' }
-          foreach ($fr in $refsToField) {
-            if ($fr.DeclaringType.FullName -ne $pending.FullName) { throw "CompletionGateArmed reference targets wrong type: $($fr.DeclaringType.FullName)" }
-            if ($fr.FieldType.FullName -ne 'System.Boolean') { throw 'CompletionGateArmed reference has wrong type' }
+          function MethodFingerprint($path, $typeName, $methodName) {
+            $asm = [Mono.Cecil.AssemblyDefinition]::ReadAssembly((Resolve-Path $path))
+            try {
+              $type = $asm.MainModule.GetType($typeName)
+              if (-not $type) { throw "Missing type $typeName in $path" }
+              $method = $type.Methods | Where-Object { $_.Name -eq $methodName } | Select-Object -First 1
+              if (-not $method -or -not $method.HasBody) { throw "Missing method body $methodName in $path" }
+              $lines = foreach ($ins in $method.Body.Instructions) {
+                $operand = if ($null -eq $ins.Operand) { '' } elseif ($ins.Operand -is [Mono.Cecil.Cil.Instruction]) { 'IL_TARGET' } elseif ($ins.Operand -is [Mono.Cecil.Cil.Instruction[]]) { 'IL_TARGETS:' + $ins.Operand.Count } else { $ins.Operand.ToString() }
+                "$($ins.OpCode.Code)|$operand"
+              }
+              return ($lines -join "`n")
+            } finally { $asm.Dispose() }
           }
-          Write-Host "CompletionGateArmed definition/reference validation passed; refs=$($refsToField.Count)"
-          $asm.Dispose()
+          $baselineTick = MethodFingerprint 'v138src/baseline.dll' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnMissionTick'
+          $finalTick = MethodFingerprint './ExtremeRagdoll.dll' 'ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior' 'OnMissionTick'
+          if ($baselineTick -ne $finalTick) { throw 'OnMissionTick changed; exact v1.3.6/v1.3.3 hit-bone routing was not preserved.' }
+          $bytes = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes('./ExtremeRagdoll.dll'))
+          if ($bytes.Contains('Exact-hit-bone deathblow response fallback')) { throw 'Forbidden response-fallback marker remains in final DLL.' }
+          Write-Host 'OnMissionTick is instruction-identical to v1.3.6; response-based pelvis reroute is absent.'
 
       - name: Run existing assembly invariant validator
         shell: pwsh
@@ -119,9 +108,9 @@ jobs:
           $csc = Join-Path $sdk 'Roslyn/bincore/csc.dll'
           $refRoot = ((Get-ChildItem "$root/packs/Microsoft.NETCore.App.Ref" -Directory -Filter '3.1.*' | Sort-Object Name | Select-Object -Last 1).FullName + '/ref/netcoreapp3.1')
           $refs = Get-ChildItem $refRoot -Filter '*.dll' | ForEach-Object { "/r:$($_.FullName)" }
-          & $dotnet $csc /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:exe /nowarn:1701 @refs '/r:Mono.Cecil.dll' '/out:ValidateAssemblies.dll' 'v137src/ValidateAssemblies.cs'
+          & $dotnet $csc /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:exe /nowarn:1701 @refs '/r:Mono.Cecil.dll' '/out:ValidateAssemblies.dll' 'v138src/ValidateAssemblies.cs'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Copy-Item 'v137src/ValidateAssemblies.runtimeconfig.json' 'ValidateAssemblies.runtimeconfig.json'
+          Copy-Item 'v138src/ValidateAssemblies.runtimeconfig.json' 'ValidateAssemblies.runtimeconfig.json'
           & $dotnet './ValidateAssemblies.dll' './ExtremeRagdoll.dll' './ExtremeRagdoll.ClothSync.dll'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $helper = (Get-FileHash './ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -131,15 +120,14 @@ jobs:
           Write-Host "main_sha256=$main"
           Write-Host "helper_sha256=$helper"
 
-      - name: Package
+      - name: Package compiler output
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item ExtremeRagdoll.dll,ExtremeRagdoll.ClothSync.dll artifact/
-          Copy-Item v137src/SafeSubModule.cs,v137src/V1.3.7_FROM_V1.3.6.patch artifact/
           Get-FileHash artifact/* -Algorithm SHA256 | Sort-Object Path | Format-Table -AutoSize | Out-String | Set-Content artifact/SHA256SUMS.txt
-          Compress-Archive artifact/* ExtremeRagdoll-v1.3.7-hotfix-compiler-output.zip -Force
+          Compress-Archive artifact/* ExtremeRagdoll-v1.3.8-compiler-output.zip -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.7-hotfix-compiler-output
-          path: ExtremeRagdoll-v1.3.7-hotfix-compiler-output.zip
+          name: ExtremeRagdoll-v1.3.8-compiler-output
+          path: ExtremeRagdoll-v1.3.8-compiler-output.zip
