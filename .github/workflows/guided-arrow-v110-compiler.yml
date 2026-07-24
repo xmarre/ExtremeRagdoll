@@ -31,13 +31,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          python -c "import base64,gzip,pathlib; pathlib.Path('v110.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110.patch.gz.b64').read_text().strip()))); pathlib.Path('slot-fix.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110-slot-fix.patch.gz.b64').read_text().strip())))"
+          python -c "import base64,gzip,pathlib; pathlib.Path('v110.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110.patch.gz.b64').read_text().strip()))); pathlib.Path('slot-fix.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110-slot-fix.patch.gz.b64').read_text().strip()))); pathlib.Path('visibility-fix.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110-public-visibility-fix.patch.gz.b64').read_text().strip())))"
           Push-Location 'v110src'
           git init | Out-Null
           git apply --check '..\v110.patch'
           git apply '..\v110.patch'
           git apply --check '..\slot-fix.patch'
           git apply '..\slot-fix.patch'
+          git apply --check '..\visibility-fix.patch'
+          git apply '..\visibility-fix.patch'
           Pop-Location
 
       - name: Verify final source semantics and hash
@@ -53,6 +55,7 @@ jobs:
           foreach ($needle in @('BuildSplitArrowFormation(','Horizontal Strike Line','Orbital Wave','modelLocalZ = flightForward','Formation slots are positional state')) {
             if (-not $behavior.Contains($needle)) { throw "Missing behavior marker: $needle" }
           }
+          if ($behavior.Contains('entity.SetVisibility(false)')) { throw 'Obsolete GameEntity.SetVisibility(bool) call is still present.' }
           foreach ($needle in @('SplitArrowFormationMode','SplitArrowFormationSpacing','SplitArrowFormationResponse','SplitArrowOrbitSpeed','SplitArrowWaveFrequency')) {
             if (-not $settings.Contains($needle)) { throw "Missing MCM setting marker: $needle" }
           }
