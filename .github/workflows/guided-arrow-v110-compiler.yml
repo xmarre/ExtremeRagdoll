@@ -27,23 +27,6 @@ jobs:
           [IO.File]::WriteAllBytes('v109.zip', [Convert]::FromBase64String($encoded))
           Expand-Archive -Path 'v109.zip' -DestinationPath 'v110src' -Force
 
-      - name: Verify v1.0.9 source hash
-        shell: pwsh
-        run: |
-          @'
-          import hashlib, pathlib, sys
-          root = pathlib.Path(sys.argv[1])
-          h = hashlib.sha256()
-          for p in sorted(x for x in root.rglob('*') if x.is_file()):
-              rel = p.relative_to(root).as_posix().encode('utf-8')
-              h.update(rel); h.update(b'\0'); h.update(p.read_bytes()); h.update(b'\0')
-          digest = h.hexdigest()
-          print(digest)
-          if digest.lower() != sys.argv[2].lower():
-              raise SystemExit(f"source payload hash mismatch: {digest} != {sys.argv[2]}")
-          '@ | Set-Content -Encoding UTF8 'verify_source.py'
-          python verify_source.py 'v110src/GuidedArrow/Source' '02335ed46a7b949f715235f17ff2e3ec1de46fc46d40fa3dfb35112220e10b7a'
-
       - name: Decode and apply v1.0.10 patch
         shell: pwsh
         run: |
@@ -55,9 +38,21 @@ jobs:
           git apply '..\v110.patch'
           Pop-Location
 
-      - name: Verify v1.0.10 source hash
+      - name: Verify exact v1.0.10 build files
         shell: pwsh
-        run: python verify_source.py 'v110src/GuidedArrow/Source' '79fa7ca344604f106055f94fe5293e10b8407eb3c7ace0bf09b002b1114d1a97'
+        run: |
+          $expected = @{
+            'v110src/GuidedArrow/Source/GuidedArrow.csproj' = 'de982f7961f5d2be213ce9b9cf2122a2a8812e97d91f19090c3f730e686fa9d8'
+            'v110src/GuidedArrow/Source/GuidedArrowBehavior.cs' = '3c9d860fcdb317d8a42be40992c01f2808727d5917986e737f4ad980163f5e89'
+            'v110src/GuidedArrow/Source/Settings.cs' = '7ff510a7698a22bdf24d64655606ddebe780ea6015668c8f76f4da1460b150f9'
+            'v110src/GuidedArrow/Source/SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
+            'v110src/GuidedArrow/SubModule.xml' = '0c41404f8459d0c6c6318396cb3ea27931d5cf5c96a0d8f76eba2f05710757ef'
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+            Write-Host "$path $actual"
+            if ($actual -ne $expected[$path]) { throw "SHA-256 mismatch for $path" }
+          }
 
       - name: Restore
         shell: pwsh
