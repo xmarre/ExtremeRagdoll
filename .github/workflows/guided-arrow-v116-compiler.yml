@@ -69,9 +69,8 @@ jobs:
         run: |
           @'
           import base64,gzip,hashlib,pathlib
-          parts=sorted(pathlib.Path('GuidedArrow/v116_payload').glob('part*.txt'))
-          assert len(parts)==2
-          e=''.join(p.read_text().strip() for p in parts)
+          paths=[pathlib.Path('GuidedArrow/v116_payload/part01.txt'),pathlib.Path('GuidedArrow/v116b_payload/part02.txt'),pathlib.Path('GuidedArrow/v116b_payload/part03.txt'),pathlib.Path('GuidedArrow/v116b_payload/part04.txt')]
+          e=''.join(p.read_text().strip() for p in paths)
           eh=hashlib.sha256(e.encode()).hexdigest();print('v116_encoded_sha256='+eh);assert eh=='eb6d77f25ab9d6673b53bce1eed3af2da3271157876d40690c4676d722364a7f'
           r=gzip.decompress(base64.b64decode(e))
           rh=hashlib.sha256(r).hexdigest();print('v116_patch_sha256='+rh);assert rh=='6703715f281323394cb2540d4082a4b870f379ab8e7a20b5340ac7d83ce6e643'
