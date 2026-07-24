@@ -102,10 +102,10 @@ jobs:
             if (-not $method) { throw "Missing transplanted method $methodName" }
             foreach ($ins in $method.Body.Instructions) {
               $op = $ins.Operand
-              if ($op -is [Mono.Cecil.FieldReference] -and $op.DeclaringType.FullName.StartsWith('ExtremeRagdoll.', [StringComparison]::Ordinal)) {
+              if ($op -is [Mono.Cecil.FieldReference] -and $op.DeclaringType.FullName.StartsWith('ExtremeRagdoll.SafeRuntime.', [StringComparison]::Ordinal)) {
                 try { if (-not $op.Resolve()) { throw "Unresolved field $($op.FullName)" } } catch { throw "Unresolved internal field in $methodName: $($op.FullName) :: $($_.Exception.Message)" }
               }
-              if ($op -is [Mono.Cecil.MethodReference] -and $op.DeclaringType.FullName.StartsWith('ExtremeRagdoll.', [StringComparison]::Ordinal)) {
+              if ($op -is [Mono.Cecil.MethodReference] -and $op.DeclaringType.FullName.StartsWith('ExtremeRagdoll.SafeRuntime.', [StringComparison]::Ordinal)) {
                 try { if (-not $op.Resolve()) { throw "Unresolved method $($op.FullName)" } } catch { throw "Unresolved internal method in $methodName: $($op.FullName) :: $($_.Exception.Message)" }
               }
             }
