@@ -27,9 +27,7 @@ jobs:
           $zip = Join-Path $env:RUNNER_TEMP 'GuidedArrow-v1.1.0-source-ci.zip'
           [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') {
-            throw "Baseline source payload hash mismatch: $hash"
-          }
+          if ($hash -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') { throw "Baseline source payload hash mismatch: $hash" }
           $src = Join-Path $env:RUNNER_TEMP 'ga-src'
           Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
           "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -43,10 +41,7 @@ jobs:
           $text = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
           [IO.File]::WriteAllText($patch, $text, [Text.UTF8Encoding]::new($false))
           $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne '83eb8f335b6597011e629d759877230c7f7ff085305e8cdd4344542599d5621c') {
-            throw "Authoritative patch hash mismatch: $patchHash"
-          }
-
+          if ($patchHash -ne '83eb8f335b6597011e629d759877230c7f7ff085305e8cdd4344542599d5621c') { throw "Authoritative patch hash mismatch: $patchHash" }
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
@@ -57,7 +52,6 @@ jobs:
             git apply --unsafe-paths $patch
             if ($LASTEXITCODE -ne 0) { throw 'git apply failed' }
           } finally { Pop-Location }
-
           $expected = @{
             'Source\Settings.cs' = '9e6a6c27591aa60d4c1f04ab2e1c83e8eea892600490ec1e598a2f35b89894f5'
             'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
@@ -81,7 +75,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
           } finally { Pop-Location }
 
-      - name: Build release
+      - name: Build production release against Bannerlord 1.3.15
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -91,7 +85,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
           } finally { Pop-Location }
 
-      - name: Verify assembly metadata and stage artifact
+      - name: Verify production assembly metadata and stage artifact
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -108,13 +102,32 @@ jobs:
             "AssemblyVersion=$($asm.Version)",
             "FileVersion=$($vi.FileVersion)",
             "ProductVersion=$($vi.ProductVersion)",
-            "DLL_SHA256=$dllHash",
-            "PATCH_SHA256=$patchHash"
+            "DLL_SHA256=$dllHash"
           ) | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Encoding utf8
           $stage = Join-Path $env:RUNNER_TEMP 'artifact'
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
           Copy-Item $dll,$pdb -Destination $stage
           Copy-Item (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Destination $stage
+
+      - name: Validate exact v1.1.1 source against Bannerlord 1.4.7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = "$env:GA_SRC\Source\GuidedArrow.csproj"
+          $original = Get-Content $project -Raw
+          try {
+            $retargeted = $original.Replace('1.3.15.110062', '1.4.7.117484')
+            Set-Content -Path $project -Value $retargeted -Encoding utf8
+            Push-Location "$env:GA_SRC\Source"
+            try {
+              dotnet restore GuidedArrow.csproj --nologo
+              if ($LASTEXITCODE -ne 0) { throw '1.4.7 restore failed' }
+              dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true
+              if ($LASTEXITCODE -ne 0) { throw '1.4.7 build failed' }
+            } finally { Pop-Location }
+          } finally {
+            [IO.File]::WriteAllText($project, $original, [Text.UTF8Encoding]::new($false))
+          }
 
       - name: Upload compiled artifact
         uses: actions/upload-artifact@v4
