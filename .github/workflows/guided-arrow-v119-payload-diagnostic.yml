@@ -1,0 +1,40 @@
+name: Guided Arrow v1.0.19 Payload Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/guided-arrow-v119-payload-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect payload
+        shell: pwsh
+        run: |
+          @'
+          import base64,gzip,hashlib,pathlib
+          p=pathlib.Path('GuidedArrow/v119.patch.gz.b64')
+          raw_text=p.read_bytes()
+          s=p.read_text().strip()
+          print('file_len=',len(raw_text))
+          print('stripped_len=',len(s))
+          print('file_sha256=',hashlib.sha256(raw_text).hexdigest())
+          print('stripped_sha256=',hashlib.sha256(s.encode()).hexdigest())
+          try:
+              r=gzip.decompress(base64.b64decode(s))
+              print('patch_len=',len(r))
+              print('patch_sha256=',hashlib.sha256(r).hexdigest())
+          except Exception as e:
+              print('decompress_error=',repr(e))
+              raise
+          '@ | Set-Content -Encoding UTF8 diagnose.py
+          python diagnose.py 2>&1 | Tee-Object -FilePath diagnostic.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v119-payload-diagnostic
+          path: diagnostic.txt
