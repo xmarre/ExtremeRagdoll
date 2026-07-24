@@ -1,0 +1,304 @@
+diff --git a/GuidedArrow/Source/GuidedArrow.csproj b/GuidedArrow/Source/GuidedArrow.csproj
+index 5615f9d..9e1f601 100644
+--- a/GuidedArrow/Source/GuidedArrow.csproj
++++ b/GuidedArrow/Source/GuidedArrow.csproj
+@@ -6,9 +6,9 @@
+     <AssemblyName>GuidedArrow</AssemblyName>
+     <RootNamespace>GuidedArrow</RootNamespace>
+     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+-    <Version>1.1.0</Version>
+-    <FileVersion>1.1.0.0</FileVersion>
+-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
++    <Version>1.1.1</Version>
++    <FileVersion>1.1.1.0</FileVersion>
++    <AssemblyVersion>1.1.1.0</AssemblyVersion>
+     <Deterministic>true</Deterministic>
+     <DebugType>pdbonly</DebugType>
+     <Optimize>true</Optimize>
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+index d7238a8..3c8756b 100644
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -89,6 +89,7 @@ namespace GuidedArrow
+             public Vec3 GuidanceTargetVelocity;
+             public bool GuidanceTargetVelocityValid;
+             public bool GuidanceBrokenFromFormation;
++            public readonly List<Agent> GuidanceConsumedTargets = new List<Agent>();
+             public float EstimatedGravityZ = -9.81f;
+             public Vec3 LastCommandedVelocity;
+             public bool LastCommandedVelocityValid;
+@@ -1697,7 +1698,9 @@ namespace GuidedArrow
+                 return;
+             }
+ 
+-            InputKey hotkey = ResolveAutoguidanceHotkey(Settings.Instance?.AutoguidanceHotkey ?? 0);
++            InputKey hotkey = ResolveAutoguidanceHotkey(
++                Settings.Instance?.AutoguidanceHotkeyName,
++                Settings.Instance?.AutoguidanceHotkey ?? 0);
+             int activationMode = Settings.Instance?.AutoguidanceActivationMode ?? 0;
+             if (activationMode <= 0)
+             {
+@@ -1715,9 +1718,23 @@ namespace GuidedArrow
+             }
+         }
+ 
+-        private static InputKey ResolveAutoguidanceHotkey(int selection)
++        private static InputKey ResolveAutoguidanceHotkey(string configuredName, int legacySelection)
+         {
+-            switch (selection)
++            string keyName = configuredName?.Trim();
++            if (!string.IsNullOrEmpty(keyName))
++            {
++                // Accept ordinary letters/function-key names directly. Numeric keys are exposed by
++                // TaleWorlds.InputSystem as D0..D9, so allow users to type either "1" or "D1".
++                if (keyName.Length == 1 && char.IsDigit(keyName[0]))
++                    keyName = "D" + keyName;
++
++                if (Enum.TryParse(keyName, true, out InputKey parsed))
++                    return parsed;
++            }
++
++            // Invalid/empty migrated settings fail to a key that is not Bannerlord's vanilla drop-
++            // weapon binding. The legacy selector is only consulted for explicit old non-G choices.
++            switch (legacySelection)
+             {
+                 case 1: return InputKey.H;
+                 case 2: return InputKey.J;
+@@ -1727,7 +1744,7 @@ namespace GuidedArrow
+                 case 6: return InputKey.B;
+                 case 7: return InputKey.N;
+                 case 8: return InputKey.M;
+-                default: return InputKey.G;
++                default: return InputKey.F8;
+             }
+         }
+ 
+@@ -1911,6 +1928,18 @@ namespace GuidedArrow
+                         TrackedMissile tracked = _trackedMissiles[i];
+                         if (!IsAutoguidanceEligibleMissile(tracked) || IsAutoguidanceTargetValid(tracked.GuidanceTarget))
+                             continue;
++
++                        // A missile that has already passed through the shared target must not turn
++                        // back into the same body. Keep Same Target semantics for every other missile,
++                        // and let only the consumed missile choose its nearest remaining candidate.
++                        if (WasAutoguidanceTargetConsumed(tracked, sharedTarget))
++                        {
++                            int alternateIndex = FindBestAutoguidanceCandidate(tracked, false);
++                            if (alternateIndex >= 0)
++                                AssignAutoguidanceTarget(tracked, _autoguidanceRankCandidates[alternateIndex]);
++                            continue;
++                        }
++
+                         AssignAutoguidanceTarget(tracked, sharedTarget);
+                     }
+                 }
+@@ -2039,49 +2068,121 @@ namespace GuidedArrow
+             if (!IsFinite(position) || !IsFinite(velocity) || !IsFinite(speedSquared) || speedSquared <= Tiny)
+                 return -1;
+ 
+-            Vec3 forward = NormalizeSafe(velocity, _lastMissileDirection);
++            float speed = (float)Math.Sqrt(speedSquared);
++            Vec3 forward = velocity / speed;
+             Vec3 referenceDirection = forward;
+             int selection = Settings.Instance?.AutoguidanceTargetSelection ?? 0;
+             if (selection == 1 && _cameraFrameValid)
+                 referenceDirection = NormalizeSafe(-_cameraFrame.rotation.u, forward);
+ 
+-            float radius = Clamp(Settings.Instance?.MinimumTurnRadius ?? 24f, 3f, 120f);
+-            int bestIndex = -1;
+-            float bestScore = float.PositiveInfinity;
++            float configuredRadius = Clamp(Settings.Instance?.MinimumTurnRadius ?? 24f, 3f, 120f);
++            float steeringMultiplier = GetAdaptiveSteeringMultiplier(speed);
++            float effectiveTurnRadius = configuredRadius / Math.Max(1f, steeringMultiplier);
++
++            int bestReachableIndex = -1;
++            float bestReachableScore = float.PositiveInfinity;
++            int bestFallbackIndex = -1;
++            float bestFallbackScore = float.PositiveInfinity;
++
+             for (int i = 0; i < _autoguidanceRankCandidates.Count; i++)
+             {
+                 Agent candidate = _autoguidanceRankCandidates[i];
+                 if (requireUnused && IsAssignedAutoguidanceTarget(candidate))
+                     continue;
++                if (WasAutoguidanceTargetConsumed(tracked, candidate))
++                    continue;
+ 
+                 Vec3 toTarget = _autoguidanceCandidateHeads[i] - position;
+                 float distanceSquared = toTarget.LengthSquared;
+                 if (!IsFinite(toTarget) || !IsFinite(distanceSquared) || distanceSquared <= Tiny)
+                     continue;
++
+                 float distance = (float)Math.Sqrt(distanceSquared);
+                 Vec3 targetDirection = toTarget / distance;
+-                float dot = Clamp(Dot(referenceDirection, targetDirection), -1f, 1f);
+-                float angle = (float)Math.Acos(dot);
+-
+-                // A minimum-radius turn needs approximately radius*angle arc length before the
+-                // projectile can even align with this bearing. Penalizing geometric shortfall makes
+-                // activation after a miss favor a recoverable forward-context target without ever
+-                // rejecting an impossible target by cheating or snapping toward it.
+-                float minimumTurnArc = radius * angle;
+-                float reachabilityShortfall = Math.Max(0f, minimumTurnArc - distance);
+-                float score;
+-                if (selection == 2)
+-                    score = distance + angle * 2f + reachabilityShortfall * 6f;
+-                else
+-                    score = angle * 60f + distance * 0.08f + reachabilityShortfall * 8f;
++                float forwardDot = Clamp(Dot(forward, targetDirection), -1f, 1f);
++                float forwardAngle = (float)Math.Acos(forwardDot);
++                float referenceDot = Clamp(Dot(referenceDirection, targetDirection), -1f, 1f);
++                float referenceAngle = (float)Math.Acos(referenceDot);
+ 
+-                if (score < bestScore)
++                float requiredDistance = EstimateMinimumReachableDistance(effectiveTurnRadius, forwardAngle);
++                float reachabilityShortfall = Math.Max(0f, requiredDistance - distance);
++                bool reachable = reachabilityShortfall <= 0.001f;
++
++                if (reachable)
+                 {
+-                    bestScore = score;
+-                    bestIndex = i;
++                    float score;
++                    if (selection == 1)
++                    {
++                        // Camera-aim mode remains aim-biased, but only among targets the current
++                        // curvature budget can actually intercept before overshoot.
++                        score = referenceAngle * 40f + distance * 0.10f;
++                    }
++                    else
++                    {
++                        // Default and distance modes are nearest-first. A tiny angle term is only a
++                        // deterministic tie-breaker; it can no longer make a far straight-ahead enemy
++                        // beat a substantially closer reachable enemy.
++                        score = distance + forwardAngle * 0.05f;
++                    }
++
++                    if (score < bestReachableScore)
++                    {
++                        bestReachableScore = score;
++                        bestReachableIndex = i;
++                    }
++                }
++                else
++                {
++                    // Fallback is used only when no candidate is currently reachable. Prefer the
++                    // smallest physical shortfall, then the least heading change, so autoguidance can
++                    // recover toward a plausible future intercept without overriding closer reachable
++                    // targets whenever one exists.
++                    float fallbackScore = reachabilityShortfall * 12f + forwardAngle * effectiveTurnRadius + distance * 0.02f;
++                    if (selection == 1)
++                        fallbackScore += referenceAngle * 4f;
++                    if (fallbackScore < bestFallbackScore)
++                    {
++                        bestFallbackScore = fallbackScore;
++                        bestFallbackIndex = i;
++                    }
+                 }
+             }
+-            return bestIndex;
++
++            return bestReachableIndex >= 0 ? bestReachableIndex : bestFallbackIndex;
++        }
++
++        private static float EstimateMinimumReachableDistance(float effectiveTurnRadius, float headingAngle)
++        {
++            effectiveTurnRadius = Math.Max(0.1f, effectiveTurnRadius);
++            headingAngle = Clamp(headingAngle, 0f, (float)Math.PI);
++
++            // For targets up to 90 degrees off the current flight direction, a maximum-curvature
++            // circular intercept reaches a bearing angle theta at chord distance 2R*sin(theta).
++            // That is a more faithful overshoot test than the old R*theta arc heuristic. For targets
++            // already behind the missile, require additional room for the continuing turn instead of
++            // letting sin(theta) incorrectly shrink the requirement again past 90 degrees.
++            float halfPi = (float)Math.PI * 0.5f;
++            if (headingAngle <= halfPi)
++                return 2f * effectiveTurnRadius * (float)Math.Sin(headingAngle);
++
++            return 2f * effectiveTurnRadius + effectiveTurnRadius * (headingAngle - halfPi);
++        }
++
++        private static bool WasAutoguidanceTargetConsumed(TrackedMissile tracked, Agent target)
++        {
++            if (tracked == null || target == null)
++                return false;
++            for (int i = 0; i < tracked.GuidanceConsumedTargets.Count; i++)
++                if (ReferenceEquals(tracked.GuidanceConsumedTargets[i], target))
++                    return true;
++            return false;
++        }
++
++        private static void MarkAutoguidanceTargetConsumed(TrackedMissile tracked, Agent target)
++        {
++            if (tracked == null || target == null || WasAutoguidanceTargetConsumed(tracked, target))
++                return;
++            tracked.GuidanceConsumedTargets.Add(target);
+         }
+ 
+         private void AssignAutoguidanceTarget(TrackedMissile tracked, Agent target)
+@@ -2837,14 +2938,17 @@ namespace GuidedArrow
+                     return;
+                 }
+ 
+-                if (IsAutoguidanceRuntimeActive() && impactedVictim != null &&
+-                    ReferenceEquals(tracked.GuidanceTarget, impactedVictim))
++                if (IsAutoguidanceRuntimeActive() && impactedVictim != null)
+                 {
+-                    // A genuine PassThrough has already consumed this target crossing. Do not turn back
+-                    // into the same body. Clear only this missile's cached target; the exact native
+-                    // projectile identity and all penetration/kill history remain untouched.
+-                    ClearAutoguidanceTarget(tracked);
+-                    _autoguidanceReacquireCountdown = 0f;
++                    // Every genuine PassThrough consumes that body for this exact missile, even when
++                    // the collision was incidental rather than the active guidance target. This keeps
++                    // reacquisition from steering back into an agent the projectile already crossed.
++                    MarkAutoguidanceTargetConsumed(tracked, impactedVictim);
++                    if (ReferenceEquals(tracked.GuidanceTarget, impactedVictim))
++                    {
++                        ClearAutoguidanceTarget(tracked);
++                        _autoguidanceReacquireCountdown = 0f;
++                    }
+                 }
+ 
+                 Log("Missile #" + missileIndex + " received native PassThrough; exact live guidance continues.");
+diff --git a/GuidedArrow/Source/Settings.cs b/GuidedArrow/Source/Settings.cs
+index c6f63ea..33c1f54 100644
+--- a/GuidedArrow/Source/Settings.cs
++++ b/GuidedArrow/Source/Settings.cs
+@@ -57,8 +57,12 @@ namespace GuidedArrow
+         public bool EnableAutonomousGuidance { get; set; } = true;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyInteger("Autoguidance Hotkey", 0, 8, "0", Order = 1, RequireRestart = false,
+-            HintText = "0=G, 1=H, 2=J, 3=K, 4=L, 5=V, 6=B, 7=N, 8=M. The key is read live in missions and does not require a restart.")]
++        [SettingPropertyText("Autoguidance Hotkey", Order = 1, RequireRestart = false,
++            HintText = "Enter the Bannerlord key name to use for autoguidance, for example F8, U, X, D1, MiddleMouseButton or XButton1. The key is read live in missions and does not require a restart. Choose a key that is not bound to an unwanted vanilla action.")]
++        public string AutoguidanceHotkeyName { get; set; } = "F8";
++
++        // Retained for backward-compatible deserialization of v1.1.0 MCM JSON. It is no longer
++        // exposed in MCM; the free-form AutoguidanceHotkeyName setting is authoritative.
+         public int AutoguidanceHotkey { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+@@ -73,7 +77,7 @@ namespace GuidedArrow
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+         [SettingPropertyInteger("Target Selection", 0, 2, "0", Order = 4, RequireRestart = false,
+-            HintText = "0=Closest to Projectile Direction, 1=Closest to Camera Aim, 2=Closest Enemy. Direction mode also penalizes targets that are geometrically poor recovery choices under the current turn radius.")]
++            HintText = "0=Closest Reachable Enemy: nearest enemy that the missile can still intercept under its current turn authority. 1=Closest to Camera Aim: aim-biased among physically reachable enemies. 2=Absolute Closest Enemy: distance-first, with reachability still preferred over targets the missile has already overshot.")]
+         public int AutoguidanceTargetSelection { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+diff --git a/GuidedArrow/SubModule.xml b/GuidedArrow/SubModule.xml
+index 1b81c2f..2ba7245 100644
+--- a/GuidedArrow/SubModule.xml
++++ b/GuidedArrow/SubModule.xml
+@@ -2,7 +2,7 @@
+ <Module>
+   <Name value="Guided Arrow" />
+   <Id value="GuidedArrow" />
+-  <Version value="v1.1.0" />
++  <Version value="v1.1.1" />
+   <DefaultModule value="false" />
+   <SingleplayerModule value="true" />
+   <MultiplayerModule value="false" />
