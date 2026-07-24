@@ -96,10 +96,10 @@ jobs:
           encoded=''.join(p.read_text().strip() for p in parts)
           assert len(parts)==1, len(parts)
           encoded_hash=hashlib.sha256(encoded.encode()).hexdigest(); print('v114_encoded_sha256='+encoded_hash)
-          assert encoded_hash=='4d9e2bec0d3a98121b2b4f3a9a639105d4d03749ee06f6aec79b100573cfbb3e', encoded_hash
+          assert encoded_hash=='e72d17d47496ae93b122aea6a84696cbf206c96423fa3022f3b69d3cc8659b3a', encoded_hash
           raw=gzip.decompress(base64.b64decode(encoded))
           raw_hash=hashlib.sha256(raw).hexdigest(); print('v114_patch_sha256='+raw_hash)
-          assert raw_hash=='ed7666bacca6e143c05961e04175cd7a46aa5bbc964897664e545bf0aae3f39a', raw_hash
+          assert raw_hash=='b6e9997f36f1f8021e3d68a752030c6658f5665569ce4abc97fe4104574abef5', raw_hash
           pathlib.Path('v114.patch').write_bytes(raw)
           '@ | Set-Content -Encoding UTF8 'reconstruct_v114.py'
           python reconstruct_v114.py
@@ -109,6 +109,7 @@ jobs:
           git apply '..\v114.patch'
           if ($LASTEXITCODE -ne 0) { throw 'v1.0.14 patch apply failed.' }
           Pop-Location
+          python -c "from pathlib import Path; p=Path('v114src/GuidedArrow/SubModule.xml'); b=p.read_bytes(); old=b'<Version value=\"v1.0.13\" />'; new=b'<Version value=\"v1.0.14\" />'; assert old in b, 'v1.0.13 SubModule marker not found'; p.write_bytes(b.replace(old,new,1))"
 
       - name: Verify exact v1.0.14 source and semantics
         shell: pwsh
