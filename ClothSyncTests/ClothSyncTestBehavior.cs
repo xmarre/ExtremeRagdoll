@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using TaleWorlds.Core;
 using TaleWorlds.Engine;
+using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 
 namespace ExtremeRagdoll.ClothSyncTests
@@ -78,8 +79,6 @@ namespace ExtremeRagdoll.ClothSyncTests
                 Agent = affected,
                 CapturedAt = Mission.CurrentTime
             };
-
-            TryCaptureVisualPosition(affected, out tracked.LastVisualPosition);
             tracked.HasLastVisualPosition = TryCaptureVisualPosition(affected, out tracked.LastVisualPosition);
             _tracked.Add(tracked);
         }
@@ -129,11 +128,7 @@ namespace ExtremeRagdoll.ClothSyncTests
                     (!settings.ForceBoneFramesDuringRagdollStabilization || now - tracked.RagdollSeenAt > StabilizationWindow) &&
                     (!settings.OneShotClothResetOnRagdoll || tracked.ClothResetAttempted);
 
-                bool highSpeedDiagnosticsEnabled =
-                    settings.HighSpeedClothVelocityCompensation ||
-                    settings.DiagnosticZeroClothVelocity ||
-                    settings.HighSpeedClothDistanceClamp;
-
+                bool highSpeedDiagnosticsEnabled = HasAnyHighSpeedMode(settings);
                 bool highSpeedWindowFinished = !highSpeedDiagnosticsEnabled ||
                     (tracked.LastHighSpeedAt >= 0f && now - tracked.LastHighSpeedAt > LowSpeedRetainWindow);
 
@@ -149,9 +144,17 @@ namespace ExtremeRagdoll.ClothSyncTests
         {
             return settings.ForceBoneFramesDuringRagdollStabilization ||
                    settings.OneShotClothResetOnRagdoll ||
-                   settings.HighSpeedClothVelocityCompensation ||
+                   HasAnyHighSpeedMode(settings);
+        }
+
+        private static bool HasAnyHighSpeedMode(Settings settings)
+        {
+            return settings.HighSpeedClothVelocityCompensation ||
                    settings.DiagnosticZeroClothVelocity ||
-                   settings.HighSpeedClothDistanceClamp;
+                   settings.HighSpeedClothDistanceClamp ||
+                   settings.HighSpeedInvalidatePreviousFrames ||
+                   settings.HighSpeedContinuousClothReset ||
+                   settings.HighSpeedTeleportRebase;
         }
 
         private static Skeleton TryGetSkeleton(Agent agent)
@@ -210,8 +213,7 @@ namespace ExtremeRagdoll.ClothSyncTests
             {
             }
 
-            Vec3 currentVisualPosition;
-            bool hasCurrentVisualPosition = TryCaptureVisualPosition(agent, out currentVisualPosition);
+            bool hasCurrentVisualPosition = TryCaptureVisualPosition(agent, out Vec3 currentVisualPosition);
             Vec3 measuredVelocity = Vec3.Zero;
             bool hasMeasuredVelocity = false;
             if (hasCurrentVisualPosition && tracked.HasLastVisualPosition && dt > 0.000001f)
@@ -244,28 +246,45 @@ namespace ExtremeRagdoll.ClothSyncTests
             }
 
             float speed = hasSelectedVelocity ? Length(selectedVelocity) : 0f;
-            float threshold = Math.Max(0f, settings.ActivationSpeedThreshold);
-            bool highSpeed = hasSelectedVelocity && speed >= threshold;
+            bool highSpeed = hasSelectedVelocity && speed >= Math.Max(0f, settings.ActivationSpeedThreshold);
 
-            if (highSpeed)
+            if (!highSpeed)
             {
-                tracked.LastHighSpeedAt = now;
-                Vec3 forcedVelocity = settings.DiagnosticZeroClothVelocity ? Vec3.Zero : selectedVelocity;
+                if (tracked.ForcedVelocityWasWritten || tracked.DistanceClampWasWritten)
+                    RestoreHighSpeedOverrides(tracked);
+                return;
+            }
 
-                bool writeVelocity = settings.DiagnosticZeroClothVelocity || settings.HighSpeedClothVelocityCompensation;
-                bool writeDistance = settings.HighSpeedClothDistanceClamp;
-                ApplyToAllClothSimulators(agent, forcedVelocity, writeVelocity,
-                    Clamp(settings.ClothMaxDistanceMultiplier, 0.05f, 1f), writeDistance);
+            tracked.LastHighSpeedAt = now;
+
+            Vec3 forcedVelocity = settings.DiagnosticZeroClothVelocity ? Vec3.Zero : selectedVelocity;
+            bool writeVelocity = settings.DiagnosticZeroClothVelocity || settings.HighSpeedClothVelocityCompensation;
+            bool writeDistance = settings.HighSpeedClothDistanceClamp;
+
+            if (writeVelocity || writeDistance)
+            {
+                ApplyLegacyHighSpeedOverrides(
+                    agent,
+                    forcedVelocity,
+                    writeVelocity,
+                    Clamp(settings.ClothMaxDistanceMultiplier, 0.05f, 1f),
+                    writeDistance);
 
                 if (writeVelocity)
                     tracked.ForcedVelocityWasWritten = true;
                 if (writeDistance)
                     tracked.DistanceClampWasWritten = true;
             }
-            else
+
+            if (settings.HighSpeedInvalidatePreviousFrames ||
+                settings.HighSpeedContinuousClothReset ||
+                settings.HighSpeedTeleportRebase)
             {
-                if (tracked.ForcedVelocityWasWritten || tracked.DistanceClampWasWritten)
-                    RestoreHighSpeedOverrides(tracked);
+                ApplyHardRebaseToClothEntities(
+                    agent,
+                    settings.HighSpeedInvalidatePreviousFrames,
+                    settings.HighSpeedContinuousClothReset,
+                    settings.HighSpeedTeleportRebase);
             }
         }
 
@@ -290,11 +309,10 @@ namespace ExtremeRagdoll.ClothSyncTests
         {
             if (tracked == null || tracked.Agent == null)
                 return;
-
             if (!tracked.ForcedVelocityWasWritten && !tracked.DistanceClampWasWritten)
                 return;
 
-            ApplyToAllClothSimulators(
+            ApplyLegacyHighSpeedOverrides(
                 tracked.Agent,
                 Vec3.Zero,
                 tracked.ForcedVelocityWasWritten,
@@ -305,7 +323,19 @@ namespace ExtremeRagdoll.ClothSyncTests
             tracked.DistanceClampWasWritten = false;
         }
 
-        private static void ApplyToAllClothSimulators(
+        private static GameEntity TryGetVisualRoot(Agent agent)
+        {
+            try
+            {
+                return agent?.AgentVisuals?.GetEntity();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static void ApplyLegacyHighSpeedOverrides(
             Agent agent,
             Vec3 forcedVelocity,
             bool setForcedVelocity,
@@ -315,24 +345,12 @@ namespace ExtremeRagdoll.ClothSyncTests
             if ((!setForcedVelocity && !setMaxDistanceMultiplier) || agent == null)
                 return;
 
-            GameEntity root;
-            try
-            {
-                root = agent.AgentVisuals?.GetEntity();
-            }
-            catch
-            {
-                root = null;
-            }
-
-            if (root == null)
-                return;
-
-            ApplyToEntityAndChildren(root, forcedVelocity, setForcedVelocity,
-                maxDistanceMultiplier, setMaxDistanceMultiplier);
+            GameEntity root = TryGetVisualRoot(agent);
+            if (root != null)
+                ApplyLegacyOverridesRecursive(root, forcedVelocity, setForcedVelocity, maxDistanceMultiplier, setMaxDistanceMultiplier);
         }
 
-        private static void ApplyToEntityAndChildren(
+        private static void ApplyLegacyOverridesRecursive(
             GameEntity entity,
             Vec3 forcedVelocity,
             bool setForcedVelocity,
@@ -367,6 +385,86 @@ namespace ExtremeRagdoll.ClothSyncTests
             {
             }
 
+            RecurseChildren(entity, child =>
+                ApplyLegacyOverridesRecursive(child, forcedVelocity, setForcedVelocity, maxDistanceMultiplier, setMaxDistanceMultiplier));
+        }
+
+        private static void ApplyHardRebaseToClothEntities(
+            Agent agent,
+            bool invalidatePreviousFrame,
+            bool resetClothEveryTick,
+            bool teleportRebase)
+        {
+            GameEntity root = TryGetVisualRoot(agent);
+            if (root != null)
+                ApplyHardRebaseRecursive(root, invalidatePreviousFrame, resetClothEveryTick, teleportRebase);
+        }
+
+        private static void ApplyHardRebaseRecursive(
+            GameEntity entity,
+            bool invalidatePreviousFrame,
+            bool resetClothEveryTick,
+            bool teleportRebase)
+        {
+            if (entity == null)
+                return;
+
+            int clothCount = 0;
+            try
+            {
+                clothCount = entity.ClothSimulatorComponentCount;
+            }
+            catch
+            {
+            }
+
+            if (clothCount > 0)
+            {
+                if (teleportRebase)
+                {
+                    try
+                    {
+                        MatrixFrame current = entity.GetGlobalFrame();
+                        entity.SetGlobalFrame(in current, true);
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (invalidatePreviousFrame)
+                {
+                    try
+                    {
+                        entity.SetPreviousFrameInvalid();
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                if (resetClothEveryTick)
+                {
+                    for (int i = 0; i < clothCount; i++)
+                    {
+                        try
+                        {
+                            ClothSimulatorComponent cloth = entity.GetClothSimulator(i);
+                            cloth?.SetResetRequired();
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+            }
+
+            RecurseChildren(entity, child =>
+                ApplyHardRebaseRecursive(child, invalidatePreviousFrame, resetClothEveryTick, teleportRebase));
+        }
+
+        private static void RecurseChildren(GameEntity entity, Action<GameEntity> visitor)
+        {
             int childCount;
             try
             {
@@ -379,19 +477,17 @@ namespace ExtremeRagdoll.ClothSyncTests
 
             for (int i = 0; i < childCount; i++)
             {
-                GameEntity child;
+                GameEntity child = null;
                 try
                 {
                     child = entity.GetChild(i);
                 }
                 catch
                 {
-                    child = null;
                 }
 
                 if (child != null)
-                    ApplyToEntityAndChildren(child, forcedVelocity, setForcedVelocity,
-                        maxDistanceMultiplier, setMaxDistanceMultiplier);
+                    visitor(child);
             }
         }
 
