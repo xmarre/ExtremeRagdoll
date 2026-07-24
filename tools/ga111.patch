@@ -54,7 +54,26 @@
              }
          }
  
-@@ -2039,49 +2056,121 @@
+@@ -1918,6 +1935,18 @@
+                         TrackedMissile tracked = _trackedMissiles[i];
+                         if (!IsAutoguidanceEligibleMissile(tracked) || IsAutoguidanceTargetValid(tracked.GuidanceTarget))
+                             continue;
++
++                        // A missile that has already passed through the shared target must not turn
++                        // back into the same body. Keep Same Target semantics for every other missile,
++                        // and let only the consumed missile choose its nearest remaining candidate.
++                        if (WasAutoguidanceTargetConsumed(tracked, sharedTarget))
++                        {
++                            int alternateIndex = FindBestAutoguidanceCandidate(tracked, false);
++                            if (alternateIndex >= 0)
++                                AssignAutoguidanceTarget(tracked, _autoguidanceRankCandidates[alternateIndex]);
++                            continue;
++                        }
++
+                         AssignAutoguidanceTarget(tracked, sharedTarget);
+                     }
+                 }
+@@ -2039,49 +2068,121 @@
              if (!IsFinite(position) || !IsFinite(velocity) || !IsFinite(speedSquared) || speedSquared <= Tiny)
                  return -1;
  
@@ -197,21 +216,31 @@
          }
  
          private void AssignAutoguidanceTarget(TrackedMissile tracked, Agent target)
-@@ -2840,9 +2929,11 @@
-                 if (IsAutoguidanceRuntimeActive() && impactedVictim != null &&
-                     ReferenceEquals(tracked.GuidanceTarget, impactedVictim))
+@@ -2840,14 +2941,17 @@
+                     return;
+                 }
+ 
+-                if (IsAutoguidanceRuntimeActive() && impactedVictim != null &&
+-                    ReferenceEquals(tracked.GuidanceTarget, impactedVictim))
++                if (IsAutoguidanceRuntimeActive() && impactedVictim != null)
                  {
 -                    // A genuine PassThrough has already consumed this target crossing. Do not turn back
 -                    // into the same body. Clear only this missile's cached target; the exact native
 -                    // projectile identity and all penetration/kill history remain untouched.
-+                    // A genuine PassThrough has already consumed this target crossing. Remember it
-+                    // for this exact missile so reacquisition cannot immediately select the same body
-+                    // again, then clear only the active target lock. Projectile identity and all
-+                    // penetration/kill history remain untouched.
+-                    ClearAutoguidanceTarget(tracked);
+-                    _autoguidanceReacquireCountdown = 0f;
++                    // Every genuine PassThrough consumes that body for this exact missile, even when
++                    // the collision was incidental rather than the active guidance target. This keeps
++                    // reacquisition from steering back into an agent the projectile already crossed.
 +                    MarkAutoguidanceTargetConsumed(tracked, impactedVictim);
-                     ClearAutoguidanceTarget(tracked);
-                     _autoguidanceReacquireCountdown = 0f;
++                    if (ReferenceEquals(tracked.GuidanceTarget, impactedVictim))
++                    {
++                        ClearAutoguidanceTarget(tracked);
++                        _autoguidanceReacquireCountdown = 0f;
++                    }
                  }
+ 
+                 Log("Missile #" + missileIndex + " received native PassThrough; exact live guidance continues.");
 --- a/GuidedArrow/Source/Settings.cs
 +++ b/GuidedArrow/Source/Settings.cs
 @@ -57,8 +57,12 @@
