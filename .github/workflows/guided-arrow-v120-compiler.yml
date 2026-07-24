@@ -15,7 +15,7 @@ on:
       - 'GuidedArrow/.v120-compile-trigger'
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
@@ -105,21 +105,58 @@ jobs:
           if($LASTEXITCODE-ne 0){exit $LASTEXITCODE}
 
       - name: Collect exact outputs
-        if: always()
         shell: pwsh
         run: |
+          $ErrorActionPreference='Stop'
           New-Item -ItemType Directory -Force compiled | Out-Null
-          if(Test-Path 'work/Source/bin/Release/net472/GuidedArrow.dll'){Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.dll' compiled/GuidedArrow.dll}
-          if(Test-Path 'work/Source/bin/Release/net472/GuidedArrow.pdb'){Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.pdb' compiled/GuidedArrow.pdb}
-          if(Test-Path 'work/Source'){Copy-Item 'work/Source' compiled/Source -Recurse}
-          if(Test-Path 'work/SubModule.xml'){Copy-Item 'work/SubModule.xml' compiled/SubModule.xml}
-          if(Test-Path compiler.log){Copy-Item compiler.log compiled/compiler.log}
-          if(Test-Path source_hash.txt){Copy-Item source_hash.txt compiled/source_hash.txt}
+          Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.dll' compiled/GuidedArrow.dll
+          Copy-Item 'work/Source/bin/Release/net472/GuidedArrow.pdb' compiled/GuidedArrow.pdb
+          Copy-Item 'work/Source' compiled/Source -Recurse
+          Copy-Item 'work/SubModule.xml' compiled/SubModule.xml
+          Copy-Item compiler.log compiled/compiler.log
+          Copy-Item source_hash.txt compiled/source_hash.txt
 
       - name: Upload outputs
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: GuidedArrow-v1.0.20-compiled
           path: compiled
           if-no-files-found: error
+
+      - name: Publish exact compiled transport to branch
+        if: ${{ github.event_name == 'push' && success() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Compress-Archive -Path 'compiled/*' -DestinationPath 'GuidedArrow-v1.0.20-compiled.zip' -Force
+          @'
+          import base64,hashlib,json,pathlib,shutil
+          z=pathlib.Path('GuidedArrow-v1.0.20-compiled.zip').read_bytes()
+          enc=base64.b64encode(z).decode('ascii')
+          out=pathlib.Path('GuidedArrow/v120_output')
+          if out.exists(): shutil.rmtree(out)
+          out.mkdir(parents=True)
+          chunk=90000
+          parts=[]
+          for i,start in enumerate(range(0,len(enc),chunk),1):
+              name=f'part{i:02d}.txt'
+              data=enc[start:start+chunk]
+              (out/name).write_text(data,encoding='ascii')
+              parts.append(name)
+          manifest={
+              'artifact':'GuidedArrow-v1.0.20-compiled.zip',
+              'zip_sha256':hashlib.sha256(z).hexdigest(),
+              'base64_sha256':hashlib.sha256(enc.encode('ascii')).hexdigest(),
+              'zip_size':len(z),
+              'base64_size':len(enc),
+              'parts':parts
+          }
+          (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(manifest,indent=2))
+          '@ | Set-Content -Encoding UTF8 publish_transport.py
+          python publish_transport.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add GuidedArrow/v120_output
+          git commit -m 'Publish Guided Arrow v1.0.20 compiled transport'
+          git push origin HEAD:tmp/guided-arrow-v120-native-crosshair-fix
