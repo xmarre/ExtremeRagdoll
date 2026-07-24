@@ -6,7 +6,7 @@ namespace ExtremeRagdoll.ClothSyncTests
 {
     public sealed class Settings : AttributeGlobalSettings<Settings>
     {
-        public override string Id => "ExtremeRagdoll_ClothSyncTests_v142";
+        public override string Id => "ExtremeRagdoll_ClothSyncTests_v143";
         public override string DisplayName => "Extreme Ragdoll - Cloth Sync Tests";
         public override string FolderName => "ExtremeRagdoll";
         public override string FormatType => "json";
@@ -65,22 +65,30 @@ namespace ExtremeRagdoll.ClothSyncTests
         [SettingPropertyFloatingInteger("Visual Tick Catch-Up Substeps", 1f, 8f, "0", Order = 61, RequireRestart = false)]
         public float VisualTickCatchUpSubsteps { get; set; } = 1f;
 
-        [SettingPropertyGroup("Cloth-Safe Velocity Governor")]
-        [SettingPropertyBool("Limit Speed Of Cloth-Bearing Corpses", Order = 80, RequireRestart = false,
-            HintText = "Detects actual cloth-bearing meshes with Skeleton.GetAllMeshes()/Mesh.HasCloth() and applies a ragdoll linear-velocity ceiling only to those dead agents. This addresses the cause directly instead of trying to make the native cloth solver catch up after it has fallen behind.")]
+        [SettingPropertyGroup("Previous Cloth-Safe Velocity Governor")]
+        [SettingPropertyBool("Limit Speed Of Cloth-Bearing Corpses", Order = 80, RequireRestart = false)]
         public bool ClothSafeVelocityGovernor { get; set; } = false;
 
-        [SettingPropertyGroup("Cloth-Safe Velocity Governor")]
-        [SettingPropertyFloatingInteger("Cloth-Safe Linear Speed Limit", 2f, 60f, "0.0 m/s", Order = 81, RequireRestart = false,
-            HintText = "Maximum ragdoll linear velocity for corpses whose equipped skeleton contains at least one Mesh.HasCloth() mesh. Start at 12 m/s; test 8, 12, 16 and 20 to find the highest stable value for your clothing set. Existing lower Extreme Ragdoll global linear limits are respected.")]
+        [SettingPropertyGroup("Previous Cloth-Safe Velocity Governor")]
+        [SettingPropertyFloatingInteger("Cloth-Safe Linear Speed Limit", 2f, 60f, "0.0 m/s", Order = 81, RequireRestart = false)]
         public float ClothSafeLinearVelocityLimit { get; set; } = 12f;
 
+        [SettingPropertyGroup("Verified Cloth Targeting")]
+        [SettingPropertyBool("Show Verified Cloth Target Diagnostic", Order = 100, RequireRestart = false,
+            HintText = "On each new killed agent, scans the full visual GameEntity hierarchy, all MetaMesh components, MetaMesh.HasClothData(), Mesh.HasCloth(), cloth simulator components, and skeleton meshes. Prints one concise in-game diagnostic line so we can verify which native cloth path actually exists on the problematic outfit instead of silently guessing.")]
+        public bool VerifiedClothTargetDiagnostics { get; set; } = false;
+
+        [SettingPropertyGroup("Verified Cloth Targeting")]
+        [SettingPropertyBool("Keep Verified Cloth MetaMesh State During Flight", Order = 101, RequireRestart = false,
+            HintText = "Only when actual cloth-bearing MetaMesh data is detected, calls MBAgentVisuals.SetClothComponentKeepStateOfAllMeshes(true) while above the activation threshold and restores false after slowdown. This reaches equipment MetaMeshes that may not appear in Skeleton.GetAllMeshes().")]
+        public bool VerifiedClothKeepStateDuringFlight { get; set; } = false;
+
         [SettingPropertyGroup("High-Speed Thresholds")]
-        [SettingPropertyFloatingInteger("Activation Speed Threshold", 0f, 100f, "0.0 m/s", Order = 90, RequireRestart = false)]
+        [SettingPropertyFloatingInteger("Activation Speed Threshold", 0f, 100f, "0.0 m/s", Order = 110, RequireRestart = false)]
         public float ActivationSpeedThreshold { get; set; } = 6f;
 
         [SettingPropertyGroup("High-Speed Thresholds")]
-        [SettingPropertyFloatingInteger("Cloth Max Distance Multiplier", 0.05f, 1f, "0.00x", Order = 91, RequireRestart = false)]
+        [SettingPropertyFloatingInteger("Cloth Max Distance Multiplier", 0.05f, 1f, "0.00x", Order = 111, RequireRestart = false)]
         public float ClothMaxDistanceMultiplier { get; set; } = 0.35f;
     }
 }
