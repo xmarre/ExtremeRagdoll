@@ -17,35 +17,42 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-
       - name: Restore
         shell: pwsh
         run: dotnet restore 'ClothSyncTests/ExtremeRagdoll.ClothSyncTests.csproj'
-
       - name: Build
         shell: pwsh
+        continue-on-error: true
         run: |
           dotnet build 'ClothSyncTests/ExtremeRagdoll.ClothSyncTests.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath compiler.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify isolated output
+          Set-Content -Path build_exit.txt -Value $LASTEXITCODE
+      - name: Collect outputs and logs
+        if: always()
         shell: pwsh
         run: |
-          $dll = 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.dll'
-          if (-not (Test-Path $dll)) { throw 'Compiled test DLL missing.' }
-          $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
-          Write-Host "cloth_sync_tests_sha256=$hash"
           New-Item -ItemType Directory -Force compiled | Out-Null
-          Copy-Item $dll compiled/
-          if (Test-Path 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.pdb') { Copy-Item 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.pdb' compiled/ }
+          if (Test-Path compiler.log) { Copy-Item compiler.log compiled/ }
+          if (Test-Path build_exit.txt) { Copy-Item build_exit.txt compiled/ }
+          $dll = 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.dll'
+          if (Test-Path $dll) {
+            $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "cloth_sync_tests_sha256=$hash"
+            Copy-Item $dll compiled/
+            if (Test-Path 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.pdb') { Copy-Item 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.pdb' compiled/ }
+            Set-Content -Path compiled/sha256.txt -Value $hash
+          }
           Copy-Item 'ClothSyncTests/*.cs' compiled/ -Force
           Copy-Item 'ClothSyncTests/*.csproj' compiled/ -Force
-          Copy-Item compiler.log compiled/
-          Set-Content -Path compiled/sha256.txt -Value $hash
-
-      - name: Upload compiled test submodule
+      - name: Upload diagnostics/output
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ExtremeRagdoll-v1.3.7-ClothSyncTests-compiled
           path: compiled
           if-no-files-found: error
+      - name: Fail if build failed
+        if: always()
+        shell: pwsh
+        run: |
+          $code = [int](Get-Content build_exit.txt -Raw).Trim()
+          if ($code -ne 0) { throw "Build failed with exit code $code" }
