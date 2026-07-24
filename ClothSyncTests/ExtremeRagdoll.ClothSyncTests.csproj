@@ -6,9 +6,9 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>ExtremeRagdoll.ClothSyncTests</AssemblyName>
     <RootNamespace>ExtremeRagdoll.ClothSyncTests</RootNamespace>
-    <Version>1.3.9</Version>
-    <FileVersion>1.3.9.0</FileVersion>
-    <AssemblyVersion>1.3.9.0</AssemblyVersion>
+    <Version>1.4.0</Version>
+    <FileVersion>1.4.0.0</FileVersion>
+    <AssemblyVersion>1.4.0.0</AssemblyVersion>
     <Deterministic>true</Deterministic>
     <DebugType>portable</DebugType>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
