@@ -20,6 +20,7 @@ namespace ExtremeRagdoll.ClothSyncTests
         {
             mission.AddMissionBehavior(new ClothSyncTestBehavior());
             mission.AddMissionBehavior(new AgentClothOwnerTestBehavior());
+            mission.AddMissionBehavior(new VisualTickCatchUpBehavior());
         }
     }
 }
