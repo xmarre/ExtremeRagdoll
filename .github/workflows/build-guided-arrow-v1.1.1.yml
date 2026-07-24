@@ -26,14 +26,26 @@ jobs:
           $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
           $zip = Join-Path $env:RUNNER_TEMP 'GuidedArrow-v1.1.1-source-ci.zip'
           [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "SOURCE_PAYLOAD_SHA256=$hash" | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'SOURCE_PAYLOAD_SHA256.txt') -Encoding utf8
-          if ($hash -ne '3e2125c4c7df29edcdf1c4201e6d568c6a964a431a810334e97acfe95b0ace4c') {
-            throw "Source payload hash mismatch. Expected 3e2125c4c7df29edcdf1c4201e6d568c6a964a431a810334e97acfe95b0ace4c, got $hash"
-          }
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SOURCE_PAYLOAD_SHA256=$zipHash" | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'SOURCE_PAYLOAD_SHA256.txt') -Encoding utf8
+
           $src = Join-Path $env:RUNNER_TEMP 'ga-src'
           Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
-          "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $module = Join-Path $src 'GuidedArrow'
+          $expected = @{
+            'Source\Settings.cs' = '9e6a6c27591aa60d4c1f04ab2e1c83e8eea892600490ec1e598a2f35b89894f5'
+            'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
+            'Source\GuidedArrowBehavior.cs' = 'eb377f6a95206a788499dc9991fd36d585f81087b2d2ea70280395adf77f05a6'
+            'Source\GuidedArrow.csproj' = 'f3e6956567c5513d7b1b3c3dfa21899793f72375ec8dc6b6bc8751b591dc1296'
+            'SubModule.xml' = 'ee43bae55deaa46e11eb2979a081fd2a04f364a80012a5761cfc8b518522b1c3'
+          }
+          foreach ($rel in $expected.Keys) {
+            $path = Join-Path $module $rel
+            if (!(Test-Path $path)) { throw "Missing source file: $rel" }
+            $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected[$rel]) { throw "Source hash mismatch for $rel. Expected $($expected[$rel]), got $actual" }
+          }
+          "GA_SRC=$module" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Restore exact Bannerlord 1.3.15 and MCM references
         shell: pwsh
