@@ -36,7 +36,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $patch = (Resolve-Path 'tools/ga111.patch').Path
+          $checkoutPatch = (Resolve-Path 'tools/ga111.patch').Path
+          $patch = Join-Path $env:RUNNER_TEMP 'ga111-lf.patch'
+          $patchText = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText($patch, $patchText, [Text.UTF8Encoding]::new($false))
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
