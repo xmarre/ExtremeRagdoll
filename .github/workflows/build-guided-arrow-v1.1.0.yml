@@ -1,0 +1,87 @@
+name: Build Guided Arrow v1.1.0
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and verify exact source payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = Get-ChildItem 'tools/ga110/p*.b64' | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 payload chunks, found $($parts.Count)" }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $zip = Join-Path $env:RUNNER_TEMP 'GuidedArrow-v1.1.0-source-ci.zip'
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "SOURCE_PAYLOAD_SHA256=$hash" | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'SOURCE_PAYLOAD_SHA256.txt')
+          if ($hash -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') {
+            throw "Source payload hash mismatch. Expected 02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194, got $hash"
+          }
+          $src = Join-Path $env:RUNNER_TEMP 'ga-src'
+          Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
+          "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Restore exact Bannerlord 1.3.15 and MCM references
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet --info | Out-File -FilePath (Join-Path $env:RUNNER_TEMP 'DOTNET_INFO.txt') -Encoding utf8
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet restore GuidedArrow.csproj --nologo 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+
+      - name: Build release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+
+      - name: Verify assembly metadata and stage artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:GA_SRC\Source\bin\Release\net472"
+          $dll = Join-Path $out 'GuidedArrow.dll'
+          $pdb = Join-Path $out 'GuidedArrow.pdb'
+          if (!(Test-Path $dll)) { throw "Missing compiled DLL: $dll" }
+          if (!(Test-Path $pdb)) { throw "Missing compiled PDB: $pdb" }
+          $asm = [Reflection.AssemblyName]::GetAssemblyName($dll)
+          $vi = (Get-Item $dll).VersionInfo
+          $dllHash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "AssemblyVersion=$($asm.Version)",
+            "FileVersion=$($vi.FileVersion)",
+            "ProductVersion=$($vi.ProductVersion)",
+            "DLL_SHA256=$dllHash"
+          ) | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Encoding utf8
+          if ($asm.Version.ToString() -ne '1.1.0.0') { throw "Unexpected assembly version: $($asm.Version)" }
+          $stage = Join-Path $env:RUNNER_TEMP 'artifact'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item $dll,$pdb -Destination $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'DOTNET_INFO.txt'),(Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt'),(Join-Path $env:RUNNER_TEMP 'SOURCE_PAYLOAD_SHA256.txt') -Destination $stage
+
+      - name: Upload compiled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.0-compiled
+          path: ${{ runner.temp }}\artifact
+          if-no-files-found: error
+          retention-days: 7
