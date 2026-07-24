@@ -32,7 +32,7 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
           "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Apply exact v1.1.1 patch and verify final source
+      - name: Apply exact v1.1.1 patch and verify primary source changes
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -62,8 +62,30 @@ jobs:
           foreach ($rel in $expected.Keys) {
             $path = Join-Path $env:GA_SRC $rel
             $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $expected[$rel]) { throw "Final source hash mismatch for $rel. Expected $($expected[$rel]), got $actual" }
+            if ($actual -ne $expected[$rel]) { throw "Primary source hash mismatch for $rel. Expected $($expected[$rel]), got $actual" }
           }
+
+      - name: Apply verified InputKey example correction
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $checkoutPatch = (Resolve-Path 'tools/ga111-inputkey-example-fix.patch').Path
+          $patch = Join-Path $env:RUNNER_TEMP 'ga111-inputkey-example-fix-lf.patch'
+          $text = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText($patch, $text, [Text.UTF8Encoding]::new($false))
+          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne 'd48b5a1b002e277d5d5af196c6607214f26e41ad3bdad46038d3beeff639b1b5') { throw "InputKey correction patch hash mismatch: $patchHash" }
+          $root = Split-Path $env:GA_SRC -Parent
+          Push-Location $root
+          try {
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'InputKey correction git apply --check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'InputKey correction git apply failed' }
+          } finally { Pop-Location }
+          $settings = Join-Path $env:GA_SRC 'Source\Settings.cs'
+          $settingsHash = (Get-FileHash $settings -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($settingsHash -ne '0b066f3ef6f452130a99fc0dabb303650277b404f472abfee44dad74f1072840') { throw "Final Settings.cs hash mismatch: $settingsHash" }
 
       - name: Restore exact Bannerlord 1.3.15 and MCM references
         shell: pwsh
