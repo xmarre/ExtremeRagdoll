@@ -32,15 +32,11 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
           "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Verify and apply exact v1.1.1 patch
+      - name: Apply and verify exact v1.1.1 source changes
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $patch = (Resolve-Path 'tools/ga111.patch').Path
-          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne 'c8cecfd0b0d46794e2be6c665f5356f32e8b066d01bc4f14a6eef11e38530c03') {
-            throw "Patch hash mismatch: $patchHash"
-          }
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
