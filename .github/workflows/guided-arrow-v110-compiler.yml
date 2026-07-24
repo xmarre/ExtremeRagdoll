@@ -27,7 +27,7 @@ jobs:
           [IO.File]::WriteAllBytes('v110-source.zip', [Convert]::FromBase64String($encoded))
           Expand-Archive -Path 'v110-source.zip' -DestinationPath 'v110src' -Force
 
-      - name: Verify exact v1.0.10 source payload
+      - name: Verify reconstructed source payload
         shell: pwsh
         run: |
           @'
@@ -44,6 +44,18 @@ jobs:
               raise SystemExit(f"source payload hash mismatch: {digest} != {expected}")
           '@ | Set-Content -Encoding UTF8 'verify_source.py'
           python verify_source.py 'v110src/GuidedArrow/Source' '79fa7ca344604f106055f94fe5293e10b8407eb3c7ace0bf09b002b1114d1a97'
+
+      - name: Apply formation slot compaction fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -c "import base64,gzip,pathlib; p=pathlib.Path('GuidedArrow/v110-slot-fix.patch.gz.b64'); pathlib.Path('slot-fix.patch').write_bytes(gzip.decompress(base64.b64decode(p.read_text().strip())))"
+          Push-Location 'v110src'
+          git init | Out-Null
+          git apply --check '..\slot-fix.patch'
+          git apply '..\slot-fix.patch'
+          Pop-Location
+          python verify_source.py 'v110src/GuidedArrow/Source' 'bd9e4f3a9608f600c9f758a2f3119348004efdbf2b43c492e29384d0f1467bec'
 
       - name: Restore
         shell: pwsh
