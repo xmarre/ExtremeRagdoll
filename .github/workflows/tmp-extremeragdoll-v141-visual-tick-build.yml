@@ -1,0 +1,56 @@
+name: Temporary ExtremeRagdoll v1.4.1 Visual Tick Catch-Up Build
+
+on:
+  pull_request:
+    paths:
+      - 'ClothSyncTests/**'
+      - '.github/workflows/tmp-extremeragdoll-v141-visual-tick-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore 'ClothSyncTests/ExtremeRagdoll.ClothSyncTests.csproj'
+      - name: Build
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          dotnet build 'ClothSyncTests/ExtremeRagdoll.ClothSyncTests.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath compiler.log
+          Set-Content -Path build_exit.txt -Value $LASTEXITCODE
+      - name: Collect outputs and logs
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force compiled | Out-Null
+          if (Test-Path compiler.log) { Copy-Item compiler.log compiled/ }
+          if (Test-Path build_exit.txt) { Copy-Item build_exit.txt compiled/ }
+          $dll = 'ClothSyncTests/bin/Release/net472/ExtremeRagdoll.ClothSyncTests.dll'
+          if (Test-Path $dll) {
+            $hash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+            Set-Content -Path compiled/sha256.txt -Value $hash
+            Copy-Item $dll compiled/
+          }
+          Copy-Item 'ClothSyncTests/*.cs' compiled/ -Force
+          Copy-Item 'ClothSyncTests/*.csproj' compiled/ -Force
+      - name: Upload diagnostics/output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.4.1-VisualTickCatchUp-compiled
+          path: compiled
+          if-no-files-found: error
+      - name: Fail if build failed
+        if: always()
+        shell: pwsh
+        run: |
+          $code = [int](Get-Content build_exit.txt -Raw).Trim()
+          if ($code -ne 0) { throw "Build failed with exit code $code" }
