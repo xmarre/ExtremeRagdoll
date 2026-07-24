@@ -17,16 +17,19 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Reconstruct and verify v1.0.10 source
+      - name: Reconstruct v1.0.9 baseline
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $parts = Get-ChildItem 'GuidedArrow/v109_payload/part*.txt' | Sort-Object Name
-          if ($parts.Count -ne 5) { throw "Expected 5 v1.0.9 payload parts, found $($parts.Count)." }
+          if ($parts.Count -ne 5) { throw "Expected 5 baseline payload parts, found $($parts.Count)." }
           $encoded = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
           [IO.File]::WriteAllBytes('v109.zip', [Convert]::FromBase64String($encoded))
           Expand-Archive -Path 'v109.zip' -DestinationPath 'v110src' -Force
 
+      - name: Verify v1.0.9 source hash
+        shell: pwsh
+        run: |
           @'
           import hashlib, pathlib, sys
           root = pathlib.Path(sys.argv[1])
@@ -39,15 +42,22 @@ jobs:
           if digest.lower() != sys.argv[2].lower():
               raise SystemExit(f"source payload hash mismatch: {digest} != {sys.argv[2]}")
           '@ | Set-Content -Encoding UTF8 'verify_source.py'
-
           python verify_source.py 'v110src/GuidedArrow/Source' '02335ed46a7b949f715235f17ff2e3ec1de46fc46d40fa3dfb35112220e10b7a'
-          python -c "import base64,gzip,pathlib; pathlib.Path('v110.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110.patch.gz.b64').read_text().strip())))"
+
+      - name: Decode and apply v1.0.10 patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -c "import base64,gzip,pathlib; p=pathlib.Path('GuidedArrow/v110.patch.gz.b64'); pathlib.Path('v110.patch').write_bytes(gzip.decompress(base64.b64decode(p.read_text().strip())))"
           Push-Location 'v110src'
           git init | Out-Null
           git apply --check '..\v110.patch'
           git apply '..\v110.patch'
           Pop-Location
-          python verify_source.py 'v110src/GuidedArrow/Source' '79fa7ca344604f106055f94fe5293e10b8407eb3c7ace0bf09b002b1114d1a97'
+
+      - name: Verify v1.0.10 source hash
+        shell: pwsh
+        run: python verify_source.py 'v110src/GuidedArrow/Source' '79fa7ca344604f106055f94fe5293e10b8407eb3c7ace0bf09b002b1114d1a97'
 
       - name: Restore
         shell: pwsh
@@ -56,7 +66,6 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Continue'
           dotnet build 'v110src/GuidedArrow/Source/GuidedArrow.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath 'compiler.log'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
