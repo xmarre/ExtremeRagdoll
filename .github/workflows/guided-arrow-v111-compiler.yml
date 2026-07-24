@@ -1,0 +1,104 @@
+name: Temporary Guided Arrow v1.0.11 Compiler
+
+on:
+  pull_request:
+    paths:
+      - 'GuidedArrow/.v111-compile-trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Reconstruct proven v1.0.9 compiler baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = Get-ChildItem 'GuidedArrow/v109_payload/part*.txt' | Sort-Object Name
+          if ($parts.Count -ne 5) { throw "Expected 5 v1.0.9 payload parts, found $($parts.Count)." }
+          $encoded = ($parts | ForEach-Object { Get-Content $_.FullName -Raw }) -join ''
+          [IO.File]::WriteAllBytes('v109.zip', [Convert]::FromBase64String($encoded))
+          Expand-Archive -Path 'v109.zip' -DestinationPath 'v111src' -Force
+
+      - name: Apply proven v1.0.10 patches and exact v1.0.11 patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -c "import base64,gzip,pathlib; pathlib.Path('v110.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110.patch.gz.b64').read_text().strip()))); pathlib.Path('slot-fix.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110-slot-fix.patch.gz.b64').read_text().strip()))); pathlib.Path('visibility-fix.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v110-public-visibility-fix.patch.gz.b64').read_text().strip()))); pathlib.Path('v111.patch').write_bytes(gzip.decompress(base64.b64decode(pathlib.Path('GuidedArrow/v111.patch.gz.b64').read_text().strip())))"
+          Push-Location 'v111src'
+          git init | Out-Null
+          git apply --check '..\v110.patch'
+          git apply '..\v110.patch'
+          git apply --check '..\slot-fix.patch'
+          git apply '..\slot-fix.patch'
+          git apply --check '..\visibility-fix.patch'
+          git apply '..\visibility-fix.patch'
+          git apply --check '..\v111.patch'
+          git apply '..\v111.patch'
+          Pop-Location
+
+      - name: Verify final source semantics and hash
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = Get-Content 'v111src/GuidedArrow/Source/GuidedArrow.csproj' -Raw
+          $behavior = Get-Content 'v111src/GuidedArrow/Source/GuidedArrowBehavior.cs' -Raw
+          $settings = Get-Content 'v111src/GuidedArrow/Source/Settings.cs' -Raw
+          $submodule = Get-Content 'v111src/GuidedArrow/SubModule.xml' -Raw
+          foreach ($needle in @('<Version>1.0.11</Version>','<FileVersion>1.0.11.0</FileVersion>','<AssemblyVersion>1.0.11.0</AssemblyVersion>')) {
+            if (-not $project.Contains($needle)) { throw "Missing version marker: $needle" }
+          }
+          if (-not $submodule.Contains('<Version value="v1.0.11" />')) { throw 'SubModule.xml version is not v1.0.11.' }
+          foreach ($needle in @('PenetrationResolutionFrames','ResolvePendingImpactMissiles','HandleGuidedSwarmTerminal','HandleConfirmedKill','CinematicTriggerMode','GetLiveSwarmMissileSpeed','ProximityReferenceMissileSpeed','ProximitySpeedCompensationStrength','penetrated and remains guided')) {
+            if (-not ($behavior.Contains($needle) -or $settings.Contains($needle))) { throw "Missing v1.0.11 marker: $needle" }
+          }
+          if ($behavior.Contains('RemoveTrackedMissile(impactMissile, true);')) { throw 'OnMissileHit still removes the impacted missile immediately.' }
+          @'
+          import hashlib, pathlib
+          root = pathlib.Path('v111src/GuidedArrow/Source')
+          h = hashlib.sha256()
+          for p in sorted(x for x in root.rglob('*') if x.is_file() and 'obj' not in x.parts and 'bin' not in x.parts):
+              rel = p.relative_to(root).as_posix().encode('utf-8')
+              h.update(rel); h.update(b'\0'); h.update(p.read_bytes()); h.update(b'\0')
+          digest = h.hexdigest()
+          pathlib.Path('source_hash.txt').write_text(digest + '\n')
+          print('final_source_payload_sha256=' + digest)
+          '@ | Set-Content -Encoding UTF8 'hash_source.py'
+          python hash_source.py
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore 'v111src/GuidedArrow/Source/GuidedArrow.csproj'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build 'v111src/GuidedArrow/Source/GuidedArrow.csproj' -c Release --no-restore 2>&1 | Tee-Object -FilePath 'compiler.log'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Collect exact compiled outputs and source
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force 'compiled' | Out-Null
+          if (Test-Path 'v111src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll') { Copy-Item 'v111src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.dll' 'compiled/GuidedArrow.dll' }
+          if (Test-Path 'v111src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb') { Copy-Item 'v111src/GuidedArrow/Source/bin/Release/net472/GuidedArrow.pdb' 'compiled/GuidedArrow.pdb' }
+          if (Test-Path 'v111src/GuidedArrow/Source') { Copy-Item 'v111src/GuidedArrow/Source' 'compiled/Source' -Recurse }
+          if (Test-Path 'v111src/GuidedArrow/SubModule.xml') { Copy-Item 'v111src/GuidedArrow/SubModule.xml' 'compiled/SubModule.xml' }
+          if (Test-Path 'compiler.log') { Copy-Item 'compiler.log' 'compiled/compiler.log' }
+          if (Test-Path 'source_hash.txt') { Copy-Item 'source_hash.txt' 'compiled/source_hash.txt' }
+
+      - name: Upload outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.0.11-compiled
+          path: compiled
+          if-no-files-found: warn
