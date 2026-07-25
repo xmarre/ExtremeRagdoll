@@ -1,0 +1,119 @@
+name: Build Guided Arrow v1.1.12 Stability Controls
+
+on:
+  pull_request:
+    branches: [ codex/ga1111-release-base ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    outputs:
+      failure_message: ${{ steps.build.outputs.failure_message }}
+    steps:
+      - name: Checkout exact payload
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Decode authoritative v1.1.9 build script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $specs = @(
+            @{ Path='tools/ga119buildv2/p00.b64'; Hash='f1eaacd40dc2898b9deee41b48fa8cd5752c3cb3fc7a9f307a6e1d53630beac7' },
+            @{ Path='tools/ga119buildv2/p01.b64'; Hash='8cd4e85a6f2f1b05e8fcb2db128016576b254f765013121a0c9fc943c5bafa7a' },
+            @{ Path='tools/ga119buildv2/p02.b64'; Hash='1db8bfb892bb2c08e39cd11a0df065d739ca937c82cb0f1543688e47328549e4' },
+            @{ Path='tools/ga119buildv2/p03fix.b64'; Hash='79e6ff11fcc90263b4179e233e3b5c46ba68a837a1bbab9f819c159ef445b87f' },
+            @{ Path='tools/ga119buildv2/p04fix.b64'; Hash='ae6c596d23f5486c6a18f992fb9f7903284d148cc4b58df6a91cfba03f371eed' },
+            @{ Path='tools/ga119buildv2/p05fix.b64'; Hash='8937a7a199db6bdb0b790cd803a1048bf43fd0c41ca053a52f3a674365622cb2' },
+            @{ Path='tools/ga119buildv2/p06fix.b64'; Hash='290a7ffd73167429d46a6e6117315561dc68f9f58291ffbde4d4d0382993307c' }
+          )
+          foreach ($spec in $specs) {
+            $actual = (Get-FileHash -LiteralPath $spec.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $spec.Hash) { throw "v1.1.9 build chunk hash mismatch: $($spec.Path) $actual" }
+          }
+          $payload = ($specs | ForEach-Object { ([IO.File]::ReadAllText($_.Path)).Trim() }) -join ''
+          $compressed = [Convert]::FromBase64String($payload)
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+          $script = Join-Path $env:RUNNER_TEMP 'build-ga119-full-3d-guidance.ps1'
+          $output = [IO.File]::Create($script)
+          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $hash=(Get-FileHash $script -Algorithm SHA256).Hash.ToLowerInvariant()
+          if($hash -ne '252465ab734b1da63b825d39cd824699d4dc373635ed082c613ab4a142024c2e'){throw "v1.1.9 script hash mismatch: $hash"}
+          "GA119_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Select incremental build scripts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          "GA1110_BUILD_SCRIPT=$((Resolve-Path 'tools/ga1110/build-ga1110-incremental.ps1').Path)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "GA1111_BUILD_SCRIPT=$((Resolve-Path 'tools/ga1111/build-ga1111-trajectory-planner.ps1').Path)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "GA1112_BUILD_SCRIPT=$((Resolve-Path 'tools/ga1112/build-ga1112-stability-standalone-controls.ps1').Path)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build and validate Guided Arrow v1.1.12
+        id: build
+        shell: pwsh
+        run: |
+          try {
+            $crosshair='tools/ga119-assets/GuidedArrowCrosshair.xml'
+            $crosshairHash=(Get-FileHash $crosshair -Algorithm SHA256).Hash.ToLowerInvariant()
+            if($crosshairHash -ne '318c41e4f52494dacf899da5497b6d0d89e4f67804363ecd8f82182ca194b372'){throw "Crosshair hash mismatch: $crosshairHash"}
+            $seed="$env:RUNNER_TEMP\ga119-output\v1.1.8-baseline\release-assets"
+            New-Item -ItemType Directory $seed -Force|Out-Null
+            Copy-Item $crosshair (Join-Path $seed 'GuidedArrowCrosshair.xml') -Force
+            $testSpecs=@(
+              @{Path='tools/ga119test/p00.b64';Hash='20a14b7f37d7b6435f08346509e404e65d56ba2599235b61a9c865d93bcb503a'},
+              @{Path='tools/ga119test/p01.b64';Hash='d9fd84060227da42a6c8f2672eaa226b76cb6058921814d99b86fa6db8d89cae'},
+              @{Path='tools/ga119test/p02.b64';Hash='af5234b8cc517654c97694e7791341e4c9b18c76a23c30b303b41a73b18f71fd'},
+              @{Path='tools/ga119test/p03.b64';Hash='3293429d426b2112733eff9d5f35bc8ea007b80c32cea12f86b760b5891be6f6'}
+            )
+            foreach($spec in $testSpecs){$a=(Get-FileHash $spec.Path -Algorithm SHA256).Hash.ToLowerInvariant();if($a-ne$spec.Hash){throw "v1.1.9 test chunk hash mismatch"}}
+            $testPayload=($testSpecs|ForEach-Object{([IO.File]::ReadAllText($_.Path)).Trim()})-join''
+            [IO.File]::WriteAllText('tools/test-ga119-full-3d-guidance.py.gz.b64',$testPayload,[Text.UTF8Encoding]::new($false))
+            & $env:GA119_BUILD_SCRIPT -OutputRoot "$env:RUNNER_TEMP\ga119-output"
+            & $env:GA1110_BUILD_SCRIPT -BaseOutputRoot "$env:RUNNER_TEMP\ga119-output" -OutputRoot "$env:RUNNER_TEMP\ga1110-output"
+            & $env:GA1111_BUILD_SCRIPT -BaseOutputRoot "$env:RUNNER_TEMP\ga1110-output" -OutputRoot "$env:RUNNER_TEMP\ga1111-output"
+            & $env:GA1112_BUILD_SCRIPT -BaseOutputRoot "$env:RUNNER_TEMP\ga1111-output" -OutputRoot "$env:RUNNER_TEMP\ga1112-output"
+          } catch {
+            $message=$_.Exception.Message.Replace("`r",' ').Replace("`n",' ')
+            "failure_message=$message" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+            throw
+          }
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.12-diagnostics
+          path: ${{ runner.temp }}\ga1112-output\diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload compiled module
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.12-compiled
+          path: ${{ runner.temp }}\ga1112-output\artifact
+          if-no-files-found: error
+          retention-days: 7
+
+  concise-result:
+    needs: build-and-validate
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Report result
+        shell: pwsh
+        env:
+          RESULT: ${{ needs.build-and-validate.result }}
+          FAILURE_MESSAGE: ${{ needs.build-and-validate.outputs.failure_message }}
+        run: |
+          Write-Host "BUILD_RESULT=$env:RESULT"
+          Write-Host "FAILURE_MESSAGE=$env:FAILURE_MESSAGE"
+          if($env:RESULT -ne 'success'){exit 1}
