@@ -1,0 +1,177 @@
+name: Build Guided Arrow v1.1.2 Authoritative
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Reconstruct verified v1.1.0 baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = Get-ChildItem 'tools/ga110/p*.b64' | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 baseline payload chunks, found $($parts.Count)" }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $zip = Join-Path $env:RUNNER_TEMP 'GuidedArrow-v1.1.0-source-ci.zip'
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') { throw "Baseline source payload hash mismatch: $hash" }
+          $src = Join-Path $env:RUNNER_TEMP 'ga-src'
+          Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
+          "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Reconstruct exact v1.1.1 source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Split-Path $env:GA_SRC -Parent
+          Push-Location $root
+          try {
+            git init | Out-Null
+            git config core.autocrlf false
+            foreach ($spec in @(
+              @{ Path='tools/ga111-authoritative.patch'; Hash='83eb8f335b6597011e629d759877230c7f7ff085305e8cdd4344542599d5621c' },
+              @{ Path='tools/ga111-inputkey-example-fix.patch'; Hash='d48b5a1b002e277d5d5af196c6607214f26e41ad3bdad46038d3beeff639b1b5' }
+            )) {
+              $checkoutPatch = (Resolve-Path (Join-Path $env:GITHUB_WORKSPACE $spec.Path)).Path
+              $patch = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileName($spec.Path) + '.lf')
+              $text = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
+              [IO.File]::WriteAllText($patch, $text, [Text.UTF8Encoding]::new($false))
+              $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($patchHash -ne $spec.Hash) { throw "v1.1.1 patch hash mismatch for $($spec.Path): $patchHash" }
+              git apply --check --unsafe-paths $patch
+              if ($LASTEXITCODE -ne 0) { throw "git apply --check failed for $($spec.Path)" }
+              git apply --unsafe-paths $patch
+              if ($LASTEXITCODE -ne 0) { throw "git apply failed for $($spec.Path)" }
+            }
+          } finally { Pop-Location }
+          $expected = @{
+            'Source\Settings.cs' = '0b066f3ef6f452130a99fc0dabb303650277b404f472abfee44dad74f1072840'
+            'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
+            'Source\GuidedArrowBehavior.cs' = 'eb377f6a95206a788499dc9991fd36d585f81087b2d2ea70280395adf77f05a6'
+            'Source\GuidedArrow.csproj' = 'f3e6956567c5513d7b1b3c3dfa21899793f72375ec8dc6b6bc8751b591dc1296'
+            'SubModule.xml' = 'ee43bae55deaa46e11eb2979a081fd2a04f364a80012a5761cfc8b518522b1c3'
+          }
+          foreach ($rel in $expected.Keys) {
+            $actual = (Get-FileHash (Join-Path $env:GA_SRC $rel) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected[$rel]) { throw "v1.1.1 source mismatch for $rel: $actual" }
+          }
+
+      - name: Apply exact v1.1.2 patch and verify final source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payload = (Resolve-Path 'tools/ga112.patch.gz.b64').Path
+          $payloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($payloadHash -ne 'c4d18cbeefa41a66c0920de028fde2aca7a147e9aa59852eea20910241caad67') { throw "v1.1.2 payload hash mismatch: $payloadHash" }
+          $compressed = [Convert]::FromBase64String((Get-Content $payload -Raw).Trim())
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+          $patch = Join-Path $env:RUNNER_TEMP 'ga112.patch'
+          $output = [IO.File]::Create($patch)
+          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne '539fc81a8eb8ea48317a73752af090d2e5dd1d84a8eda3a64d7455f15cb4e5ee') { throw "v1.1.2 patch hash mismatch: $patchHash" }
+          $root = Split-Path $env:GA_SRC -Parent
+          Push-Location $root
+          try {
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.2 git apply --check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.2 git apply failed' }
+          } finally { Pop-Location }
+          $expected = @{
+            'Source\GuidedArrow.csproj' = 'c961a27a61a1786a727286a0e2d63f37d44986ba4f35cec04016db838e81d54c'
+            'Source\GuidedArrowBehavior.cs' = 'cc729cb4da04125055a7a57673f58d3bbac0cc187d443a585bc1611092c1ee3f'
+            'Source\Settings.cs' = '211259b007e904608b4339c3a52ac2dcd9d00701f98d2aff6cc60cf5d6992796'
+            'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
+            'SubModule.xml' = '38b0453a3a7f719bad6b1b8b0e4f81d89a47d178475db1e74ae1169598acaa03'
+          }
+          foreach ($rel in $expected.Keys) {
+            $actual = (Get-FileHash (Join-Path $env:GA_SRC $rel) -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected[$rel]) { throw "Final source mismatch for $rel: $actual" }
+          }
+
+      - name: Restore exact Bannerlord 1.3.15 and MCM references
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet restore GuidedArrow.csproj --nologo 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+
+      - name: Build production release against Bannerlord 1.3.15
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
+          } finally { Pop-Location }
+
+      - name: Verify production assembly metadata and stage artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "$env:GA_SRC\Source\bin\Release\net472"
+          $dll = Join-Path $out 'GuidedArrow.dll'
+          $pdb = Join-Path $out 'GuidedArrow.pdb'
+          if (!(Test-Path $dll)) { throw "Missing compiled DLL: $dll" }
+          if (!(Test-Path $pdb)) { throw "Missing compiled PDB: $pdb" }
+          $asm = [Reflection.AssemblyName]::GetAssemblyName($dll)
+          if ($asm.Version.ToString() -ne '1.1.2.0') { throw "Unexpected assembly version: $($asm.Version)" }
+          $vi = (Get-Item $dll).VersionInfo
+          @(
+            "AssemblyVersion=$($asm.Version)",
+            "FileVersion=$($vi.FileVersion)",
+            "ProductVersion=$($vi.ProductVersion)",
+            "DLL_SHA256=$((Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant())",
+            "PDB_SHA256=$((Get-FileHash $pdb -Algorithm SHA256).Hash.ToLowerInvariant())"
+          ) | Set-Content -Path (Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Encoding utf8
+          $stage = Join-Path $env:RUNNER_TEMP 'artifact'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item $dll,$pdb -Destination $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Destination $stage
+
+      - name: Validate exact v1.1.2 source against Bannerlord 1.4.7
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = "$env:GA_SRC\Source\GuidedArrow.csproj"
+          $original = Get-Content $project -Raw
+          try {
+            $retargeted = $original.Replace('1.3.15.110062', '1.4.7.117484')
+            Set-Content -Path $project -Value $retargeted -Encoding utf8
+            Push-Location "$env:GA_SRC\Source"
+            try {
+              dotnet restore GuidedArrow.csproj --nologo
+              if ($LASTEXITCODE -ne 0) { throw '1.4.7 restore failed' }
+              dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true
+              if ($LASTEXITCODE -ne 0) { throw '1.4.7 build failed' }
+            } finally { Pop-Location }
+          } finally {
+            [IO.File]::WriteAllText($project, $original, [Text.UTF8Encoding]::new($false))
+          }
+
+      - name: Upload compiled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.2-compiled-authoritative
+          path: ${{ runner.temp }}\artifact
+          if-no-files-found: error
+          retention-days: 7
