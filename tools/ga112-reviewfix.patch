@@ -1,0 +1,29 @@
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -2307,7 +2307,8 @@
+             float turnDistance = EstimateMinimumReachableDistance(effectiveTurnRadius, preferredAngle);
+             float terminalStartDistance = Clamp(Math.Max(angleDistance, turnDistance * 1.15f), 4f, 24f);
+ 
+-            if (horizontalDistance > terminalStartDistance + 0.5f)
++            bool lowRiseEnabled = Settings.Instance?.AutoguidanceLowRiseAttackProfile ?? true;
++            if (lowRiseEnabled && horizontalDistance > terminalStartDistance + 0.5f)
+             {
+                 Vec3 stagingPoint = targetHead - horizontalDirection * terminalStartDistance;
+                 stagingPoint.z = cruiseZ;
+@@ -2625,9 +2626,15 @@
+                     sampledTerrain = true;
+                 }
+                 tracked.GuidanceCruiseGroundZ = groundZ;
+-                tracked.GuidanceCruiseGroundValid = true;
++                tracked.GuidanceCruiseGroundValid = sampledTerrain;
+             }
+ 
++            // Prop/interior floors are not represented by Scene terrain height. Guessing ground from
++            // the target's feet can drive a projectile into walls, stairs or floors, so retain direct
++            // predictive head interception unless a real terrain sample is available.
++            if (!tracked.GuidanceCruiseGroundValid)
++                return predictedHead;
++
+             float cruiseZ = tracked.GuidanceCruiseGroundZ + clearance;
+             float waypointDistance = Clamp(speed * 0.12f, 3f, Math.Min(12f, Math.Max(3f, horizontalDistance - terminalStartDistance)));
+             Vec3 cruiseWaypoint = projectilePosition + horizontalDirection * waypointDistance;
