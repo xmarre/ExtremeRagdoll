@@ -62,6 +62,23 @@ jobs:
             $seed = "$env:RUNNER_TEMP\ga119-output\v1.1.8-baseline\release-assets"
             New-Item -ItemType Directory $seed -Force | Out-Null
             Copy-Item -LiteralPath $crosshair -Destination (Join-Path $seed 'GuidedArrowCrosshair.xml') -Force
+
+            $testSpecs = @(
+              @{ Path='tools/ga119test/p00.b64'; Hash='20a14b7f37d7b6435f08346509e404e65d56ba2599235b61a9c865d93bcb503a' },
+              @{ Path='tools/ga119test/p01.b64'; Hash='d9fd84060227da42a6c8f2672eaa226b76cb6058921814d99b86fa6db8d89cae' },
+              @{ Path='tools/ga119test/p02.b64'; Hash='af5234b8cc517654c97694e7791341e4c9b18c76a23c30b303b41a73b18f71fd' },
+              @{ Path='tools/ga119test/p03.b64'; Hash='3293429d426b2112733eff9d5f35bc8ea007b80c32cea12f86b760b5891be6f6' }
+            )
+            foreach ($spec in $testSpecs) {
+              $actual = (Get-FileHash -LiteralPath $spec.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $spec.Hash) { throw "Test chunk hash mismatch for $($spec.Path): $actual" }
+            }
+            $testPayload = ($testSpecs | ForEach-Object { ([IO.File]::ReadAllText($_.Path)).Trim() }) -join ''
+            $testPath = 'tools/test-ga119-full-3d-guidance.py.gz.b64'
+            [IO.File]::WriteAllText($testPath, $testPayload, [Text.UTF8Encoding]::new($false))
+            $testPayloadHash = (Get-FileHash -LiteralPath $testPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($testPayloadHash -ne '206c1e80628c8b546195d8fc4e3d71838b2cc54584fe3bbce8d3abb3f7c118f7') { throw "Reconstructed test payload hash mismatch: $testPayloadHash" }
+
             & $env:GA119_BUILD_SCRIPT -OutputRoot "$env:RUNNER_TEMP\ga119-output"
           }
           catch {
