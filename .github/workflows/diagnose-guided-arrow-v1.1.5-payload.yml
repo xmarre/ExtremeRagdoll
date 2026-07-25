@@ -1,0 +1,60 @@
+name: Diagnose Guided Arrow v1.1.5 Payload
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Export exact payload bytes and hashes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'tools/ga115-source.patch.gz.b64'
+          $raw = [IO.File]::ReadAllBytes($path)
+          $text = [IO.File]::ReadAllText($path)
+          $trimmed = $text.Trim()
+          $rawHash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+          $trimmedHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($trimmed))).Replace('-','').ToLowerInvariant()
+          $stage = Join-Path $env:RUNNER_TEMP 'payload-diagnostic'
+          New-Item -ItemType Directory $stage -Force | Out-Null
+          Copy-Item $path (Join-Path $stage 'github-ga115-source.patch.gz.b64')
+          $lines = @(
+            "RAW_BYTES=$($raw.Length)",
+            "TEXT_LENGTH=$($text.Length)",
+            "TRIMMED_LENGTH=$($trimmed.Length)",
+            "RAW_SHA256=$rawHash",
+            "TRIMMED_UTF8_SHA256=$trimmedHash",
+            "FIRST64=$($trimmed.Substring(0,[Math]::Min(64,$trimmed.Length)))",
+            "LAST64=$($trimmed.Substring([Math]::Max(0,$trimmed.Length-64)))"
+          )
+          try {
+            $decoded = [Convert]::FromBase64String($trimmed)
+            $decodedPath = Join-Path $stage 'github-ga115-source.patch.gz'
+            [IO.File]::WriteAllBytes($decodedPath,$decoded)
+            $decodedHash = (Get-FileHash $decodedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines += "DECODED_BYTES=$($decoded.Length)"
+            $lines += "DECODED_SHA256=$decodedHash"
+          } catch {
+            $lines += "DECODE_ERROR=$($_.Exception.Message)"
+          }
+          $lines | Set-Content (Join-Path $stage 'PAYLOAD_DIAGNOSTIC.txt') -Encoding utf8
+
+      - name: Upload payload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.5-payload-diagnostic
+          path: ${{ runner.temp }}\payload-diagnostic
+          if-no-files-found: error
+          retention-days: 7
