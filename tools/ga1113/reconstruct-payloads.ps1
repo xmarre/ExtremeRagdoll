@@ -34,4 +34,9 @@ Join-Chunks $patch (Join-Path $root 'patch.gz.b64') '197522f6418b2f27bf7ef048bd4
 Join-Chunks $test (Join-Path $root 'test.gz.b64') '6751ab4acf8caa861fc66e9d17993dda8e9c998288b82bfebe253feb49634a34'
 Join-Chunks $build (Join-Path $root 'build.gz.b64') '38e501ac5ebb28332cd9693ce3c6bfff69d6145d1817a8bab23931efdd8a02eb'
 Expand-GzipBase64 (Join-Path $root 'build.gz.b64') (Join-Path $root 'build-ga1113-camera-split-crash.ps1') '9a2be50339ffad203974503394e378e2a934c07b750d16b644893ddd0c0e208d' '12d0e9afa4a400117819a34671f6a2313ab54b8fa1babf4f1665e44e9f074549'
+$hotfix=Join-Path $root 'compile-hotfix.patch'
+$hotfixText=[IO.File]::ReadAllText($hotfix).Replace("`r`n","`n")
+[IO.File]::WriteAllText($hotfix,$hotfixText,[Text.UTF8Encoding]::new($false))
+$hotfixHash=(Get-FileHash -LiteralPath $hotfix -Algorithm SHA256).Hash.ToLowerInvariant()
+if($hotfixHash -ne '6b8eb2c9e16e529c6e4367c9f82d24a283a7c4df2d8c06c21d878adb800563e3'){throw "Normalized compile hotfix hash mismatch: $hotfixHash"}
 Write-Host 'GA1113_PAYLOAD_RECONSTRUCTION=SUCCESS'
