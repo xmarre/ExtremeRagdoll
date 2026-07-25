@@ -43,7 +43,7 @@ $baseHashes=@{
  'GUI/Prefabs/GuidedArrowCrosshair.xml'='318c41e4f52494dacf899da5497b6d0d89e4f67804363ecd8f82182ca194b372'
 }
 foreach($e in $baseHashes.GetEnumerator()){Assert-Hash (Join-Path $moduleRoot $e.Key) $e.Value "v1.1.13 $($e.Key)"}
-Decode-GzipBase64 (Join-Path $payload 'patch.gz.b64') $patch 'b7ff7e3057fb6b4bc6df6b4a80ac098e9c63d928d3db18898a540385369a8e51' 'ca90232902b6d9b3229b2a8407684d2b97351a7875396b3998e0c1f52913655b' 'v1.1.14 patch'
+Decode-GzipBase64 (Join-Path $payload 'patch.gz.b64') $patch 'c45799c9c91104c0fb3ff29dd48dd46daa28fb65b0f0b0554fa4e580d742438a' 'f0b34578928b07de68029d4dff8f93757e6ccd4839d9bddd4df9a3d688ff6c50' 'v1.1.14 patch'
 Decode-GzipBase64 (Join-Path $payload 'test.gz.b64') $test '3d524fdef9da3ce0bc0466f133ed112c9a78c21f0cbfc6e3d41814748859e9ac' '1f31300365700d82adcdb748951c37bdfcc8c27ef5f257106f7960bddaca0d9d' 'v1.1.14 test'
 Push-Location $workspace
 try{
@@ -91,7 +91,7 @@ Copy-Item $patch (Join-Path $runtime 'GuidedArrow-v1.1.13-to-v1.1.14-Resolved-Sp
 $dll=Join-Path $bin 'GuidedArrow.dll';$pdb=Join-Path $bin 'GuidedArrow.pdb';$dllHash=Get-Sha256 $dll;$pdbHash=Get-Sha256 $pdb
 $vi=[Diagnostics.FileVersionInfo]::GetVersionInfo($dll);if($vi.FileVersion -ne '1.1.14.0'){throw "Unexpected DLL version $($vi.FileVersion)"}
 Write-Utf8NoBom (Join-Path $diagnostics 'COMPATIBILITY_MATRIX.txt') (($matrix -join [Environment]::NewLine)+[Environment]::NewLine)
-Write-Utf8NoBom (Join-Path $diagnostics 'SOURCE_VERIFICATION.txt') "BASE_V1_1_13_BEHAVIOR_SHA256=69c04ae90a9f27579a283798340c8a0b1a189974d3f35d2cd0442da24f8c8e7d`nPATCH_SHA256=ca90232902b6d9b3229b2a8407684d2b97351a7875396b3998e0c1f52913655b`nTEST_SHA256=1f31300365700d82adcdb748951c37bdfcc8c27ef5f257106f7960bddaca0d9d`nFINAL_BEHAVIOR_SHA256=b88516aab934c9383edfe80c7cdaa0b303e8d36bfd8697d3485cccbeb8fbad59`nFINAL_DAMAGE_BRIDGE_SHA256=66ded32e5f594025cf12ca88902818f9c9c65d1366bcbf4ac849caf70e2f544d`nDLL_SHA256=$dllHash`nPDB_SHA256=$pdbHash`n"
+Write-Utf8NoBom (Join-Path $diagnostics 'SOURCE_VERIFICATION.txt') "BASE_V1_1_13_BEHAVIOR_SHA256=69c04ae90a9f27579a283798340c8a0b1a189974d3f35d2cd0442da24f8c8e7d`nPATCH_SHA256=f0b34578928b07de68029d4dff8f93757e6ccd4839d9bddd4df9a3d688ff6c50`nTEST_SHA256=1f31300365700d82adcdb748951c37bdfcc8c27ef5f257106f7960bddaca0d9d`nFINAL_BEHAVIOR_SHA256=b88516aab934c9383edfe80c7cdaa0b303e8d36bfd8697d3485cccbeb8fbad59`nFINAL_DAMAGE_BRIDGE_SHA256=66ded32e5f594025cf12ca88902818f9c9c65d1366bcbf4ac849caf70e2f544d`nDLL_SHA256=$dllHash`nPDB_SHA256=$pdbHash`n"
 Write-Utf8NoBom (Join-Path $diagnostics 'BUILD_METADATA.txt') "GUIDED_ARROW_VERSION=1.1.14`nPRODUCTION_REFERENCE=1.3.15.110062`nDLL_SHA256=$dllHash`nPDB_SHA256=$pdbHash`n"
 Write-Utf8NoBom (Join-Path $diagnostics 'BUILD_STATUS.txt') "SUCCESS`n"
 Write-Host 'GA1114_BUILD=SUCCESS';Write-Host "DLL_SHA256=$dllHash";Write-Host "PDB_SHA256=$pdbHash"
