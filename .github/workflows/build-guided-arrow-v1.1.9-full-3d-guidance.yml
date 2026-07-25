@@ -28,10 +28,10 @@ jobs:
             @{ Path='tools/ga119buildv2/p00.b64'; Hash='f1eaacd40dc2898b9deee41b48fa8cd5752c3cb3fc7a9f307a6e1d53630beac7' },
             @{ Path='tools/ga119buildv2/p01.b64'; Hash='8cd4e85a6f2f1b05e8fcb2db128016576b254f765013121a0c9fc943c5bafa7a' },
             @{ Path='tools/ga119buildv2/p02.b64'; Hash='1db8bfb892bb2c08e39cd11a0df065d739ca937c82cb0f1543688e47328549e4' },
-            @{ Path='tools/ga119buildv2/p03.b64'; Hash='79e6ff11fcc90263b4179e233e3b5c46ba68a837a1bbab9f819c159ef445b87f' },
-            @{ Path='tools/ga119buildv2/p04.b64'; Hash='ae6c596d23f5486c6a18f992fb9f7903284d148cc4b58df6a91cfba03f371eed' },
-            @{ Path='tools/ga119buildv2/p05.b64'; Hash='8937a7a199db6bdb0b790cd803a1048bf43fd0c41ca053a52f3a674365622cb2' },
-            @{ Path='tools/ga119buildv2/p06.b64'; Hash='290a7ffd73167429d46a6e6117315561dc68f9f58291ffbde4d4d0382993307c' }
+            @{ Path='tools/ga119buildv2/p03fix.b64'; Hash='79e6ff11fcc90263b4179e233e3b5c46ba68a837a1bbab9f819c159ef445b87f' },
+            @{ Path='tools/ga119buildv2/p04fix.b64'; Hash='ae6c596d23f5486c6a18f992fb9f7903284d148cc4b58df6a91cfba03f371eed' },
+            @{ Path='tools/ga119buildv2/p05fix.b64'; Hash='8937a7a199db6bdb0b790cd803a1048bf43fd0c41ca053a52f3a674365622cb2' },
+            @{ Path='tools/ga119buildv2/p06fix.b64'; Hash='290a7ffd73167429d46a6e6117315561dc68f9f58291ffbde4d4d0382993307c' }
           )
           foreach ($spec in $specs) {
             $actual = (Get-FileHash -LiteralPath $spec.Path -Algorithm SHA256).Hash.ToLowerInvariant()
