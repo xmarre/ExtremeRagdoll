@@ -1,0 +1,66 @@
+name: Diagnose Guided Arrow v1.1.2 Final Source
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Reconstruct baseline and final source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $baseParts = Get-ChildItem 'tools/ga110/p*.b64' | Sort-Object Name
+          $baseB64 = ($baseParts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $zip = Join-Path $env:RUNNER_TEMP 'ga110.zip'
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($baseB64))
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant() -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') { throw 'Baseline mismatch' }
+          $root = Join-Path $env:RUNNER_TEMP 'ga-src'
+          Expand-Archive $zip $root -Force
+          $specs = @('tools/ga112source/p00.b64','tools/ga112source/p01.b64','tools/ga112source/p02a.b64','tools/ga112source/p02b.b64')
+          $b64 = ($specs | ForEach-Object { (Get-Content $_ -Raw).Trim() }) -join ''
+          $compressed = [Convert]::FromBase64String($b64)
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input,[IO.Compression.CompressionMode]::Decompress)
+          $main = Join-Path $env:RUNNER_TEMP 'main.patch'
+          $output = [IO.File]::Create($main)
+          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          Push-Location $root
+          try {
+            git init | Out-Null
+            git config core.autocrlf false
+            git apply --unsafe-paths $main
+            foreach ($name in @('ga112-compilefix.patch','ga112-reviewfix.patch')) {
+              $checkout = Resolve-Path (Join-Path $env:GITHUB_WORKSPACE "tools/$name")
+              $patch = Join-Path $env:RUNNER_TEMP "$name.lf"
+              [IO.File]::WriteAllText($patch,[IO.File]::ReadAllText($checkout).Replace("`r`n","`n"),[Text.UTF8Encoding]::new($false))
+              git apply --unsafe-paths $patch
+            }
+          } finally { Pop-Location }
+          $module = Join-Path $root 'GuidedArrow'
+          $stage = Join-Path $env:RUNNER_TEMP 'source-diagnostics'
+          New-Item -ItemType Directory $stage -Force | Out-Null
+          Copy-Item (Join-Path $module 'Source\GuidedArrowBehavior.cs') -Destination $stage
+          @(
+            "Behavior=$((Get-FileHash (Join-Path $module 'Source\GuidedArrowBehavior.cs') -Algorithm SHA256).Hash.ToLowerInvariant())",
+            "Settings=$((Get-FileHash (Join-Path $module 'Source\Settings.cs') -Algorithm SHA256).Hash.ToLowerInvariant())",
+            "Project=$((Get-FileHash (Join-Path $module 'Source\GuidedArrow.csproj') -Algorithm SHA256).Hash.ToLowerInvariant())",
+            "SubModuleCs=$((Get-FileHash (Join-Path $module 'Source\SubModule.cs') -Algorithm SHA256).Hash.ToLowerInvariant())",
+            "SubModuleXml=$((Get-FileHash (Join-Path $module 'SubModule.xml') -Algorithm SHA256).Hash.ToLowerInvariant())"
+          ) | Set-Content (Join-Path $stage 'HASHES.txt') -Encoding utf8
+      - name: Upload final source diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.2-final-source-diagnostics
+          path: ${{ runner.temp }}\source-diagnostics
+          if-no-files-found: error
+          retention-days: 7
