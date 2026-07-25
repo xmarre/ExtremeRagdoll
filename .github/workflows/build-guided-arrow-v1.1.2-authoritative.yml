@@ -32,65 +32,34 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
           "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Reconstruct exact v1.1.1 source
+      - name: Apply direct exact v1.1.2 patch and verify final source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $parts = Get-ChildItem 'tools/ga112direct/p*.b64' | Sort-Object Name
+          if ($parts.Count -ne 6) { throw "Expected 6 v1.1.2 patch chunks, found $($parts.Count)" }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $payload = Join-Path $env:RUNNER_TEMP 'ga110-to-ga112.patch.gz.b64'
+          [IO.File]::WriteAllText($payload, $b64, [Text.UTF8Encoding]::new($false))
+          $payloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($payloadHash -ne 'a8ebe61f48452394bd57045ad0d9043d59473d4e3f2a04f3dc49a2c2a30ecb03') { throw "Direct v1.1.2 payload hash mismatch: $payloadHash" }
+          $compressed = [Convert]::FromBase64String($b64)
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+          $patch = Join-Path $env:RUNNER_TEMP 'ga110-to-ga112.patch'
+          $output = [IO.File]::Create($patch)
+          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($patchHash -ne 'ebebba392e76d03b1a08086484c82745d9780290224a0f7cd6c873e35e863167') { throw "Direct v1.1.2 patch hash mismatch: $patchHash" }
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
             git init | Out-Null
             git config core.autocrlf false
-            foreach ($spec in @(
-              @{ Path='tools/ga111-authoritative.patch'; Hash='83eb8f335b6597011e629d759877230c7f7ff085305e8cdd4344542599d5621c' },
-              @{ Path='tools/ga111-inputkey-example-fix.patch'; Hash='d48b5a1b002e277d5d5af196c6607214f26e41ad3bdad46038d3beeff639b1b5' }
-            )) {
-              $checkoutPatch = (Resolve-Path (Join-Path $env:GITHUB_WORKSPACE $spec.Path)).Path
-              $patch = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileName($spec.Path) + '.lf')
-              $text = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
-              [IO.File]::WriteAllText($patch, $text, [Text.UTF8Encoding]::new($false))
-              $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($patchHash -ne $spec.Hash) { throw "v1.1.1 patch hash mismatch for $($spec.Path): $patchHash" }
-              git apply --check --unsafe-paths $patch
-              if ($LASTEXITCODE -ne 0) { throw "git apply --check failed for $($spec.Path)" }
-              git apply --unsafe-paths $patch
-              if ($LASTEXITCODE -ne 0) { throw "git apply failed for $($spec.Path)" }
-            }
-          } finally { Pop-Location }
-          $expected = @{
-            'Source\Settings.cs' = '0b066f3ef6f452130a99fc0dabb303650277b404f472abfee44dad74f1072840'
-            'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
-            'Source\GuidedArrowBehavior.cs' = 'eb377f6a95206a788499dc9991fd36d585f81087b2d2ea70280395adf77f05a6'
-            'Source\GuidedArrow.csproj' = 'f3e6956567c5513d7b1b3c3dfa21899793f72375ec8dc6b6bc8751b591dc1296'
-            'SubModule.xml' = 'ee43bae55deaa46e11eb2979a081fd2a04f364a80012a5761cfc8b518522b1c3'
-          }
-          foreach ($rel in $expected.Keys) {
-            $actual = (Get-FileHash (Join-Path $env:GA_SRC $rel) -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $expected[$rel]) { throw "v1.1.1 source mismatch for $rel: $actual" }
-          }
-
-      - name: Apply exact v1.1.2 patch and verify final source
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $payload = (Resolve-Path 'tools/ga112.patch.gz.b64').Path
-          $payloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne 'c4d18cbeefa41a66c0920de028fde2aca7a147e9aa59852eea20910241caad67') { throw "v1.1.2 payload hash mismatch: $payloadHash" }
-          $compressed = [Convert]::FromBase64String((Get-Content $payload -Raw).Trim())
-          $input = [IO.MemoryStream]::new($compressed)
-          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
-          $patch = Join-Path $env:RUNNER_TEMP 'ga112.patch'
-          $output = [IO.File]::Create($patch)
-          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
-          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne '539fc81a8eb8ea48317a73752af090d2e5dd1d84a8eda3a64d7455f15cb4e5ee') { throw "v1.1.2 patch hash mismatch: $patchHash" }
-          $root = Split-Path $env:GA_SRC -Parent
-          Push-Location $root
-          try {
             git apply --check --unsafe-paths $patch
-            if ($LASTEXITCODE -ne 0) { throw 'v1.1.2 git apply --check failed' }
+            if ($LASTEXITCODE -ne 0) { throw 'Direct v1.1.2 git apply --check failed' }
             git apply --unsafe-paths $patch
-            if ($LASTEXITCODE -ne 0) { throw 'v1.1.2 git apply failed' }
+            if ($LASTEXITCODE -ne 0) { throw 'Direct v1.1.2 git apply failed' }
           } finally { Pop-Location }
           $expected = @{
             'Source\GuidedArrow.csproj' = 'c961a27a61a1786a727286a0e2d63f37d44986ba4f35cec04016db838e81d54c'
