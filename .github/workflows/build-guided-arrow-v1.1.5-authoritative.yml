@@ -1,0 +1,40 @@
+name: Build Guided Arrow v1.1.5 Authoritative
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Build exact v1.1.5 source
+        shell: pwsh
+        run: |
+          ./tools/build-ga115-flight-profiles.ps1 -OutputRoot "$env:RUNNER_TEMP\ga115-output"
+
+      - name: Upload complete build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.5-authoritative-diagnostics
+          path: ${{ runner.temp }}\ga115-output\diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload authoritative compiled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.5-authoritative-compiled
+          path: ${{ runner.temp }}\ga115-output\artifact
+          if-no-files-found: error
+          retention-days: 7
