@@ -1,0 +1,14 @@
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -2143,8 +2143,8 @@ namespace GuidedArrow
+                 float rear = Clamp(Settings.Instance?.FirstPersonRearOffset ?? 0.12f, 0.01f, 1.50f);
+                 float height = Clamp(Settings.Instance?.FirstPersonVerticalOffset ?? 0f, -0.50f, 0.50f);
+                 Vec3 cameraPosition = projectilePosition - flightForward * rear + localUp * height;
+-                Vec3 lookTarget = projectilePosition + flightForward * 0.50f;
+-                return BuildTerrainSafeCameraFrame(cameraPosition, lookTarget, flightForward, localUp);
++                Vec3 firstPersonLookTarget = projectilePosition + flightForward * 0.50f;
++                return BuildTerrainSafeCameraFrame(cameraPosition, firstPersonLookTarget, flightForward, localUp);
+             }
+ 
+             float distance = Clamp(Settings.Instance?.CameraDistance ?? 3.4f, 0.5f, 15f);
