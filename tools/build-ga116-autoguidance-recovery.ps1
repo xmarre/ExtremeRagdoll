@@ -128,7 +128,7 @@ try {
             $dll = Join-Path $compiled 'GuidedArrow.dll'
             $pdb = Join-Path $compiled 'GuidedArrow.pdb'
             $assembly = [Reflection.AssemblyName]::GetAssemblyName($dll)
-            if ($assembly.Version.ToString() -ne '1.1.6.0') { throw "Unexpected assembly version for $reference: $($assembly.Version)" }
+            if ($assembly.Version.ToString() -ne '1.1.6.0') { throw "Unexpected assembly version for ${reference}: $($assembly.Version)" }
             $matrixResults.Add("$reference=PASS")
 
             if ($reference -eq '1.3.15.110062') {
