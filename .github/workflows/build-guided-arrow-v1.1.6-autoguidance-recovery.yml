@@ -1,0 +1,41 @@
+name: Build Guided Arrow v1.1.6 Autoguidance Recovery
+
+on:
+  pull_request:
+    branches: [ codex/ga115-flight-profiles ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact source payload
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Build and validate Guided Arrow v1.1.6
+        shell: pwsh
+        run: |
+          ./tools/build-ga116-autoguidance-recovery.ps1 -OutputRoot "$env:RUNNER_TEMP\ga116-output"
+
+      - name: Upload complete diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.6-diagnostics
+          path: ${{ runner.temp }}\ga116-output\diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload compiled clean module
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.6-compiled
+          path: ${{ runner.temp }}\ga116-output\artifact
+          if-no-files-found: error
+          retention-days: 7
