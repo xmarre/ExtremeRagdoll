@@ -1,0 +1,38 @@
+name: Verify Guided Arrow v1.1.2 Payload Chunks
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-chunk:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - file: p00.b64
+            sha256: f3cdbc735de8d7f8eff5872f90fa94ed6eefef1b6ef052a4472246bd6515d405
+          - file: p01.b64
+            sha256: 53b1560db188021f379a7b9d9c69937bb6450db9f6e6a8ec626221361bca9de1
+          - file: p02.b64
+            sha256: 54f48d11d394ccd416b3eafe33e9a70d9e5d899cf0152835818bd4bf4c18faa4
+          - file: p03.b64
+            sha256: 10680529920321318b5c1c705d38e54ce727e3a3e72634b5e24eb19d4e7f06af
+          - file: p04.b64
+            sha256: ea2e2989a0b7cbef80979b757974f988c42686b26efdebe2fff5fe45d2375a86
+          - file: p05.b64
+            sha256: 3c3e7274f891a0038c86c2bb18608c5a41c121f4965e07721bc30865d57f3f45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Verify ${{ matrix.file }}
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "tools/ga112direct/${{ matrix.file }}" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ matrix.sha256 }}') { throw "Expected ${{ matrix.sha256 }}, got $actual" }
