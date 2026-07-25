@@ -32,7 +32,7 @@ jobs:
           Expand-Archive -LiteralPath $zip -DestinationPath $src -Force
           "GA_SRC=$src\GuidedArrow" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Apply minimal exact v1.1.2 source patch and verify final source
+      - name: Assemble and verify minimal v1.1.2 source patch
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -59,14 +59,29 @@ jobs:
           try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
           $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($patchHash -ne '4f668b3502a402ea4cc1baf2c2747dc44f6da5e3906ee2b0df18ac013a68e37d') { throw "Minimal v1.1.2 patch hash mismatch: $patchHash" }
+          "GA_PATCH=$patch" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Validate v1.1.2 patch applicability
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
             git init | Out-Null
             git config core.autocrlf false
-            git apply --check --unsafe-paths $patch
+            git apply --check --unsafe-paths $env:GA_PATCH
             if ($LASTEXITCODE -ne 0) { throw 'Minimal v1.1.2 git apply --check failed' }
-            git apply --unsafe-paths $patch
+          } finally { Pop-Location }
+
+      - name: Apply v1.1.2 patch and verify final source hashes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Split-Path $env:GA_SRC -Parent
+          Push-Location $root
+          try {
+            git apply --unsafe-paths $env:GA_PATCH
             if ($LASTEXITCODE -ne 0) { throw 'Minimal v1.1.2 git apply failed' }
           } finally { Pop-Location }
           $expected = @{
