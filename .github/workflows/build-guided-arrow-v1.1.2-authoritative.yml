@@ -49,22 +49,19 @@ jobs:
           $b64 = ($specs | ForEach-Object { (Get-Content $_.Path -Raw).Trim() }) -join ''
           $payload = Join-Path $env:RUNNER_TEMP 'ga110-to-ga112-source.patch.gz.b64'
           [IO.File]::WriteAllText($payload, $b64, [Text.UTF8Encoding]::new($false))
-          $payloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne 'fbaabec9f0926d012a2b8487315657debb60aeff8fa04ac0ec750de867cfd1d4') { throw "Minimal v1.1.2 payload hash mismatch: $payloadHash" }
+          if ((Get-FileHash $payload -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'fbaabec9f0926d012a2b8487315657debb60aeff8fa04ac0ec750de867cfd1d4') { throw 'Minimal v1.1.2 payload hash mismatch' }
           $compressed = [Convert]::FromBase64String($b64)
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $patch = Join-Path $env:RUNNER_TEMP 'ga110-to-ga112-source.patch'
           $output = [IO.File]::Create($patch)
           try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
-          $patchHash = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($patchHash -ne '4f668b3502a402ea4cc1baf2c2747dc44f6da5e3906ee2b0df18ac013a68e37d') { throw "Minimal v1.1.2 patch hash mismatch: $patchHash" }
+          if ((Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant() -ne '4f668b3502a402ea4cc1baf2c2747dc44f6da5e3906ee2b0df18ac013a68e37d') { throw 'Minimal v1.1.2 patch hash mismatch' }
           "GA_PATCH=$patch" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Validate v1.1.2 patch applicability
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
@@ -74,32 +71,49 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Minimal v1.1.2 git apply --check failed' }
           } finally { Pop-Location }
 
-      - name: Apply v1.1.2 patch and verify final source hashes
+      - name: Apply v1.1.2 source patch
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           $root = Split-Path $env:GA_SRC -Parent
           Push-Location $root
           try {
             git apply --unsafe-paths $env:GA_PATCH
             if ($LASTEXITCODE -ne 0) { throw 'Minimal v1.1.2 git apply failed' }
           } finally { Pop-Location }
-          $expected = @{
-            'Source\GuidedArrow.csproj' = 'c961a27a61a1786a727286a0e2d63f37d44986ba4f35cec04016db838e81d54c'
-            'Source\GuidedArrowBehavior.cs' = 'cc729cb4da04125055a7a57673f58d3bbac0cc187d443a585bc1611092c1ee3f'
-            'Source\Settings.cs' = '211259b007e904608b4339c3a52ac2dcd9d00701f98d2aff6cc60cf5d6992796'
-            'Source\SubModule.cs' = '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae'
-            'SubModule.xml' = '38b0453a3a7f719bad6b1b8b0e4f81d89a47d178475db1e74ae1169598acaa03'
-          }
-          foreach ($rel in $expected.Keys) {
-            $actual = (Get-FileHash (Join-Path $env:GA_SRC $rel) -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $expected[$rel]) { throw "Final source mismatch for $rel: $actual" }
-          }
+
+      - name: Verify GuidedArrow.csproj source hash
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrow.csproj" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'c961a27a61a1786a727286a0e2d63f37d44986ba4f35cec04016db838e81d54c') { throw "GuidedArrow.csproj source mismatch: $actual" }
+
+      - name: Verify GuidedArrowBehavior.cs source hash
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrowBehavior.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'cc729cb4da04125055a7a57673f58d3bbac0cc187d443a585bc1611092c1ee3f') { throw "GuidedArrowBehavior.cs source mismatch: $actual" }
+
+      - name: Verify Settings.cs source hash
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\Source\Settings.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '211259b007e904608b4339c3a52ac2dcd9d00701f98d2aff6cc60cf5d6992796') { throw "Settings.cs source mismatch: $actual" }
+
+      - name: Verify SubModule.cs source hash
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\Source\SubModule.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae') { throw "SubModule.cs source mismatch: $actual" }
+
+      - name: Verify SubModule.xml source hash
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\SubModule.xml" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '38b0453a3a7f719bad6b1b8b0e4f81d89a47d178475db1e74ae1169598acaa03') { throw "SubModule.xml source mismatch: $actual" }
 
       - name: Restore exact Bannerlord 1.3.15 and MCM references
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           Push-Location "$env:GA_SRC\Source"
           try {
             dotnet restore GuidedArrow.csproj --nologo 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt')
@@ -109,7 +123,6 @@ jobs:
       - name: Build production release against Bannerlord 1.3.15
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           Push-Location "$env:GA_SRC\Source"
           try {
             dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt')
@@ -119,7 +132,6 @@ jobs:
       - name: Verify production assembly metadata and stage artifact
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           $out = "$env:GA_SRC\Source\bin\Release\net472"
           $dll = Join-Path $out 'GuidedArrow.dll'
           $pdb = Join-Path $out 'GuidedArrow.pdb'
@@ -143,7 +155,6 @@ jobs:
       - name: Validate exact v1.1.2 source against Bannerlord 1.4.7
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           $project = "$env:GA_SRC\Source\GuidedArrow.csproj"
           $original = Get-Content $project -Raw
           try {
