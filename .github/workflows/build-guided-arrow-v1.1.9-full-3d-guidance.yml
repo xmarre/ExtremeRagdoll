@@ -25,13 +25,11 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $payload = 'tools/build-ga119-full-3d-guidance.ps1.gz.b64'
-          $payloadHash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne '398f4afefb452fab3b016543e488fa07829b057af42e94d8a464aa7317b91b43') { throw "Build payload hash mismatch: $payloadHash" }
           $compressed = [Convert]::FromBase64String(([IO.File]::ReadAllText($payload).Trim()))
           $gzipPath = Join-Path $env:RUNNER_TEMP 'build-ga119.ps1.gz'
           [IO.File]::WriteAllBytes($gzipPath, $compressed)
           $gzipHash = (Get-FileHash -LiteralPath $gzipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($gzipHash -ne 'f3a654bb2771e470f893c9a40388c15a1066a29d3c7aa5a768e524c9ea5ef5ce') { throw "Build gzip hash mismatch: $gzipHash" }
+          if ($gzipHash -ne 'c9c485893a47ccbf02c35be0d0ec629acb43ea711132952bd97db6931c3d86d1') { throw "Build gzip hash mismatch: $gzipHash" }
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $script = Join-Path $env:RUNNER_TEMP 'build-ga119-full-3d-guidance.ps1'
@@ -39,7 +37,7 @@ jobs:
           try { $gzip.CopyTo($output) }
           finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
           $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($scriptHash -ne 'cd8d4399145f646c9dd0b61b0ecafd1d2cd66c7f7a7d3bb8d1c53ffd77916ae2') { throw "Build script hash mismatch: $scriptHash" }
+          if ($scriptHash -ne '4cd94360cb0637157bf22009f971d5576abf305a1dec847c7f0540d65e8181d9') { throw "Build script hash mismatch: $scriptHash" }
           "GA119_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.9
