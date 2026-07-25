@@ -1,0 +1,17 @@
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+index 79d6d06..e39eca3 100644
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -1112,10 +1112,12 @@ namespace GuidedArrow
+ 
+                 int index;
+                 Vec3 velocity;
++                Vec3 position;
+                 try
+                 {
+                     index = candidate.Index;
+                     velocity = candidate.GetVelocity();
++                    position = candidate.GetPosition();
+                 }
+                 catch { continue; }
+ 
