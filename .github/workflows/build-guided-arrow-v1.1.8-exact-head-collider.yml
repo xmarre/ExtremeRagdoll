@@ -26,12 +26,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $payload = 'tools/build-ga118-exact-head-collider.ps1.gz.b64'
           $payloadHash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne '7c0275b651d3b94e119879d27577d10cf0a0af013de3720afe78793b9e1761e8') { throw "Build payload hash mismatch: $payloadHash" }
+          if ($payloadHash -ne 'de7d3b74409902f41252c97b2c9ca1a4374d4342848d646ad308560a7b92e317') { throw "Build payload hash mismatch: $payloadHash" }
           $compressed = [Convert]::FromBase64String(([IO.File]::ReadAllText($payload).Trim()))
           $gzipPath = Join-Path $env:RUNNER_TEMP 'build-ga118.ps1.gz'
           [IO.File]::WriteAllBytes($gzipPath, $compressed)
           $gzipHash = (Get-FileHash -LiteralPath $gzipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($gzipHash -ne 'b292a0ad2e1cec1d8bd154e93d9359ede7c110513600aef5a23694903e891f03') { throw "Build gzip hash mismatch: $gzipHash" }
+          if ($gzipHash -ne 'b07689fc3f2eeea5e7b981ebd9646c3bf5369413c7148814159d8972cb5fe137') { throw "Build gzip hash mismatch: $gzipHash" }
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $script = Join-Path $env:RUNNER_TEMP 'build-ga118-exact-head-collider.ps1'
@@ -39,7 +39,7 @@ jobs:
           try { $gzip.CopyTo($output) }
           finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
           $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($scriptHash -ne 'd6efa668b07930183c083fd64b246ae50222f1569b00e2887e3533995f48f688') { throw "Build script hash mismatch: $scriptHash" }
+          if ($scriptHash -ne '1e82208a811bf8ab8f4c8dfd98c33eb262e9d739d87ad4fe920be9f00b0da216') { throw "Build script hash mismatch: $scriptHash" }
           "GA118_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.8
