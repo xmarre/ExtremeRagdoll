@@ -1,0 +1,245 @@
+name: Build Guided Arrow v1.1.5 Flight Profiles
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Reconstruct verified v1.1.0 baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parts = Get-ChildItem 'tools/ga110/p*.b64' | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 baseline chunks, found $($parts.Count)" }
+          $b64 = ($parts | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() }) -join ''
+          $zip = Join-Path $env:RUNNER_TEMP 'ga110.zip'
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($b64))
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '02d485f72bd1eb2da35f16d2e379a480b29fbd3a5717e2b8bfd1c174fb4fd194') { throw "Baseline hash mismatch: $actual" }
+          $root = Join-Path $env:RUNNER_TEMP 'ga-src'
+          Expand-Archive -LiteralPath $zip -DestinationPath $root -Force
+          "GA_ROOT=$root" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "GA_SRC=$root\GuidedArrow" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Apply exact v1.1.2 source patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $specs = @(
+            @{ Path='tools/ga112source/p00.b64'; Hash='68c6d304935d86a253aa3c09c5d0d09e308bbc3534aaa1dee4b590fd24bd80d6' },
+            @{ Path='tools/ga112source/p01.b64'; Hash='cdf69e9a9d405f3dc84f41d65aa6932821f75697d591c97804965259f4a5e367' },
+            @{ Path='tools/ga112source/p02a.b64'; Hash='cdb7332d17731e63fba24c635fb980803fbe8410c285e2d4f3d4e2b67dbcd636' },
+            @{ Path='tools/ga112source/p02b.b64'; Hash='2296f4d3226231aa3416c02407d9e0ff7a36743391afe5dffd064d77c92a1777' }
+          )
+          foreach ($spec in $specs) {
+            $actual = (Get-FileHash $spec.Path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $spec.Hash) { throw "Chunk mismatch for $($spec.Path): $actual" }
+          }
+          $b64 = ($specs | ForEach-Object { (Get-Content $_.Path -Raw).Trim() }) -join ''
+          $compressed = [Convert]::FromBase64String($b64)
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input,[IO.Compression.CompressionMode]::Decompress)
+          $patch = Join-Path $env:RUNNER_TEMP 'ga112-main.patch'
+          $output = [IO.File]::Create($patch)
+          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '4f668b3502a402ea4cc1baf2c2747dc44f6da5e3906ee2b0df18ac013a68e37d') { throw "Main patch mismatch: $actual" }
+          Push-Location $env:GA_ROOT
+          try {
+            git init | Out-Null
+            git config core.autocrlf false
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.2 patch check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.2 patch apply failed' }
+          } finally { Pop-Location }
+
+      - name: Apply exact v1.1.2 compatibility fixes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixes = @(
+            @{ Path='tools/ga112-compilefix.patch'; Hash='44ec2c59ac832c6b737ae31328d661b3515d0454b3b96bddfc7b8613dd9d639d' },
+            @{ Path='tools/ga112-reviewfix.patch'; Hash='23e680ceecdeff42ecd87b5a772d349ae562d92893e78d38b8758a2f62a90287' }
+          )
+          Push-Location $env:GA_ROOT
+          try {
+            foreach ($fix in $fixes) {
+              $checkout = (Resolve-Path (Join-Path $env:GITHUB_WORKSPACE $fix.Path)).Path
+              $patch = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetFileName($fix.Path) + '.lf')
+              [IO.File]::WriteAllText($patch,[IO.File]::ReadAllText($checkout).Replace("`r`n","`n"),[Text.UTF8Encoding]::new($false))
+              $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $fix.Hash) { throw "Fix hash mismatch for $($fix.Path): $actual" }
+              git apply --check --unsafe-paths $patch
+              if ($LASTEXITCODE -ne 0) { throw "Fix check failed for $($fix.Path)" }
+              git apply --unsafe-paths $patch
+              if ($LASTEXITCODE -ne 0) { throw "Fix apply failed for $($fix.Path)" }
+            }
+          } finally { Pop-Location }
+
+      - name: Apply exact v1.1.3 startup hotfix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $checkout = (Resolve-Path 'tools/ga113-startup-hotfix.patch').Path
+          $patch = Join-Path $env:RUNNER_TEMP 'ga113-startup-hotfix.patch'
+          [IO.File]::WriteAllText($patch,[IO.File]::ReadAllText($checkout).Replace("`r`n","`n"),[Text.UTF8Encoding]::new($false))
+          $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '76199e8e2300aea2a8e88b8bba4e1420c242d6c15a9fb5116acdc5cc4b1ededf') { throw "v1.1.3 patch mismatch: $actual" }
+          Push-Location $env:GA_ROOT
+          try {
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.3 patch check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.3 patch apply failed' }
+          } finally { Pop-Location }
+
+      - name: Apply exact v1.1.4 source patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $checkout = (Resolve-Path 'tools/ga113-to-ga114-source.patch').Path
+          $patch = Join-Path $env:RUNNER_TEMP 'ga113-to-ga114-source.patch'
+          [IO.File]::WriteAllText($patch,[IO.File]::ReadAllText($checkout).Replace("`r`n","`n"),[Text.UTF8Encoding]::new($false))
+          $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '5e7f7f0da0e28ea80796a4e30f65a0353f4e53953aea635e9e58e72e2b17f1ba') { throw "v1.1.4 patch mismatch: $actual" }
+          Push-Location $env:GA_ROOT
+          try {
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.4 patch check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.4 patch apply failed' }
+          } finally { Pop-Location }
+
+      - name: Verify exact v1.1.4 baseline source
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrow.csproj" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '330678c4655995d36a75c41e636d7175a4f0b54dcf7de11f80fc3017b8c304f4') { throw "v1.1.4 project mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrowBehavior.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '2eb112344add51d39c1d2db2b1e7ddf11fad63d728cc8a9b160bd7ac8b46d5fa') { throw "v1.1.4 behavior mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\Source\Settings.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'ee4d4989f23b5fc2c4bbf11cba6db48b4cab6f0d6621fe894825bda002351d62') { throw "v1.1.4 settings mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\Source\SubModule.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae') { throw "v1.1.4 SubModule.cs mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\SubModule.xml" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '38ced9fd1bb40aac34ed076eed78be233db081eb99715b5f48aa3d38c1a3fcc3') { throw "v1.1.4 SubModule.xml mismatch: $actual" }
+
+      - name: Apply exact v1.1.5 flight-profile source patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $b64Path = 'tools/ga115-source.patch.gz.b64'
+          $b64 = (Get-Content $b64Path -Raw).Trim()
+          $payloadHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($b64))).Replace('-','').ToLowerInvariant()
+          if ($payloadHash -ne '9c06fdf651e4c9f342bb9e5cfd0d3d4182a097a9c1a3086a65e9b68f7c2c5ab7') { throw "v1.1.5 payload mismatch: $payloadHash" }
+          $compressed = [Convert]::FromBase64String($b64)
+          $compressedPath = Join-Path $env:RUNNER_TEMP 'ga115-source.patch.gz'
+          [IO.File]::WriteAllBytes($compressedPath,$compressed)
+          $actual = (Get-FileHash $compressedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'ee44825d2bf245e50245b83f3a9338f23471dd5a7bec3e8fc7fa37c20bfb69cf') { throw "v1.1.5 compressed patch mismatch: $actual" }
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input,[IO.Compression.CompressionMode]::Decompress)
+          $patch = Join-Path $env:RUNNER_TEMP 'ga115-source.patch'
+          $output = [IO.File]::Create($patch)
+          try { $gzip.CopyTo($output) } finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'df70bcf4ba0919ec2165d7e31e60974f88ded0ea508478b8f6ab897350e30321') { throw "v1.1.5 patch mismatch: $actual" }
+          Push-Location $env:GA_ROOT
+          try {
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.5 patch check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'v1.1.5 patch apply failed' }
+          } finally { Pop-Location }
+
+      - name: Verify exact v1.1.5 source hashes and MCM schema
+        shell: pwsh
+        run: |
+          $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrow.csproj" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'b90bd0d3b93df6251a9820a6498371a47f99f17a98c0587e801bcbc942abdee1') { throw "Project mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrowBehavior.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '286d128cddbf873afb187922c350f98964af6f8f2aace8397f33537845ac4cf6') { throw "Behavior mismatch: $actual" }
+          $settingsPath = "$env:GA_SRC\Source\Settings.cs"
+          $actual = (Get-FileHash $settingsPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '308079e86f24e845385ed29033c54f8d5b5bebe55f1b77d108cc441d148b36f8') { throw "Settings mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\Source\SubModule.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '31103cc6fc3d192e5164ef3ca0d2128c9026ab32c81cc45d8e9c3ffe73601bae') { throw "SubModule.cs mismatch: $actual" }
+          $actual = (Get-FileHash "$env:GA_SRC\SubModule.xml" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne 'c5fff278e1da74702318f5bdec942e11a1d99fc2216f1f3f25416276d08799e0') { throw "SubModule.xml mismatch: $actual" }
+          $settings = [IO.File]::ReadAllText($settingsPath)
+          if (!$settings.Contains('public string AutoguidanceHotkeyName { get; set; } = "Ctrl+G";')) { throw 'Preserved MCM hotkey property missing' }
+          if ($settings.Contains('public string AutoguidanceHotkeyChord')) { throw 'Regressed replacement hotkey property exists' }
+          if (!$settings.Contains('[SettingPropertyDropdown("Autoguidance Flight Profile", Order = 14')) { throw 'Flight-profile dropdown attribute missing' }
+          if (!$settings.Contains('public Dropdown<string> AutoguidanceFlightProfile')) { throw 'Flight-profile dropdown property missing' }
+          foreach ($name in @('Low Strike','Natural Ballistic','Direct Hunter','Lofted Arc','Banking Flank','Serpentine','Adaptive Mix')) {
+            if (!$settings.Contains('"' + $name + '"')) { throw "Flight-profile option missing: $name" }
+          }
+
+      - name: Restore and build production DLL against Bannerlord 1.3.15
+        shell: pwsh
+        run: |
+          Push-Location "$env:GA_SRC\Source"
+          try {
+            dotnet restore GuidedArrow.csproj --nologo 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw '1.3.15 restore failed' }
+            dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true 2>&1 | Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt')
+            if ($LASTEXITCODE -ne 0) { throw '1.3.15 build failed' }
+          } finally { Pop-Location }
+
+      - name: Stage production artifact
+        shell: pwsh
+        run: |
+          $out = "$env:GA_SRC\Source\bin\Release\net472"
+          $dll = Join-Path $out 'GuidedArrow.dll'
+          $pdb = Join-Path $out 'GuidedArrow.pdb'
+          $asm = [Reflection.AssemblyName]::GetAssemblyName($dll)
+          if ($asm.Version.ToString() -ne '1.1.5.0') { throw "Unexpected assembly version: $($asm.Version)" }
+          $vi = (Get-Item $dll).VersionInfo
+          @(
+            "AssemblyVersion=$($asm.Version)",
+            "FileVersion=$($vi.FileVersion)",
+            "ProductVersion=$($vi.ProductVersion)",
+            "DLL_SHA256=$((Get-FileHash $dll -Algorithm SHA256).Hash.ToLowerInvariant())",
+            "PDB_SHA256=$((Get-FileHash $pdb -Algorithm SHA256).Hash.ToLowerInvariant())"
+          ) | Set-Content (Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Encoding utf8
+          $stage = Join-Path $env:RUNNER_TEMP 'artifact'
+          New-Item -ItemType Directory $stage -Force | Out-Null
+          Copy-Item $dll,$pdb -Destination $stage
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'COMPILER_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'RESTORE_LOG.txt'),(Join-Path $env:RUNNER_TEMP 'BUILD_METADATA.txt') -Destination $stage
+
+      - name: Validate exact final source against Bannerlord 1.4.7
+        shell: pwsh
+        run: |
+          $project = "$env:GA_SRC\Source\GuidedArrow.csproj"
+          $original = Get-Content $project -Raw
+          try {
+            Set-Content $project -Value $original.Replace('1.3.15.110062','1.4.7.117484') -Encoding utf8
+            Push-Location "$env:GA_SRC\Source"
+            try {
+              dotnet restore GuidedArrow.csproj --nologo
+              if ($LASTEXITCODE -ne 0) { throw '1.4.7 restore failed' }
+              dotnet build GuidedArrow.csproj -c Release --no-restore --nologo /p:ContinuousIntegrationBuild=true /p:Deterministic=true
+              if ($LASTEXITCODE -ne 0) { throw '1.4.7 build failed' }
+            } finally { Pop-Location }
+          } finally { [IO.File]::WriteAllText($project,$original,[Text.UTF8Encoding]::new($false)) }
+
+      - name: Upload v1.1.5 compiled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.5-flight-profiles-compiled
+          path: ${{ runner.temp }}\artifact
+          if-no-files-found: error
+          retention-days: 7
