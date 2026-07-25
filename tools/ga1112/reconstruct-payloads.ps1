@@ -30,6 +30,6 @@ $test=@(
  @{Path=(Join-Path $root 'testchunks/p00.b64');Hash='74e45f9e5204333e89b6e0f740c88086087cf61ab9a524e46d3b432e9326b51c'},
  @{Path=(Join-Path $root 'testchunks/p01.b64');Hash='b695832b751b80fcb9afdfcbcad9be4bdf5f4ac196041afb43ee92eedb8c90d2'}
 )
-Join-Chunks $patch (Join-Path $root 'patch.gz.b64') 'b188351f0f7b3252e337d713bd0c81b2028cfd4949a31fd1cad0b1d6e190f5f9'
-Join-Chunks $test (Join-Path $root 'test.gz.b64') '4d0fe5595920ca6f64ab9ac6a535f611a030cff471f9985b462b5fa438923239'
+Join-Chunks $patch (Join-Path $root 'patch.gz.b64') '4bf81e883be40cb469c3355bf6263b23729575ace2aa525a972e4044c52ef731'
+Join-Chunks $test (Join-Path $root 'test.gz.b64') 'f733721061dec1a0c0e3f59eb0f9b8a987ee97c9a8efeb6dc4d7da329a9a9cf8'
 Write-Host 'GA1112_PAYLOAD_RECONSTRUCTION=SUCCESS'
