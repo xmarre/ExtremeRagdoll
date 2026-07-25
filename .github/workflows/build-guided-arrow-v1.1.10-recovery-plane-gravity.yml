@@ -51,20 +51,11 @@ jobs:
           if ($scriptHash -ne '252465ab734b1da63b825d39cd824699d4dc373635ed082c613ab4a142024c2e') { throw "v1.1.9 build script hash mismatch: $scriptHash" }
           "GA119_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Decode v1.1.10 incremental build script
+      - name: Select v1.1.10 incremental build script
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $payloadPath = 'tools/ga1110/build-ga1110-incremental.ps1.gz.b64'
-          $raw = [IO.File]::ReadAllText($payloadPath)
-          $clean = [Text.RegularExpressions.Regex]::Replace($raw, '\s+', '')
-          $compressed = [Convert]::FromBase64String($clean)
-          $input = [IO.MemoryStream]::new($compressed)
-          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
-          $script = Join-Path $env:RUNNER_TEMP 'build-ga1110-incremental.ps1'
-          $output = [IO.File]::Create($script)
-          try { $gzip.CopyTo($output) }
-          finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $script = (Resolve-Path 'tools/ga1110/build-ga1110-incremental.ps1').Path
           "GA1110_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.10
