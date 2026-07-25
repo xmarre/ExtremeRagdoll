@@ -1,0 +1,11 @@
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -2363,7 +2363,7 @@
+                 return fallback;
+             try
+             {
+-                Vec3 position = agent.GetVisualPosition();
++                Vec3 position = GetVisualPosition(agent);
+                 return IsFinite(position) ? position : fallback;
+             }
+             catch { return fallback; }
