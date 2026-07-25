@@ -1,0 +1,88 @@
+name: Build Guided Arrow v1.1.9 Full 3D Guidance
+
+on:
+  pull_request:
+    branches: [ codex/ga118-exact-head-collider ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      failure_message: ${{ steps.build.outputs.failure_message }}
+    steps:
+      - name: Checkout exact payload
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Decode authoritative build script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payload = 'tools/build-ga119-full-3d-guidance.ps1.gz.b64'
+          $payloadHash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($payloadHash -ne '27cd1c8ee57e3519ebdbe57c21ed2e31398d3b9785fd1ec8e0181afcbad546ae') { throw "Build payload hash mismatch: $payloadHash" }
+          $compressed = [Convert]::FromBase64String(([IO.File]::ReadAllText($payload).Trim()))
+          $gzipPath = Join-Path $env:RUNNER_TEMP 'build-ga119.ps1.gz'
+          [IO.File]::WriteAllBytes($gzipPath, $compressed)
+          $gzipHash = (Get-FileHash -LiteralPath $gzipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($gzipHash -ne '6ad7a2b370763f317338f01d7c50c474d512f133871e4dcbfbdfefe446d6eac9') { throw "Build gzip hash mismatch: $gzipHash" }
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+          $script = Join-Path $env:RUNNER_TEMP 'build-ga119-full-3d-guidance.ps1'
+          $output = [IO.File]::Create($script)
+          try { $gzip.CopyTo($output) }
+          finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($scriptHash -ne 'e2fa888db1fe01129b9e595f7b12c511fc85c625f77802be9ecf20502aedc19a') { throw "Build script hash mismatch: $scriptHash" }
+          "GA119_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build and validate Guided Arrow v1.1.9
+        id: build
+        shell: pwsh
+        run: |
+          try {
+            & $env:GA119_BUILD_SCRIPT -OutputRoot "$env:RUNNER_TEMP\ga119-output"
+          }
+          catch {
+            $message = $_.Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
+            "failure_message=$message" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            throw
+          }
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.9-diagnostics
+          path: ${{ runner.temp }}\ga119-output\diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload compiled module
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.9-compiled
+          path: ${{ runner.temp }}\ga119-output\artifact
+          if-no-files-found: error
+          retention-days: 7
+
+  concise-result:
+    needs: build-and-validate
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Report result
+        shell: pwsh
+        env:
+          RESULT: ${{ needs.build-and-validate.result }}
+          FAILURE_MESSAGE: ${{ needs.build-and-validate.outputs.failure_message }}
+        run: |
+          Write-Host "BUILD_RESULT=$env:RESULT"
+          Write-Host "FAILURE_MESSAGE=$env:FAILURE_MESSAGE"
+          if ($env:RESULT -ne 'success') { exit 1 }
