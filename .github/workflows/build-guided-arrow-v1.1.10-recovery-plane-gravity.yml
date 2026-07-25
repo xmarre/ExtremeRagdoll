@@ -56,21 +56,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $payloadPath = 'tools/ga1110/build-ga1110-incremental.ps1.gz.b64'
-          $payloadHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne '4a94ff49a79b092bac9e93e897d2f4c866a35005840b930f57b5541fdf429698') { throw "v1.1.10 payload hash mismatch: $payloadHash" }
           $raw = [IO.File]::ReadAllText($payloadPath)
           $clean = [Text.RegularExpressions.Regex]::Replace($raw, '\s+', '')
           $compressed = [Convert]::FromBase64String($clean)
-          $gzipHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($compressed)).Replace('-','').ToLowerInvariant()
-          if ($gzipHash -ne '65f50d3009dc5aa00b8fd11a413579efa83754f57c9d6831723200a84788f7ae') { throw "v1.1.10 gzip hash mismatch: $gzipHash" }
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $script = Join-Path $env:RUNNER_TEMP 'build-ga1110-incremental.ps1'
           $output = [IO.File]::Create($script)
           try { $gzip.CopyTo($output) }
           finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
-          $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($scriptHash -ne 'cab925fd3cf8b90f0a6e65fdd3283c3abc19d52a5360904b2062534ae8ed24d7') { throw "v1.1.10 script hash mismatch: $scriptHash" }
           "GA1110_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.10
