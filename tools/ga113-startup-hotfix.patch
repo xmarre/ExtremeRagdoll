@@ -1,0 +1,67 @@
+diff --git a/GuidedArrow/Source/GuidedArrow.csproj b/GuidedArrow/Source/GuidedArrow.csproj
+index 4b51d2d..f96e041 100644
+--- a/GuidedArrow/Source/GuidedArrow.csproj
++++ b/GuidedArrow/Source/GuidedArrow.csproj
+@@ -6,9 +6,9 @@
+     <AssemblyName>GuidedArrow</AssemblyName>
+     <RootNamespace>GuidedArrow</RootNamespace>
+     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+-    <Version>1.1.2</Version>
+-    <FileVersion>1.1.2.0</FileVersion>
+-    <AssemblyVersion>1.1.2.0</AssemblyVersion>
++    <Version>1.1.3</Version>
++    <FileVersion>1.1.3.0</FileVersion>
++    <AssemblyVersion>1.1.3.0</AssemblyVersion>
+     <Deterministic>true</Deterministic>
+     <DebugType>pdbonly</DebugType>
+     <Optimize>true</Optimize>
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+index 3f6e3bb..49bb316 100644
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -1715,7 +1715,7 @@ namespace GuidedArrow
+             }
+ 
+             AutoguidanceHotkeyChord chord = ResolveAutoguidanceHotkeyChord(
+-                Settings.Instance?.AutoguidanceHotkeyChord,
++                Settings.Instance?.AutoguidanceHotkeyName,
+                 Settings.Instance?.AutoguidanceHotkey ?? 0);
+             if (chord == null || !chord.IsValid)
+                 return;
+diff --git a/GuidedArrow/Source/Settings.cs b/GuidedArrow/Source/Settings.cs
+index 956a55b..20d4f28 100644
+--- a/GuidedArrow/Source/Settings.cs
++++ b/GuidedArrow/Source/Settings.cs
+@@ -56,14 +56,15 @@ namespace GuidedArrow
+             HintText = "Allows the current live guided shot to switch between manual steering and physically constrained predictive autoguidance. Autoguidance never activates by itself unless the hotkey is used.")]
+         public bool EnableAutonomousGuidance { get; set; } = true;
+ 
++        // Preserve the exact v1.1.1 MCM property name and attributed schema. Replacing an existing
++        // attributed property with a different public property can invalidate MCM's cached settings
++        // model during module discovery, before Bannerlord reaches the splash screen. The value now
++        // accepts either one key or a multi-key chord; only the interpretation changed.
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+         [SettingPropertyText("Autoguidance Hotkey / Chord", Order = 1, RequireRestart = false,
+             HintText = "Enter one key or a multi-key chord separated by +. Examples: Ctrl+G, Ctrl+Shift+G, F8, MiddleMouseButton, X1MouseButton or Q+E. Ctrl, Shift and Alt accept either left or right modifier. The chord is read live and does not require a restart.")]
+-        public string AutoguidanceHotkeyChord { get; set; } = "Ctrl+G";
++        public string AutoguidanceHotkeyName { get; set; } = "Ctrl+G";
+ 
+-        // Retained only for backward-compatible deserialization of v1.1.0-v1.1.1 MCM JSON. The new
+-        // chord property deliberately starts at Ctrl+G so the old F8 default does not survive update.
+-        public string AutoguidanceHotkeyName { get; set; } = "";
+         public int AutoguidanceHotkey { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+diff --git a/GuidedArrow/SubModule.xml b/GuidedArrow/SubModule.xml
+index 46b92ae..dca23f5 100644
+--- a/GuidedArrow/SubModule.xml
++++ b/GuidedArrow/SubModule.xml
+@@ -2,7 +2,7 @@
+ <Module>
+   <Name value="Guided Arrow" />
+   <Id value="GuidedArrow" />
+-  <Version value="v1.1.2" />
++  <Version value="v1.1.3" />
+   <DefaultModule value="false" />
+   <SingleplayerModule value="true" />
+   <MultiplayerModule value="false" />
