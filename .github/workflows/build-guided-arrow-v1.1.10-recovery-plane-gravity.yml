@@ -57,12 +57,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $payloadPath = 'tools/ga1110/build-ga1110-incremental.ps1.gz.b64'
           $payloadHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne 'c51a80c50b0b265a4df8d690ecf7fe84be40c1c4686b64683664b3233c2e30df') { throw "v1.1.10 payload hash mismatch: $payloadHash" }
+          if ($payloadHash -ne '296c500eb78824f2d851d921f2c5630d2df98d4f0dd6cfef579f3154037eb528') { throw "v1.1.10 payload hash mismatch: $payloadHash" }
           $raw = [IO.File]::ReadAllText($payloadPath)
           $clean = [Text.RegularExpressions.Regex]::Replace($raw, '\s+', '')
           $compressed = [Convert]::FromBase64String($clean)
           $gzipHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($compressed)).Replace('-','').ToLowerInvariant()
-          if ($gzipHash -ne '2bbd0b605e1acd5c9550a623eee4153304e4b2dba0ff4dfe874c26d92adc85df') { throw "v1.1.10 gzip hash mismatch: $gzipHash" }
+          if ($gzipHash -ne 'af6f773d400be477bffe59fa0aa172e622db88cfac714ddc01985709881fea57') { throw "v1.1.10 gzip hash mismatch: $gzipHash" }
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $script = Join-Path $env:RUNNER_TEMP 'build-ga1110-incremental.ps1'
@@ -70,7 +70,7 @@ jobs:
           try { $gzip.CopyTo($output) }
           finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
           $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($scriptHash -ne '7a1818ca230f89c23f8628cd117a3cb167c316f3eb28dd5a54f1bb8c68c29cf1') { throw "v1.1.10 script hash mismatch: $scriptHash" }
+          if ($scriptHash -ne '2e300bb7dd1e6176962d59e2601e71e74b42bf0bc56fd3ec886b38feef815ef9') { throw "v1.1.10 script hash mismatch: $scriptHash" }
           "GA1110_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.10
