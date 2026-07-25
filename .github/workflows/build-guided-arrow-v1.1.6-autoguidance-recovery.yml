@@ -12,6 +12,8 @@ jobs:
   build-and-validate:
     runs-on: windows-latest
     timeout-minutes: 60
+    outputs:
+      failure_message: ${{ steps.build.outputs.failure_message }}
     steps:
       - name: Checkout exact source payload
         uses: actions/checkout@v4
@@ -19,9 +21,17 @@ jobs:
           show-progress: false
 
       - name: Build and validate Guided Arrow v1.1.6
+        id: build
         shell: pwsh
         run: |
-          ./tools/build-ga116-autoguidance-recovery.ps1 -OutputRoot "$env:RUNNER_TEMP\ga116-output"
+          try {
+            ./tools/build-ga116-autoguidance-recovery.ps1 -OutputRoot "$env:RUNNER_TEMP\ga116-output"
+          }
+          catch {
+            $message = $_.Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
+            "failure_message=$message" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            throw
+          }
 
       - name: Upload complete diagnostics
         if: always()
@@ -39,3 +49,18 @@ jobs:
           path: ${{ runner.temp }}\ga116-output\artifact
           if-no-files-found: error
           retention-days: 7
+
+  concise-result:
+    needs: build-and-validate
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Report build result
+        shell: pwsh
+        env:
+          RESULT: ${{ needs.build-and-validate.result }}
+          FAILURE_MESSAGE: ${{ needs.build-and-validate.outputs.failure_message }}
+        run: |
+          Write-Host "BUILD_RESULT=$env:RESULT"
+          Write-Host "FAILURE_MESSAGE=$env:FAILURE_MESSAGE"
+          if ($env:RESULT -ne 'success') { exit 1 }
