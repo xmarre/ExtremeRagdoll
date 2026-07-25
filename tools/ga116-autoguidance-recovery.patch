@@ -1,0 +1,324 @@
+diff --git a/GuidedArrow/Source/GuidedArrow.csproj b/GuidedArrow/Source/GuidedArrow.csproj
+index 6aaca32..fd84872 100644
+--- a/GuidedArrow/Source/GuidedArrow.csproj
++++ b/GuidedArrow/Source/GuidedArrow.csproj
+@@ -6,9 +6,9 @@
+     <AssemblyName>GuidedArrow</AssemblyName>
+     <RootNamespace>GuidedArrow</RootNamespace>
+     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+-    <Version>1.1.5</Version>
+-    <FileVersion>1.1.5.0</FileVersion>
+-    <AssemblyVersion>1.1.5.0</AssemblyVersion>
++    <Version>1.1.6</Version>
++    <FileVersion>1.1.6.0</FileVersion>
++    <AssemblyVersion>1.1.6.0</AssemblyVersion>
+     <Deterministic>true</Deterministic>
+     <DebugType>pdbonly</DebugType>
+     <Optimize>true</Optimize>
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+index e39eca3..b070811 100644
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -111,6 +111,13 @@ namespace GuidedArrow
+             public int GuidanceConfiguredProfileIndex = -1;
+             public int GuidanceResolvedProfileIndex;
+             public bool GuidanceResolvedProfileValid;
++            // When the target/waypoint falls inside the missile's current curvature envelope,
++            // suspend pursuit and coast until enough separation exists for a clean re-entry.
++            // Recovery is latched to prevent frame-to-frame engage/disengage oscillation.
++            public bool GuidanceRecoveryActive;
++            // Once a recovery manoeuvre was required, decorative profile staging is disabled for
++            // this target. The missile completes the recovered approach as a direct head intercept.
++            public bool GuidanceForceDirectIntercept;
+             public float EstimatedGravityZ = -9.81f;
+             public Vec3 LastCommandedVelocity;
+             public bool LastCommandedVelocityValid;
+@@ -186,6 +193,8 @@ namespace GuidedArrow
+         private const float AutoguidanceReacquireInterval = 0.15f;
+         private const float AutoguidanceTerrainSampleInterval = 0.08f;
+         private const float AutoguidanceMinimumPostImpactTravel = 8f;
++        private const float AutoguidanceMinimumReachabilityReserve = 0.75f;
++        private const float AutoguidanceRecoveryReserve = 2f;
+         private const float DefaultGravityZ = -9.81f;
+         private const float Tiny = 1e-6f;
+ 
+@@ -2023,6 +2032,8 @@ namespace GuidedArrow
+             tracked.GuidanceTerrainSampleCountdown = 0f;
+             tracked.GuidanceCruiseGroundZ = 0f;
+             tracked.GuidanceCruiseGroundValid = false;
++            tracked.GuidanceRecoveryActive = false;
++            tracked.GuidanceForceDirectIntercept = false;
+         }
+ 
+         private void ShowAutoguidanceMessage(string message)
+@@ -2292,8 +2303,7 @@ namespace GuidedArrow
+             float bestSafeReachableScore = float.PositiveInfinity;
+             int bestUnsafeReachableIndex = -1;
+             float bestUnsafeReachableScore = float.PositiveInfinity;
+-            int bestFallbackIndex = -1;
+-            float bestFallbackScore = float.PositiveInfinity;
++            float reachabilityReserve = GetAutoguidanceReachabilityReserve(effectiveTurnRadius, speed, 0f);
+ 
+             for (int i = 0; i < _autoguidanceRankCandidates.Count; i++)
+             {
+@@ -2316,9 +2326,12 @@ namespace GuidedArrow
+                 float referenceDot = Clamp(Dot(referenceDirection, targetDirection), -1f, 1f);
+                 float referenceAngle = (float)Math.Acos(referenceDot);
+ 
+-                float requiredDistance = EstimateMinimumReachableDistance(effectiveTurnRadius, forwardAngle);
+-                float reachabilityShortfall = Math.Max(0f, requiredDistance - distance);
+-                bool reachable = reachabilityShortfall <= 0.001f;
++                bool reachable = IsAutoguidanceWaypointReachable(
++                    position,
++                    forward,
++                    targetHead,
++                    effectiveTurnRadius,
++                    reachabilityReserve);
+ 
+                 EvaluateAutoguidanceApproachGeometry(
+                     tracked,
+@@ -2367,28 +2380,17 @@ namespace GuidedArrow
+                         bestUnsafeReachableIndex = i;
+                     }
+                 }
+-                else
+-                {
+-                    // Only used when no currently reachable target exists. Prefer the smallest
+-                    // curvature shortfall, while still avoiding a severe downward exit when another
+-                    // recovery candidate offers materially safer geometry.
+-                    float unsafePenalty = postImpactSafe ? 0f : effectiveTurnRadius * 2f;
+-                    float fallbackScore = reachabilityShortfall * 12f + forwardAngle * effectiveTurnRadius + distance * 0.02f + unsafePenalty;
+-                    if (selection == 1)
+-                        fallbackScore += referenceAngle * 4f;
+-                    if (fallbackScore < bestFallbackScore)
+-                    {
+-                        bestFallbackScore = fallbackScore;
+-                        bestFallbackIndex = i;
+-                    }
+-                }
++                // Unreachable candidates are deliberately not assigned. Steering toward a live
++                // target inside the current curvature envelope creates a stable pure-pursuit orbit.
++                // The missile instead keeps its current flight path and the throttled acquisition
++                // pass may lock the target once the geometry becomes feasible.
+             }
+ 
+             if (bestSafeReachableIndex >= 0)
+                 return bestSafeReachableIndex;
+             if (bestUnsafeReachableIndex >= 0)
+                 return bestUnsafeReachableIndex;
+-            return bestFallbackIndex;
++            return -1;
+         }
+ 
+         private void EvaluateAutoguidanceApproachGeometry(
+@@ -2666,15 +2668,85 @@ namespace GuidedArrow
+             Vec3 currentDirection,
+             Vec3 waypoint,
+             float effectiveTurnRadius)
++        {
++            // Existing profile-shaping checks intentionally retain their original zero-reserve
++            // semantics. Safety hysteresis is applied only at target acquisition and at the live
++            // interception boundary where engage/disengage oscillation can create an orbit.
++            return IsAutoguidanceWaypointReachable(
++                projectilePosition,
++                currentDirection,
++                waypoint,
++                effectiveTurnRadius,
++                0f);
++        }
++
++        private static bool IsAutoguidanceWaypointReachable(
++            Vec3 projectilePosition,
++            Vec3 currentDirection,
++            Vec3 waypoint,
++            float effectiveTurnRadius,
++            float reserve)
+         {
+             Vec3 toWaypoint = waypoint - projectilePosition;
+             float distance = toWaypoint.Length;
+-            if (!IsFinite(toWaypoint) || !IsFinite(distance) || distance <= 0.1f)
++            if (!IsFinite(toWaypoint) || !IsFinite(distance))
+                 return false;
++            if (distance <= 0.35f)
++                return true;
+ 
+             Vec3 waypointDirection = toWaypoint / distance;
+             float angle = (float)Math.Acos(Clamp(Dot(currentDirection, waypointDirection), -1f, 1f));
+-            return distance + 0.001f >= EstimateMinimumReachableDistance(effectiveTurnRadius, angle);
++            float requiredDistance = EstimateMinimumReachableDistance(effectiveTurnRadius, angle);
++            // Reserve only the part of the envelope that is actually consumed by turning. A target
++            // already on the current flight line remains reachable at close range; applying a fixed
++            // distance reserve there would make the controller stop steering immediately before impact.
++            float turnDemand = (float)Math.Sin(Math.Min(angle, (float)Math.PI * 0.5f));
++            float demandedReserve = Math.Max(0f, reserve) * Clamp(turnDemand, 0f, 1f);
++            return distance + 0.001f >= requiredDistance + demandedReserve;
++        }
++
++        private static float GetAutoguidanceReachabilityReserve(
++            float effectiveTurnRadius,
++            float speed,
++            float dt)
++        {
++            float radiusReserve = Math.Max(
++                AutoguidanceMinimumReachabilityReserve,
++                Math.Max(0.1f, effectiveTurnRadius) * 0.08f);
++            float frameTravelReserve = IsFinite(speed) && IsFinite(dt) && speed > 0f && dt > 0f
++                ? speed * dt * 1.5f
++                : 0f;
++            return radiusReserve + frameTravelReserve;
++        }
++
++        private static float GetAutoguidanceRecoveryReengageReserve(
++            float effectiveTurnRadius,
++            float speed,
++            float dt)
++        {
++            float ordinaryReserve = GetAutoguidanceReachabilityReserve(effectiveTurnRadius, speed, dt);
++            float recoveryReserve = Math.Max(
++                AutoguidanceRecoveryReserve,
++                Math.Max(0.1f, effectiveTurnRadius) * 0.35f);
++            return Math.Max(ordinaryReserve, recoveryReserve);
++        }
++
++        private static bool ShouldForceDirectTerminalIntercept(
++            Vec3 projectilePosition,
++            Vec3 currentDirection,
++            Vec3 predictedHead,
++            float effectiveTurnRadius)
++        {
++            Vec3 toHead = predictedHead - projectilePosition;
++            float distance = toHead.Length;
++            if (!IsFinite(toHead) || !IsFinite(distance) || distance <= 0.35f)
++                return true;
++
++            Vec3 headDirection = toHead / distance;
++            float angle = (float)Math.Acos(Clamp(Dot(currentDirection, headDirection), -1f, 1f));
++            float requiredDistance = EstimateMinimumReachableDistance(effectiveTurnRadius, angle);
++            float terminalReserve = Math.Max(6f, effectiveTurnRadius * 0.45f);
++            return distance <= requiredDistance + terminalReserve;
+         }
+ 
+         private static float GetLoftedArcDescentAngle(Vec3 targetHead, Vec3 targetBase)
+@@ -2763,6 +2835,8 @@ namespace GuidedArrow
+             tracked.GuidanceTerrainSampleCountdown = 0f;
+             tracked.GuidanceCruiseGroundZ = 0f;
+             tracked.GuidanceCruiseGroundValid = false;
++            tracked.GuidanceRecoveryActive = false;
++            tracked.GuidanceForceDirectIntercept = false;
+             if (TryGetGuidanceHeadPosition(target, tracked.GuidanceHeadBoneIndex, out Vec3 head))
+             {
+                 tracked.GuidanceSmoothedHead = head;
+@@ -2896,18 +2970,85 @@ namespace GuidedArrow
+             }
+ 
+             Vec3 currentDirection = NormalizeSafe(projectileVelocity, predictedHead - projectilePosition);
++            float configuredRadius = Clamp(Settings.Instance?.MinimumTurnRadius ?? 24f, 3f, 120f);
++            float steeringMultiplier = GetAdaptiveSteeringMultiplier(speed);
++            float effectiveTurnRadius = configuredRadius / Math.Max(1f, steeringMultiplier);
++
++            if (tracked.GuidanceRecoveryActive)
++            {
++                float recoveryReserve = GetAutoguidanceRecoveryReengageReserve(
++                    effectiveTurnRadius,
++                    speed,
++                    safeDt);
++                if (!IsAutoguidanceWaypointReachable(
++                    projectilePosition,
++                    currentDirection,
++                    predictedHead,
++                    effectiveTurnRadius,
++                    recoveryReserve))
++                {
++                    // Keep the exact native missile untouched and coast on its current velocity.
++                    // This grows the available turn envelope without adding lift, speed or steering.
++                    return false;
++                }
++
++                tracked.GuidanceRecoveryActive = false;
++                tracked.GuidanceForceDirectIntercept = true;
++            }
++
+             Vec3 targetBase = GetAgentVisualPositionSafe(tracked.GuidanceTarget, predictedPhysicalHead - WorldUp * 0.95f);
+             targetBase.x += targetVelocity.x * interceptTime;
+             targetBase.y += targetVelocity.y * interceptTime;
+-            Vec3 aimPoint = ComputeAutoguidanceAimPoint(
+-                tracked,
+-                projectilePosition,
+-                currentDirection,
++            bool forceDirect = tracked.GuidanceForceDirectIntercept ||
++                ShouldForceDirectTerminalIntercept(
++                    projectilePosition,
++                    currentDirection,
++                    predictedHead,
++                    effectiveTurnRadius);
++            Vec3 aimPoint = forceDirect
++                ? predictedHead
++                : ComputeAutoguidanceAimPoint(
++                    tracked,
++                    projectilePosition,
++                    currentDirection,
++                    speed,
++                    predictedHead,
++                    predictedPhysicalHead,
++                    targetBase,
++                    safeDt);
++
++            float reachabilityReserve = GetAutoguidanceReachabilityReserve(
++                effectiveTurnRadius,
+                 speed,
+-                predictedHead,
+-                predictedPhysicalHead,
+-                targetBase,
+                 safeDt);
++            if (!IsAutoguidanceWaypointReachable(
++                projectilePosition,
++                currentDirection,
++                aimPoint,
++                effectiveTurnRadius,
++                reachabilityReserve))
++            {
++                // A decorative profile waypoint may become infeasible while the real head intercept
++                // remains reachable. Drop the staging path immediately instead of throwing away a
++                // valid attack window. Only coast when the physical intercept itself is unreachable.
++                if (!forceDirect && IsAutoguidanceWaypointReachable(
++                    projectilePosition,
++                    currentDirection,
++                    predictedHead,
++                    effectiveTurnRadius,
++                    reachabilityReserve))
++                {
++                    tracked.GuidanceForceDirectIntercept = true;
++                    aimPoint = predictedHead;
++                }
++                else
++                {
++                    tracked.GuidanceRecoveryActive = true;
++                    tracked.GuidanceForceDirectIntercept = true;
++                    return false;
++                }
++            }
++
+             Vec3 desiredDirection = NormalizeSafe(aimPoint - projectilePosition, predictedHead - projectilePosition);
+             ComputeSteeringAngularError(currentDirection, desiredDirection, out float desiredYaw, out float desiredPitch);
+ 
+@@ -2915,7 +3056,6 @@ namespace GuidedArrow
+             // before enforcing the physical turn-radius cap. Divide the controller's actual angular
+             // error by that multiplier so autonomous and manual modes reach the identical limiter with
+             // no hidden steering authority.
+-            float steeringMultiplier = GetAdaptiveSteeringMultiplier(speed);
+             yaw = desiredYaw / Math.Max(1f, steeringMultiplier);
+             pitch = desiredPitch / Math.Max(1f, steeringMultiplier);
+             return IsFinite(yaw) && IsFinite(pitch);
+diff --git a/GuidedArrow/SubModule.xml b/GuidedArrow/SubModule.xml
+index 2d909c2..dbb5b84 100644
+--- a/GuidedArrow/SubModule.xml
++++ b/GuidedArrow/SubModule.xml
+@@ -2,7 +2,7 @@
+ <Module>
+   <Name value="Guided Arrow" />
+   <Id value="GuidedArrow" />
+-  <Version value="v1.1.5" />
++  <Version value="v1.1.6" />
+   <DefaultModule value="false" />
+   <SingleplayerModule value="true" />
+   <MultiplayerModule value="false" />
