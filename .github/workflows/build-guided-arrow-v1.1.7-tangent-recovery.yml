@@ -1,0 +1,88 @@
+name: Build Guided Arrow v1.1.7 Tangent Recovery
+
+on:
+  pull_request:
+    branches: [ codex/ga116-autoguidance-recovery-v2 ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    outputs:
+      failure_message: ${{ steps.build.outputs.failure_message }}
+    steps:
+      - name: Checkout exact payload
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Decode authoritative build script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $payload = 'tools/build-ga117-tangent-recovery.ps1.gz.b64'
+          $payloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($payloadHash -ne 'c1a008b119a044180e79dc5b2932c04b391c2c207d562640d15d3ef523280a60') { throw "Build payload mismatch: $payloadHash" }
+          $compressed = [Convert]::FromBase64String(([IO.File]::ReadAllText($payload).Trim()))
+          $compressedPath = Join-Path $env:RUNNER_TEMP 'build-ga117.ps1.gz'
+          [IO.File]::WriteAllBytes($compressedPath, $compressed)
+          $gzipHash = (Get-FileHash $compressedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($gzipHash -ne 'b17db7ef54993b829e6b95b9bf8a6646010e3859739bcdd6a5317e35d0f12986') { throw "Build gzip mismatch: $gzipHash" }
+          $input = [IO.MemoryStream]::new($compressed)
+          $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
+          $script = Join-Path $env:RUNNER_TEMP 'build-ga117-tangent-recovery.ps1'
+          $output = [IO.File]::Create($script)
+          try { $gzip.CopyTo($output) }
+          finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
+          $scriptHash = (Get-FileHash $script -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($scriptHash -ne '0cfb8e3cbbcb01bfd5c96500600b63a28ad791724447e83099d4a57ee982ec08') { throw "Build script mismatch: $scriptHash" }
+          "GA117_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build and validate Guided Arrow v1.1.7
+        id: build
+        shell: pwsh
+        run: |
+          try {
+            & $env:GA117_BUILD_SCRIPT -OutputRoot "$env:RUNNER_TEMP\ga117-output"
+          }
+          catch {
+            $message = $_.Exception.Message.Replace("`r", ' ').Replace("`n", ' ')
+            "failure_message=$message" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            throw
+          }
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.7-diagnostics
+          path: ${{ runner.temp }}\ga117-output\diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload compiled module
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.7-compiled
+          path: ${{ runner.temp }}\ga117-output\artifact
+          if-no-files-found: error
+          retention-days: 7
+
+  concise-result:
+    needs: build-and-validate
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Report result
+        shell: pwsh
+        env:
+          RESULT: ${{ needs.build-and-validate.result }}
+          FAILURE_MESSAGE: ${{ needs.build-and-validate.outputs.failure_message }}
+        run: |
+          Write-Host "BUILD_RESULT=$env:RESULT"
+          Write-Host "FAILURE_MESSAGE=$env:FAILURE_MESSAGE"
+          if ($env:RESULT -ne 'success') { exit 1 }
