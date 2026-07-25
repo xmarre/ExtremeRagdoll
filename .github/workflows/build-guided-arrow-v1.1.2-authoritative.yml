@@ -129,6 +129,17 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "dotnet build failed with exit code $LASTEXITCODE" }
           } finally { Pop-Location }
 
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.2-compiler-diagnostics
+          path: |
+            ${{ runner.temp }}\COMPILER_LOG.txt
+            ${{ runner.temp }}\RESTORE_LOG.txt
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Verify production assembly metadata and stage artifact
         shell: pwsh
         run: |
