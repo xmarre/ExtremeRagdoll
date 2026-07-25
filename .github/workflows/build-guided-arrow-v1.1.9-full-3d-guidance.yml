@@ -56,6 +56,12 @@ jobs:
         shell: pwsh
         run: |
           try {
+            $crosshair = 'tools/ga119-assets/GuidedArrowCrosshair.xml'
+            $crosshairHash = (Get-FileHash -LiteralPath $crosshair -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($crosshairHash -ne '318c41e4f52494dacf899da5497b6d0d89e4f67804363ecd8f82182ca194b372') { throw "Crosshair asset hash mismatch: $crosshairHash" }
+            $seed = "$env:RUNNER_TEMP\ga119-output\v1.1.8-baseline\release-assets"
+            New-Item -ItemType Directory $seed -Force | Out-Null
+            Copy-Item -LiteralPath $crosshair -Destination (Join-Path $seed 'GuidedArrowCrosshair.xml') -Force
             & $env:GA119_BUILD_SCRIPT -OutputRoot "$env:RUNNER_TEMP\ga119-output"
           }
           catch {
