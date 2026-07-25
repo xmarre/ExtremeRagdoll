@@ -26,12 +26,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $payload = 'tools/build-ga119-full-3d-guidance.ps1.gz.b64'
           $payloadHash = (Get-FileHash -LiteralPath $payload -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($payloadHash -ne '27cd1c8ee57e3519ebdbe57c21ed2e31398d3b9785fd1ec8e0181afcbad546ae') { throw "Build payload hash mismatch: $payloadHash" }
+          if ($payloadHash -ne '5634db37abbf49702a271d61746a0678c9b5c27952adee920883082cf0ec7d69') { throw "Build payload hash mismatch: $payloadHash" }
           $compressed = [Convert]::FromBase64String(([IO.File]::ReadAllText($payload).Trim()))
           $gzipPath = Join-Path $env:RUNNER_TEMP 'build-ga119.ps1.gz'
           [IO.File]::WriteAllBytes($gzipPath, $compressed)
           $gzipHash = (Get-FileHash -LiteralPath $gzipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($gzipHash -ne '6ad7a2b370763f317338f01d7c50c474d512f133871e4dcbfbdfefe446d6eac9') { throw "Build gzip hash mismatch: $gzipHash" }
+          if ($gzipHash -ne '68f572d3fd908f426f9e7f42863704312fac248eb2770e2485cfa8a4758422f3') { throw "Build gzip hash mismatch: $gzipHash" }
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $script = Join-Path $env:RUNNER_TEMP 'build-ga119-full-3d-guidance.ps1'
@@ -39,7 +39,7 @@ jobs:
           try { $gzip.CopyTo($output) }
           finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
           $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($scriptHash -ne 'e2fa888db1fe01129b9e595f7b12c511fc85c625f77802be9ecf20502aedc19a') { throw "Build script hash mismatch: $scriptHash" }
+          if ($scriptHash -ne 'd5e01799cc341f2e4d84888d1c5bc0a49eef22de16a36ed26ffebaf2e33664b0') { throw "Build script hash mismatch: $scriptHash" }
           "GA119_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.9
