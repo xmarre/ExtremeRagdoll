@@ -128,7 +128,7 @@ jobs:
           $patch = Join-Path $env:RUNNER_TEMP 'ga113-to-ga114-source.patch'
           [IO.File]::WriteAllText($patch,[IO.File]::ReadAllText($checkout).Replace("`r`n","`n"),[Text.UTF8Encoding]::new($false))
           $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne '72e5f92d802a7c9153d4d17ef41987bab86d961dda8cb91a2d5aedd8a8d0ccfe') { throw "v1.1.4 patch mismatch: $actual" }
+          if ($actual -ne '5e7f7f0da0e28ea80796a4e30f65a0353f4e53953aea635e9e58e72e2b17f1ba') { throw "v1.1.4 patch mismatch: $actual" }
           Push-Location $env:GA_ROOT
           try {
             git apply --check --unsafe-paths $patch
@@ -154,7 +154,7 @@ jobs:
         run: |
           $path = "$env:GA_SRC\Source\Settings.cs"
           $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne '63b2a7d0461424b51c90e554630ddce093194ca46e95b89dbc0397da84ce111d') { throw "Settings mismatch: $actual" }
+          if ($actual -ne 'ee4d4989f23b5fc2c4bbf11cba6db48b4cab6f0d6621fe894825bda002351d62') { throw "Settings mismatch: $actual" }
           $settings = [IO.File]::ReadAllText($path)
           if (!$settings.Contains('public string AutoguidanceHotkeyName { get; set; } = "Ctrl+G";')) { throw 'Preserved MCM hotkey property missing' }
           if ($settings.Contains('public string AutoguidanceHotkeyChord')) { throw 'Regressed replacement hotkey property exists' }
