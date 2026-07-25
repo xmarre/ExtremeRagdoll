@@ -81,6 +81,24 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Minimal v1.1.2 git apply failed' }
           } finally { Pop-Location }
 
+      - name: Apply Bannerlord 1.3.15 visual-position compatibility fix
+        shell: pwsh
+        run: |
+          $checkoutPatch = (Resolve-Path 'tools/ga112-compilefix.patch').Path
+          $patch = Join-Path $env:RUNNER_TEMP 'ga112-compilefix-lf.patch'
+          $text = [IO.File]::ReadAllText($checkoutPatch).Replace("`r`n", "`n")
+          [IO.File]::WriteAllText($patch, $text, [Text.UTF8Encoding]::new($false))
+          $actual = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '44ec2c59ac832c6b737ae31328d661b3515d0454b3b96bddfc7b8613dd9d639d') { throw "Compile-fix patch mismatch: $actual" }
+          $root = Split-Path $env:GA_SRC -Parent
+          Push-Location $root
+          try {
+            git apply --check --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'Compile-fix git apply --check failed' }
+            git apply --unsafe-paths $patch
+            if ($LASTEXITCODE -ne 0) { throw 'Compile-fix git apply failed' }
+          } finally { Pop-Location }
+
       - name: Verify GuidedArrow.csproj source hash
         shell: pwsh
         run: |
@@ -91,7 +109,7 @@ jobs:
         shell: pwsh
         run: |
           $actual = (Get-FileHash "$env:GA_SRC\Source\GuidedArrowBehavior.cs" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne 'cc729cb4da04125055a7a57673f58d3bbac0cc187d443a585bc1611092c1ee3f') { throw "GuidedArrowBehavior.cs source mismatch: $actual" }
+          if ($actual -ne '6ca94b28d2e9c18c08cb2b883d6068641751ba5dcf6cd2a77892ee82464103a8') { throw "GuidedArrowBehavior.cs source mismatch: $actual" }
 
       - name: Verify Settings.cs source hash
         shell: pwsh
