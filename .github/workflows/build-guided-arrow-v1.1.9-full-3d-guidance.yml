@@ -25,13 +25,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $specs = @(
-            @{ Path='tools/ga119build/p00.b64'; Hash='5244df5f8bc5165877fd1f78015c182532aed40d574e0636faf28393ea95aac7' },
-            @{ Path='tools/ga119build/p01.b64'; Hash='8b69c7db890cb32fb03d6e27a3b7afc6f9b0fe3c32d690a061d2c69511966222' },
-            @{ Path='tools/ga119build/p02.b64'; Hash='338f6b7aadb3ae935eafd51f29e04228b3f5c37b6a1858411435af8e82c7fc18' },
-            @{ Path='tools/ga119build/p03.b64'; Hash='654dd831179b446907a5b9f0c239bd84aad9c9f68316abc652286cf1cd3c3e05' },
-            @{ Path='tools/ga119build/p04.b64'; Hash='ff1d7a9fc7be6059e2ab2bae026de9875a5d4231f88ef35c0df7e3ed248c8f52' },
-            @{ Path='tools/ga119build/p05.b64'; Hash='932bd1908198bccd84ac4bba85e28320d25904ce11484e2ce9cfb2478b85aa5a' },
-            @{ Path='tools/ga119build/p06.b64'; Hash='4dba533317f98181fe88327dc5324a353ff7bacb085f3717624c7ce0e4772695' }
+            @{ Path='tools/ga119buildv2/p00.b64'; Hash='f1eaacd40dc2898b9deee41b48fa8cd5752c3cb3fc7a9f307a6e1d53630beac7' },
+            @{ Path='tools/ga119buildv2/p01.b64'; Hash='8cd4e85a6f2f1b05e8fcb2db128016576b254f765013121a0c9fc943c5bafa7a' },
+            @{ Path='tools/ga119buildv2/p02.b64'; Hash='1db8bfb892bb2c08e39cd11a0df065d739ca937c82cb0f1543688e47328549e4' },
+            @{ Path='tools/ga119buildv2/p03.b64'; Hash='79e6ff11fcc90263b4179e233e3b5c46ba68a837a1bbab9f819c159ef445b87f' },
+            @{ Path='tools/ga119buildv2/p04.b64'; Hash='ae6c596d23f5486c6a18f992fb9f7903284d148cc4b58df6a91cfba03f371eed' },
+            @{ Path='tools/ga119buildv2/p05.b64'; Hash='8937a7a199db6bdb0b790cd803a1048bf43fd0c41ca053a52f3a674365622cb2' },
+            @{ Path='tools/ga119buildv2/p06.b64'; Hash='290a7ffd73167429d46a6e6117315561dc68f9f58291ffbde4d4d0382993307c' }
           )
           foreach ($spec in $specs) {
             $actual = (Get-FileHash -LiteralPath $spec.Path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -40,7 +40,7 @@ jobs:
           $payload = ($specs | ForEach-Object { ([IO.File]::ReadAllText($_.Path)).Trim() }) -join ''
           $compressed = [Convert]::FromBase64String($payload)
           $gzipHash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($compressed)).Replace('-','').ToLowerInvariant()
-          if ($gzipHash -ne '26760852b8d5a570751a26fcf028efe297e05c8f97a23058cb7e207ef0dcf8ef') { throw "Build gzip hash mismatch: $gzipHash" }
+          if ($gzipHash -ne '92707268b434579984233acc32e9c9642af5dfa1754b56cd801fa3237c988437') { throw "Build gzip hash mismatch: $gzipHash" }
           $input = [IO.MemoryStream]::new($compressed)
           $gzip = [IO.Compression.GZipStream]::new($input, [IO.Compression.CompressionMode]::Decompress)
           $script = Join-Path $env:RUNNER_TEMP 'build-ga119-full-3d-guidance.ps1'
@@ -48,7 +48,7 @@ jobs:
           try { $gzip.CopyTo($output) }
           finally { $output.Dispose(); $gzip.Dispose(); $input.Dispose() }
           $scriptHash = (Get-FileHash -LiteralPath $script -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($scriptHash -ne '7c47c68341cacea66686cdd5007dbb8b805e67e90e5117bad5a20fb21f3c96c4') { throw "Build script hash mismatch: $scriptHash" }
+          if ($scriptHash -ne '252465ab734b1da63b825d39cd824699d4dc373635ed082c613ab4a142024c2e') { throw "Build script hash mismatch: $scriptHash" }
           "GA119_BUILD_SCRIPT=$script" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build and validate Guided Arrow v1.1.9
