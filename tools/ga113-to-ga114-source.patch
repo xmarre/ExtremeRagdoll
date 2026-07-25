@@ -1,0 +1,268 @@
+diff --git a/GuidedArrow/Source/GuidedArrow.csproj b/GuidedArrow/Source/GuidedArrow.csproj
+index f96e041..970dfe4 100644
+--- a/GuidedArrow/Source/GuidedArrow.csproj
++++ b/GuidedArrow/Source/GuidedArrow.csproj
+@@ -6,9 +6,9 @@
+     <AssemblyName>GuidedArrow</AssemblyName>
+     <RootNamespace>GuidedArrow</RootNamespace>
+     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+-    <Version>1.1.3</Version>
+-    <FileVersion>1.1.3.0</FileVersion>
+-    <AssemblyVersion>1.1.3.0</AssemblyVersion>
++    <Version>1.1.4</Version>
++    <FileVersion>1.1.4.0</FileVersion>
++    <AssemblyVersion>1.1.4.0</AssemblyVersion>
+     <Deterministic>true</Deterministic>
+     <DebugType>pdbonly</DebugType>
+     <Optimize>true</Optimize>
+diff --git a/GuidedArrow/Source/GuidedArrowBehavior.cs b/GuidedArrow/Source/GuidedArrowBehavior.cs
+index 49bb316..691333b 100644
+--- a/GuidedArrow/Source/GuidedArrowBehavior.cs
++++ b/GuidedArrow/Source/GuidedArrowBehavior.cs
+@@ -214,6 +214,9 @@ namespace GuidedArrow
+         private readonly List<Vec3> _autoguidanceCandidateHeads = new List<Vec3>();
+         private readonly List<Agent> _autoguidanceAssignedTargets = new List<Agent>();
+         private bool _autoguidanceToggleActive;
++        // Mission-scoped toggle. Unlike _autoguidanceToggleActive, this deliberately survives
++        // individual guided-shot teardown and is cleared only when the mission behavior starts or ends.
++        private bool _autoguidanceBattleToggleActive;
+         private bool _autoguidanceEffectiveActive;
+         private bool _autoguidanceHadAnyTarget;
+         private float _autoguidanceReacquireCountdown;
+@@ -288,12 +291,14 @@ namespace GuidedArrow
+ 
+         public override void OnBehaviorInitialize()
+         {
++            _autoguidanceBattleToggleActive = false;
+             ResetAll(false);
+             Log("Mission behavior initialized.");
+         }
+ 
+         public override void OnRemoveBehavior()
+         {
++            _autoguidanceBattleToggleActive = false;
+             ResetAll(true);
+             Log("Mission behavior removed.");
+         }
+@@ -1147,6 +1152,7 @@ namespace GuidedArrow
+                 _pendingPitchInput = 0f;
+                 _state = State.Guiding;
+                 _cameraFrameValid = false;
++                InitializeAutoguidanceForCurrentShot();
+                 SuspendNativeCrosshairViews();
+                 AcquireCustomCameraOwnership();
+                 UpdateCrosshairVisibility();
+@@ -1711,22 +1717,74 @@ namespace GuidedArrow
+                 if (_autoguidanceEffectiveActive)
+                     SetAutoguidanceEffectiveState(false, true);
+                 _autoguidanceToggleActive = false;
++                _autoguidanceBattleToggleActive = false;
+                 return;
+             }
+ 
++            bool alwaysOn = Settings.Instance?.AutoguidanceAlwaysOn ?? false;
++            int activationMode = Settings.Instance?.AutoguidanceActivationMode ?? 0;
++            bool persistForBattle = activationMode <= 0 &&
++                (Settings.Instance?.AutoguidancePersistToggleForBattle ?? false);
++
++            // Always-On is authoritative but does not destroy a stored battle toggle. Turning it off
++            // live therefore returns to the explicitly selected battle state instead of inventing one.
++            if (alwaysOn)
++            {
++                _autoguidanceToggleActive = false;
++                SetAutoguidanceEffectiveState(true, false);
++                return;
++            }
++
++            // A battle toggle is meaningful only while the setting is enabled in Toggle mode. Clear
++            // stale mission state immediately if the user switches to per-shot Toggle or Hold mode.
++            if (!persistForBattle && _autoguidanceBattleToggleActive)
++            {
++                _autoguidanceBattleToggleActive = false;
++                SetAutoguidanceEffectiveState(false, false);
++            }
++
+             AutoguidanceHotkeyChord chord = ResolveAutoguidanceHotkeyChord(
+                 Settings.Instance?.AutoguidanceHotkeyName,
+                 Settings.Instance?.AutoguidanceHotkey ?? 0);
+             if (chord == null || !chord.IsValid)
++            {
++                if (persistForBattle)
++                    SetAutoguidanceEffectiveState(_autoguidanceBattleToggleActive, false);
++                else if (activationMode <= 0)
++                    SetAutoguidanceEffectiveState(_autoguidanceToggleActive, false);
++                else
++                    SetAutoguidanceEffectiveState(false, false);
+                 return;
++            }
+ 
+-            int activationMode = Settings.Instance?.AutoguidanceActivationMode ?? 0;
+             if (activationMode <= 0)
+             {
+                 if (IsAutoguidanceChordPressed(chord))
+                 {
+-                    _autoguidanceToggleActive = !_autoguidanceToggleActive;
+-                    SetAutoguidanceEffectiveState(_autoguidanceToggleActive, true);
++                    if (persistForBattle)
++                    {
++                        _autoguidanceBattleToggleActive = !_autoguidanceBattleToggleActive;
++                        _autoguidanceToggleActive = false;
++                        SetAutoguidanceEffectiveState(_autoguidanceBattleToggleActive, false);
++                        ShowAutoguidanceMessage(_autoguidanceBattleToggleActive
++                            ? "Autoguidance: ON (Battle)"
++                            : "Autoguidance: OFF (Battle)");
++                        Log("Battle-persistent autoguidance toggled " +
++                            (_autoguidanceBattleToggleActive ? "ON." : "OFF."));
++                    }
++                    else
++                    {
++                        _autoguidanceToggleActive = !_autoguidanceToggleActive;
++                        SetAutoguidanceEffectiveState(_autoguidanceToggleActive, true);
++                    }
++                }
++                else if (persistForBattle)
++                {
++                    SetAutoguidanceEffectiveState(_autoguidanceBattleToggleActive, false);
++                }
++                else
++                {
++                    SetAutoguidanceEffectiveState(_autoguidanceToggleActive, false);
+                 }
+             }
+             else
+@@ -1737,6 +1795,28 @@ namespace GuidedArrow
+             }
+         }
+ 
++        private void InitializeAutoguidanceForCurrentShot()
++        {
++            _autoguidanceToggleActive = false;
++
++            if (!(Settings.Instance?.EnableAutonomousGuidance ?? true))
++            {
++                SetAutoguidanceEffectiveState(false, false);
++                return;
++            }
++
++            if (Settings.Instance?.AutoguidanceAlwaysOn ?? false)
++            {
++                SetAutoguidanceEffectiveState(true, false);
++                return;
++            }
++
++            int activationMode = Settings.Instance?.AutoguidanceActivationMode ?? 0;
++            bool persistForBattle = activationMode <= 0 &&
++                (Settings.Instance?.AutoguidancePersistToggleForBattle ?? false);
++            SetAutoguidanceEffectiveState(persistForBattle && _autoguidanceBattleToggleActive, false);
++        }
++
+         private AutoguidanceHotkeyChord ResolveAutoguidanceHotkeyChord(string configuredName, int legacySelection)
+         {
+             string source = configuredName?.Trim();
+diff --git a/GuidedArrow/Source/Settings.cs b/GuidedArrow/Source/Settings.cs
+index 20d4f28..2da99a0 100644
+--- a/GuidedArrow/Source/Settings.cs
++++ b/GuidedArrow/Source/Settings.cs
+@@ -53,67 +53,77 @@ namespace GuidedArrow
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+         [SettingPropertyBool("Enable Autonomous Guidance", Order = 0, RequireRestart = false,
+-            HintText = "Allows the current live guided shot to switch between manual steering and physically constrained predictive autoguidance. Autoguidance never activates by itself unless the hotkey is used.")]
++            HintText = "Master switch for physically constrained predictive autoguidance. When enabled, activation is controlled by Always-On Autoguidance, the battle-persistent toggle, or the configured per-projectile hotkey mode.")]
+         public bool EnableAutonomousGuidance { get; set; } = true;
+ 
++        [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
++        [SettingPropertyBool("Always-On Autoguidance", Order = 1, RequireRestart = false,
++            HintText = "Automatically enables autoguidance for every eligible guided projectile in the mission. This overrides the hotkey activation mode and battle-persistent toggle while enabled.")]
++        public bool AutoguidanceAlwaysOn { get; set; } = false;
++
++        [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
++        [SettingPropertyBool("Persist Hotkey Toggle for Battle", Order = 2, RequireRestart = false,
++            HintText = "In Toggle activation mode, press Ctrl+G (or the configured chord) during any guided flight to change one battle-wide autoguidance state. The current projectile and all later guided projectiles use that state until the chord is pressed again. The state resets when the mission ends.")]
++        public bool AutoguidancePersistToggleForBattle { get; set; } = false;
++
+         // Preserve the exact v1.1.1 MCM property name and attributed schema. Replacing an existing
+         // attributed property with a different public property can invalidate MCM's cached settings
+         // model during module discovery, before Bannerlord reaches the splash screen. The value now
+         // accepts either one key or a multi-key chord; only the interpretation changed.
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyText("Autoguidance Hotkey / Chord", Order = 1, RequireRestart = false,
++        [SettingPropertyText("Autoguidance Hotkey / Chord", Order = 3, RequireRestart = false,
+             HintText = "Enter one key or a multi-key chord separated by +. Examples: Ctrl+G, Ctrl+Shift+G, F8, MiddleMouseButton, X1MouseButton or Q+E. Ctrl, Shift and Alt accept either left or right modifier. The chord is read live and does not require a restart.")]
+         public string AutoguidanceHotkeyName { get; set; } = "Ctrl+G";
+ 
+         public int AutoguidanceHotkey { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyInteger("Activation Mode", 0, 1, "0", Order = 2, RequireRestart = false,
++        [SettingPropertyInteger("Activation Mode", 0, 1, "0", Order = 4, RequireRestart = false,
+             HintText = "0=Toggle: press once for autonomous guidance and again for manual. 1=Hold: autoguidance is active only while the configured key is held.")]
+         public int AutoguidanceActivationMode { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyInteger("Autoguidance Scope", 0, 2, "0", Order = 3, RequireRestart = false,
++        [SettingPropertyInteger("Autoguidance Scope", 0, 2, "0", Order = 5, RequireRestart = false,
+             HintText = "0=Main Projectile Only, 1=Split Projectiles Only, 2=Main + Split Projectiles.")]
+         public int AutoguidanceScope { get; set; } = 2;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyInteger("Target Selection", 0, 2, "0", Order = 4, RequireRestart = false,
++        [SettingPropertyInteger("Target Selection", 0, 2, "0", Order = 6, RequireRestart = false,
+             HintText = "0=Closest Reachable Enemy: nearest enemy that the missile can still intercept under its current turn authority. 1=Closest to Camera Aim: aim-biased among physically reachable enemies. 2=Absolute Closest Enemy: distance-first, with reachability still preferred over targets the missile has already overshot.")]
+         public int AutoguidanceTargetSelection { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyBool("Automatic Target Reacquisition", Order = 5, RequireRestart = false,
++        [SettingPropertyBool("Automatic Target Reacquisition", Order = 7, RequireRestart = false,
+             HintText = "Reacquires only when a cached target becomes invalid or after a pass-through consumes the current target. Searches are throttled and event-driven; valid locked targets never trigger global scans each frame.")]
+         public bool AutoguidanceAutomaticReacquisition { get; set; } = true;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyInteger("Split Target Distribution", 0, 1, "0", Order = 6, RequireRestart = false,
++        [SettingPropertyInteger("Split Target Distribution", 0, 1, "0", Order = 8, RequireRestart = false,
+             HintText = "0=Unique Targets: distribute autonomous split arrows across separate enemies when possible. 1=Same Target: deliberately focus eligible autonomous projectiles on one target.")]
+         public int AutoguidanceSplitTargetDistribution { get; set; } = 0;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyInteger("Autoguided Split Behaviour", 0, 2, "0", Order = 7, RequireRestart = false,
++        [SettingPropertyInteger("Autoguided Split Behaviour", 0, 2, "0", Order = 9, RequireRestart = false,
+             HintText = "0=Preserve Formation: autonomous leader guidance with followers governed by the selected formation. 1=Break Formation Near Targets: followers keep formation until terminal range, then independently guide to assigned heads. 2=Fully Independent: eligible split projectiles guide independently immediately.")]
+         public int AutoguidanceSplitBehaviour { get; set; } = 1;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyFloatingInteger("Formation Break Distance", 2f, 80f, "0.0", Order = 8, RequireRestart = false,
++        [SettingPropertyFloatingInteger("Formation Break Distance", 2f, 80f, "0.0", Order = 10, RequireRestart = false,
+             HintText = "In Break Formation Near Targets mode, an eligible split projectile detaches from formation when its assigned head target is within this distance.")]
+         public float AutoguidanceFormationBreakDistance { get; set; } = 18f;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyBool("Low-Cruise Rising Attack Profile", Order = 9, RequireRestart = false,
++        [SettingPropertyBool("Low-Cruise Rising Attack Profile", Order = 11, RequireRestart = false,
+             HintText = "When physically feasible, autoguidance cruises close to terrain and begins a terminal climb late enough to strike the head from below. Close or curvature-starved shots remain direct head interceptions.")]
+         public bool AutoguidanceLowRiseAttackProfile { get; set; } = true;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyFloatingInteger("Cruise Ground Clearance", 0.45f, 3f, "0.00", Order = 10, RequireRestart = false,
++        [SettingPropertyFloatingInteger("Cruise Ground Clearance", 0.45f, 3f, "0.00", Order = 12, RequireRestart = false,
+             HintText = "Preferred terrain-following height for the low-cruise phase. Lower values produce a more pronounced rising terminal strike but leave less terrain margin.")]
+         public float AutoguidanceCruiseGroundClearance { get; set; } = 0.9f;
+ 
+         [SettingPropertyGroup("Autonomous Guidance", GroupOrder = 1)]
+-        [SettingPropertyFloatingInteger("Preferred Rising Entry Angle", 2f, 20f, "0.0", Order = 11, RequireRestart = false,
++        [SettingPropertyFloatingInteger("Preferred Rising Entry Angle", 2f, 20f, "0.0", Order = 13, RequireRestart = false,
+             HintText = "Preferred upward terminal entry angle in degrees. This is a trajectory preference only: the existing minimum-turn-radius and speed limits remain authoritative, and direct head reachability overrides the profile at short range.")]
+         public float AutoguidancePreferredRiseAngle { get; set; } = 8f;
+ 
+diff --git a/GuidedArrow/SubModule.xml b/GuidedArrow/SubModule.xml
+index dca23f5..67d57ae 100644
+--- a/GuidedArrow/SubModule.xml
++++ b/GuidedArrow/SubModule.xml
+@@ -2,7 +2,7 @@
+ <Module>
+   <Name value="Guided Arrow" />
+   <Id value="GuidedArrow" />
+-  <Version value="v1.1.3" />
++  <Version value="v1.1.4" />
+   <DefaultModule value="false" />
+   <SingleplayerModule value="true" />
+   <MultiplayerModule value="false" />
