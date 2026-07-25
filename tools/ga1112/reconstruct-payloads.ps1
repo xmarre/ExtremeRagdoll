@@ -3,14 +3,14 @@ Set-StrictMode -Version Latest
 function Assert-Chunk([string]$Path,[string]$Expected){
  if(!(Test-Path -LiteralPath $Path)){throw "Missing payload chunk: $Path"}
  $actual=(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
- if($actual -ne $Expected){throw "Payload chunk hash mismatch for $Path: $actual"}
+ if($actual -ne $Expected){throw "Payload chunk hash mismatch for ${Path}: $actual"}
 }
 function Join-Chunks([array]$Specs,[string]$Output,[string]$ExpectedCombined){
  foreach($spec in $Specs){Assert-Chunk $spec.Path $spec.Hash}
  $payload=($Specs|ForEach-Object{([IO.File]::ReadAllText($_.Path)).Trim()})-join''
  [IO.File]::WriteAllText($Output,$payload,[Text.UTF8Encoding]::new($false))
  $actual=(Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()
- if($actual -ne $ExpectedCombined){throw "Reconstructed payload hash mismatch for $Output: $actual"}
+ if($actual -ne $ExpectedCombined){throw "Reconstructed payload hash mismatch for ${Output}: $actual"}
 }
 $root=(Resolve-Path $PSScriptRoot).Path
 $patch=@(
