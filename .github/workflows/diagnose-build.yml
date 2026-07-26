@@ -1,0 +1,57 @@
+name: Diagnose v1.3.10 build
+
+on:
+  push:
+    branches:
+      - agent/clean-v1.3.10-source
+
+jobs:
+  prepare:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          show-progress: false
+      - name: Reconstruct verified source
+        shell: pwsh
+        run: |
+          $parts = @(
+            '.\bootstrap\chunk-000.txt', '.\bootstrap\chunk-001.txt',
+            '.\bootstrap\chunk-01.txt', '.\bootstrap\chunk-02.txt',
+            '.\bootstrap\chunk-03.txt', '.\bootstrap\chunk-04.txt',
+            '.\bootstrap\chunk-05.txt', '.\bootstrap\chunk-06.txt',
+            '.\bootstrap\chunk-07.txt', '.\bootstrap\chunk-08.txt',
+            '.\bootstrap\chunk-09x0.txt', '.\bootstrap\chunk-09x1.txt',
+            '.\bootstrap\chunk-09x2.txt', '.\bootstrap\chunk-09z0.txt',
+            '.\bootstrap\chunk-09z1.txt', '.\bootstrap\chunk-09z2.txt',
+            '.\bootstrap\chunk-09z3.txt', '.\bootstrap\chunk-09z4.txt',
+            '.\bootstrap\chunk-09z5.txt', '.\bootstrap\chunk-09z6.txt',
+            '.\bootstrap\chunk-09z7.txt', '.\bootstrap\chunk-10.txt'
+          )
+          $encoded = ($parts | ForEach-Object { Get-Content -LiteralPath $_ -Raw }) -join ''
+          $zip = Join-Path $env:RUNNER_TEMP 'clean.zip'
+          [IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($encoded))
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '71992d2b6cbb87767b948d0d5840395c03190cfdf3f1baef365b3f6c658935f9') { exit 2 }
+          Expand-Archive $zip '.\clean' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-clean-source
+          path: clean
+          retention-days: 1
+
+  build:
+    needs: prepare
+    runs-on: windows-2022
+    steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-clean-source
+          path: .
+      - name: Build v1.3.10
+        shell: pwsh
+        run: .\Source\Build\build.ps1
