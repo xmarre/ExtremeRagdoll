@@ -1,0 +1,153 @@
+name: Temporary Extreme Ragdoll v1.3.10 Compiler
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'tmp/extremeragdoll-v1310-')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '3.1.426'
+
+      - name: Reconstruct and verify reviewed payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $partDir = 'v1310_payload2'
+          $expectedPartHashes = @(
+            '219784f9427f8c7e5693ccac4d91834207371c326ee5a1f12d042d3a3e2847ad',
+            '462c12bf2608a88192400697acab44144fdd44ec453700b360c617270c39806d',
+            'deb71c364633ce877aaf7d135f2408c5cc954d8ce9fa731fa81fbf6c0e321047',
+            'b60fe5f5ee676c5f6758f1ac9d08fdc9e641ac940ad614e0f03a6e870c4837de',
+            '9ff774f5bbf5deed3d5ddc27081072d250129488da51b83e1f4283d228e69b1c',
+            '6b967c06335a7dfbec3eaa85c3072eb1726530af3627d30d5ce18b3663f93c06'
+          )
+          $parts = Get-ChildItem "$partDir/p*.txt" | Sort-Object Name
+          if ($parts.Count -ne $expectedPartHashes.Count) {
+            throw "Expected $($expectedPartHashes.Count) payload chunks, found $($parts.Count)."
+          }
+
+          $base64 = New-Object System.Text.StringBuilder
+          for ($i = 0; $i -lt $parts.Count; $i++) {
+            $text = [IO.File]::ReadAllText($parts[$i].FullName).Trim()
+            $bytes = [Text.Encoding]::UTF8.GetBytes($text)
+            $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+            if ($hash -ne $expectedPartHashes[$i]) {
+              throw "Payload chunk $($parts[$i].Name) SHA-256 mismatch: $hash"
+            }
+            [void]$base64.Append($text)
+          }
+
+          $base64Text = $base64.ToString()
+          $base64Hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($base64Text))).ToLowerInvariant()
+          if ($base64Hash -ne '90176035c7845c4b874feeafce6d5ab9df176f0b2517aa376d65face4d21a577') {
+            throw "Combined Base64 SHA-256 mismatch: $base64Hash"
+          }
+
+          [IO.File]::WriteAllBytes('v1310_payload2.zip', [Convert]::FromBase64String($base64Text))
+          $zipHash = (Get-FileHash 'v1310_payload2.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($zipHash -ne '6cb3e11f3afce16a2a3db16c0f38041e847917553a65e133a8e4ec5b0ea39b57') {
+            throw "Payload ZIP SHA-256 mismatch: $zipHash"
+          }
+          Expand-Archive 'v1310_payload2.zip' -DestinationPath 'payload' -Force
+
+      - name: Install Mono.Cecil validator dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          nuget install Mono.Cecil -Version 0.11.5 -OutputDirectory packages -DirectDownload -NonInteractive
+          $cecil = Get-ChildItem 'packages/Mono.Cecil.0.11.5/lib/netstandard2.0/Mono.Cecil.dll' | Select-Object -First 1
+          if (-not $cecil) { throw 'Mono.Cecil.dll was not installed.' }
+          $tools = 'payload/v1310_payload_stage/Source/Build/Tools'
+          New-Item -ItemType Directory -Force $tools | Out-Null
+          Copy-Item $cecil.FullName "$tools/Mono.Cecil.dll" -Force
+
+      - name: Compile and validate assemblies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dotnet = (Get-Command dotnet).Source
+          $env:DOTNET = $dotnet
+          $env:DOTNET_ROOT = Split-Path -Parent $dotnet
+          & 'payload/v1310_payload_stage/Source/Build/build.ps1' './build'
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE" }
+          $required = @(
+            'build/bin/ExtremeRagdoll.dll',
+            'build/bin/ExtremeRagdoll.ClothSync.dll'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing compiler output: $file" }
+          }
+
+      - name: Validate XML and localization coverage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'payload/v1310_payload_stage'
+          Get-ChildItem $root -Recurse -Filter '*.xml' | ForEach-Object {
+            try { [xml](Get-Content $_.FullName -Raw) | Out-Null }
+            catch { throw "Invalid XML: $($_.FullName): $($_.Exception.Message)" }
+          }
+          $source = Get-Content "$root/Source/SafeSubModule.cs" -Raw
+          $ids = [regex]::Matches($source, '\{=([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          $english = Get-Content "$root/ModuleData/Languages/std_module_strings_xml.xml" -Raw
+          $chinese = Get-Content "$root/ModuleData/Languages/CNs/std_module_strings_xml.xml" -Raw
+          foreach ($id in $ids) {
+            if ($english -notmatch [regex]::Escape("id=\"$id\"")) { throw "Missing English localization id: $id" }
+            if ($chinese -notmatch [regex]::Escape("id=\"$id\"")) { throw "Missing Chinese localization id: $id" }
+          }
+          if ($source -notmatch 'CompatibilityState\.IsDismembermentPlusLoaded') { throw 'DP detection is missing.' }
+          if ($source -notmatch '!_dismembermentPlusCompatibility') { throw 'DP nonlethal guard is missing.' }
+          if ($source -notmatch 'Dismemberment Plus compatibility mode') { throw 'DP compatibility logging is missing.' }
+
+      - name: Package clean and full-source builds
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Resolve-Path 'payload/v1310_payload_stage'
+          Remove-Item 'package-clean','package-source','artifact' -Recurse -Force -ErrorAction SilentlyContinue
+
+          $clean = 'package-clean/ExtremeRagdoll'
+          New-Item -ItemType Directory -Force "$clean/bin/Win64_Shipping_Client" | Out-Null
+          New-Item -ItemType Directory -Force "$clean/ModuleData" | Out-Null
+          Copy-Item 'build/bin/ExtremeRagdoll.dll' "$clean/bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
+          Copy-Item 'build/bin/ExtremeRagdoll.ClothSync.dll' "$clean/bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
+          Copy-Item "$root/SubModule.xml" "$clean/SubModule.xml"
+          Copy-Item "$root/ModuleData/*" "$clean/ModuleData" -Recurse
+          Copy-Item "$root/V1.3.10_CHANGES.txt" "$clean/V1.3.10_CHANGES.txt"
+          Copy-Item "$root/V1.3.10_ROOT_CAUSE_AND_SCOPE.txt" "$clean/V1.3.10_ROOT_CAUSE_AND_SCOPE.txt"
+          Copy-Item "$root/SETTINGS_GUIDE.txt" "$clean/SETTINGS_GUIDE.txt"
+          Get-ChildItem $clean -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $rel = $_.FullName.Substring((Resolve-Path $clean).Path.Length + 1).Replace('\\','/')
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $rel
+          } | Set-Content "$clean/SHA256SUMS.txt" -Encoding UTF8
+
+          $full = 'package-source/ExtremeRagdoll'
+          Copy-Item $root $full -Recurse
+          New-Item -ItemType Directory -Force "$full/bin/Win64_Shipping_Client" | Out-Null
+          Copy-Item 'build/bin/ExtremeRagdoll.dll' "$full/bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
+          Copy-Item 'build/bin/ExtremeRagdoll.ClothSync.dll' "$full/bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
+          Get-ChildItem $full -Recurse -File | Sort-Object FullName | ForEach-Object {
+            $rel = $_.FullName.Substring((Resolve-Path $full).Path.Length + 1).Replace('\\','/')
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $rel
+          } | Set-Content "$full/SHA256SUMS.txt" -Encoding UTF8
+
+          New-Item -ItemType Directory -Force 'artifact' | Out-Null
+          Compress-Archive 'package-clean/*' 'artifact/ExtremeRagdoll-v1.3.10-DP-COMPAT-CNs-CLEAN.zip' -Force
+          Compress-Archive 'package-source/*' 'artifact/ExtremeRagdoll-v1.3.10-DP-COMPAT-CNs-FULL-SOURCE.zip' -Force
+          Get-ChildItem 'artifact/*.zip' | Sort-Object Name | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content 'artifact/SHA256SUMS.txt' -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.3.10-builds
+          path: artifact/*
+          if-no-files-found: error
