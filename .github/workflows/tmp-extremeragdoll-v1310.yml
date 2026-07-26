@@ -1,13 +1,16 @@
 name: Temporary Extreme Ragdoll v1.3.10 Compiler
 
 on:
+  push:
+    branches:
+      - 'tmp/extremeragdoll-v1310-*'
   pull_request:
     branches: [ master ]
   workflow_dispatch:
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'tmp/extremeragdoll-v1310-')
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push' || startsWith(github.head_ref, 'tmp/extremeragdoll-v1310-')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
