@@ -1,0 +1,65 @@
+name: Bootstrap clean v1.3.10 repository
+
+on:
+  push:
+    branches:
+      - agent/clean-v1.3.10-source
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2022
+    steps:
+      - name: Check out bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Replace bootstrap payload with clean source tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:GITHUB_WORKSPACE 'bootstrap/source.zip'
+          $stage = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean'
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
+          Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Force |
+            Where-Object { $_.Name -ne '.git' } |
+            Remove-Item -Recurse -Force
+          Copy-Item -Path (Join-Path $stage '*') -Destination $env:GITHUB_WORKSPACE -Recurse -Force
+
+      - name: Build v1.3.10
+        shell: pwsh
+        run: .\Source\Build\build.ps1
+
+      - name: Stage runtime binaries and hashes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'bin/Win64_Shipping_Client'
+          New-Item -ItemType Directory -Path $runtime -Force | Out-Null
+          Copy-Item '.\Source\Build\out\bin\ExtremeRagdoll.dll' (Join-Path $runtime 'ExtremeRagdoll.dll') -Force
+          Copy-Item '.\Source\Build\out\bin\ExtremeRagdoll.ClothSync.dll' (Join-Path $runtime 'ExtremeRagdoll.ClothSync.dll') -Force
+          $main = (Get-FileHash (Join-Path $runtime 'ExtremeRagdoll.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash (Join-Path $runtime 'ExtremeRagdoll.ClothSync.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
+            "$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
+          ) | Set-Content -LiteralPath '.\RUNTIME_SHA256.txt' -Encoding ascii
+
+      - name: Commit clean repository
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Clean repository and build v1.3.10'
+          git push origin HEAD:agent/clean-v1.3.10-source
