@@ -20,23 +20,33 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $paths = @(
             'v1310_payload3/p00.txt',
-            'v1310_payload3/p01.txt',
+            'v1310_payload3/p01_00.txt',
+            'v1310_payload3/p01_01.txt',
+            'v1310_payload3/p01_02.txt',
+            'v1310_payload3/p01_03.txt',
             'v1310_payload2/p01.txt',
             'v1310_payload2/p02.txt',
             'v1310_payload3/p06.txt',
             'v1310_payload3/p07.txt',
             'v1310_payload2/p04.txt',
-            'v1310_payload3/p10.txt'
+            'v1310_payload3/p10_00.txt',
+            'v1310_payload3/p10_01.txt',
+            'v1310_payload3/p10_02.txt'
           )
           $expected = @(
             '0d4f1c10be4ea985a9e37b81856b4338c4f9e47cca32a7f7e93f0fcf4e2985e1',
-            'c58eed534c69fe484a7ec396b230c52d03f24a87991b034753cc0282665f289f',
+            '1d092066a75913b7ce205b560e43cf37b7335e6e4a248d75d377d022b5014cf8',
+            '0e50ffb0a1cd6e47868dc546eb4fc5eb9f9b9ea39f4584ed949eb86bdbd81d36',
+            '7c1ec9617b7c8db64e521e2dbeeb3a0b92d52c2c31b9ed2be3897fb6ce86af0c',
+            '0ac3e7354a41d73b6fb480d30d1f118ce7090fd2e90191f300f35723eece9ab8',
             '462c12bf2608a88192400697acab44144fdd44ec453700b360c617270c39806d',
             'deb71c364633ce877aaf7d135f2408c5cc954d8ce9fa731fa81fbf6c0e321047',
             '5a95f674c043539d4a651cc7519b2e8c20b5f95b6d2223412ce01a1f296ce7b0',
             '1361ebaf6ff300bb394d3c429e8a1bc50165316cf7cf92146d33c5b5d2939ea1',
             '9ff774f5bbf5deed3d5ddc27081072d250129488da51b83e1f4283d228e69b1c',
-            '6b967c06335a7dfbec3eaa85c3072eb1726530af3627d30d5ce18b3663f93c06'
+            'e3619a22964bcfccac15abb69220d26d94b395cc0206fef13c6b819b59b07bc5',
+            '186fd66fd0c1602bd29d2c96dd47ec67d74f8ae8c07f48be5878d7c57c6e5ce2',
+            'e53265f0dd759f8659c2a123888e505bf7bad2b0b9a5c626b313ef851c0d3b4c'
           )
           $builder = New-Object Text.StringBuilder
           for ($i = 0; $i -lt $paths.Count; $i++) {
