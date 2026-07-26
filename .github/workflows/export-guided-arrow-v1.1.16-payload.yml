@@ -1,0 +1,34 @@
+name: Export Guided Arrow v1.1.16 Payload
+
+on:
+  pull_request:
+    branches: [ codex/ga1115-split-spawn-recovery ]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Decode payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $encoded='tools/ga1116/ga1116-runtime-payload.zip.b64'
+          $clean=[Text.RegularExpressions.Regex]::Replace([IO.File]::ReadAllText($encoded),'\s+','')
+          $zip=Join-Path $env:RUNNER_TEMP 'ga1116-payload.zip'
+          [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($clean))
+          $out=Join-Path $env:RUNNER_TEMP 'ga1116-payload'
+          [IO.Compression.ZipFile]::ExtractToDirectory($zip,$out,$true)
+      - name: Upload decoded payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.16-decoded-payload
+          path: ${{ runner.temp }}\ga1116-payload
+          if-no-files-found: error
+          retention-days: 1
