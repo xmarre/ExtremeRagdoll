@@ -16,8 +16,9 @@ behavior = (root / "Source" / "GuidedArrowBehavior.cs").read_text(encoding="utf-
 bridge = (root / "Source" / "MissileDamageBridge.cs").read_text(encoding="utf-8")
 
 assert "TryGetResolvedLaunchForShot" in bridge
-assert "RecentLaunches" in bridge
-assert "MaxRecentLaunches = 64" in bridge
+assert "private sealed class RecentLaunch" in bridge
+assert "public readonly List<RecentLaunch> Recent" in bridge
+assert "while (state.Recent.Count > 64)" in bridge
 assert "if (source.ResolvedLaunchData == null)" in behavior
 assert "Standalone splitting is waiting for the original resolved launch packet" in behavior
 
@@ -54,11 +55,11 @@ print("RESOLVED_DAMAGE_PRESERVATION=RETAINED")
 print("RECENT_LAUNCH_HISTORY_CAP=64")
 '@
 Write-Utf8NoBom `$test `$inlineTest
-Assert-Hash `$test 'e0c264fc9cb63369c49823660c40584a3bb82ffcbeffe7e5ae2a0aa68ecc86fd' 'v1.1.15 test'
+Assert-Hash `$test '87d63465f21be3bc581a807ed00b6de5e28cd4eea4234d625026d9a0740471db' 'v1.1.15 test'
 "@
 if(!$text.Contains($needle)){throw 'Unable to replace v1.1.15 external test decoder'}
 $text=$text.Replace($needle,$replacement)
-$text=$text.Replace('TEST_SHA256=a35c17e83c7c71b493d74b2a7d0848d1ecfcf41c56984e74bcef8905503dca70','TEST_SHA256=e0c264fc9cb63369c49823660c40584a3bb82ffcbeffe7e5ae2a0aa68ecc86fd')
+$text=$text.Replace('TEST_SHA256=a35c17e83c7c71b493d74b2a7d0848d1ecfcf41c56984e74bcef8905503dca70','TEST_SHA256=87d63465f21be3bc581a807ed00b6de5e28cd4eea4234d625026d9a0740471db')
 [IO.File]::WriteAllText($runtimeBuild,$text,[Text.UTF8Encoding]::new($false))
 & $runtimeBuild -BaseOutputRoot "$env:RUNNER_TEMP\ga1114-output" -OutputRoot "$env:RUNNER_TEMP\ga1115-output"
 Write-Host 'GA1115_COMPLETE_BUILD=SUCCESS'
