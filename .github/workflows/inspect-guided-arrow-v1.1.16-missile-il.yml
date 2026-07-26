@@ -1,0 +1,46 @@
+name: Inspect Guided Arrow v1.1.16 Missile IL
+
+on:
+  pull_request:
+    branches: [ codex/ga1115-release-base2 ]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-il:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Dump missile IL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=Join-Path $env:RUNNER_TEMP 'ga1116-il'
+          New-Item -ItemType Directory -Path $root -Force|Out-Null
+          Copy-Item 'tools/ga1116/DumpMissileIl.cs' (Join-Path $root 'Program.cs')
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <ImplicitUsings>disable</ImplicitUsings>
+              <Nullable>disable</Nullable>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+              <PackageReference Include="Bannerlord.ReferenceAssemblies.Core" Version="1.3.15.110062" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content -LiteralPath (Join-Path $root 'Inspect.csproj') -Encoding utf8
+          dotnet restore (Join-Path $root 'Inspect.csproj') --nologo
+          dotnet run --project (Join-Path $root 'Inspect.csproj') -c Release --no-restore 2>&1 | Tee-Object -FilePath (Join-Path $root 'MISSILE_IL.txt')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.16-missile-il
+          path: ${{ runner.temp }}\ga1116-il\MISSILE_IL.txt
+          if-no-files-found: error
+          retention-days: 7
