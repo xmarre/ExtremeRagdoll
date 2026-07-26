@@ -35,10 +35,9 @@ jobs:
           $stage = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean'
           if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
           Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-          Get-ChildItem -LiteralPath $env:GITHUB_WORKSPACE -Force |
-            Where-Object { $_.Name -ne '.git' } |
-            Remove-Item -Recurse -Force
-          Copy-Item -Path (Join-Path $stage '*') -Destination $env:GITHUB_WORKSPACE -Recurse -Force
+          git rm -r -f --ignore-unmatch .
+          Get-ChildItem -LiteralPath $stage -Force |
+            Copy-Item -Destination $env:GITHUB_WORKSPACE -Recurse -Force
 
       - name: Build v1.3.10
         shell: pwsh
