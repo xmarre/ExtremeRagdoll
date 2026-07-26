@@ -1,0 +1,74 @@
+name: Extract Guided Arrow v1.1.16 Engine Launch Source
+
+on:
+  pull_request:
+    branches: [ codex/ga1115-release-base ]
+
+permissions:
+  contents: read
+
+jobs:
+  extract-engine-source:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout build payload
+        uses: actions/checkout@v4
+        with:
+          path: payload
+          show-progress: false
+      - name: Checkout decompiled Bannerlord source
+        uses: actions/checkout@v4
+        with:
+          repository: zzACzz/BannerlordCoopSpectator
+          ref: 7a2d021ff0f385ae90d527aa8032aa739f25c587
+          path: engine-source
+          sparse-checkout: |
+            .codex_tmp/decompiled_mountandblade/TaleWorlds.MountAndBlade/Mission.cs
+          sparse-checkout-cone-mode: false
+          show-progress: false
+      - name: Extract launch methods
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $source=Join-Path $env:GITHUB_WORKSPACE 'engine-source/.codex_tmp/decompiled_mountandblade/TaleWorlds.MountAndBlade/Mission.cs'
+          if(!(Test-Path $source)){throw "Mission.cs missing: $source"}
+          $text=[IO.File]::ReadAllText($source)
+          function Extract-Method([string]$name){
+            $patterns=@("public Missile $name", "internal void $name", "private int $name", "public Mission.Missile $name")
+            $start=-1
+            foreach($pattern in $patterns){$start=$text.IndexOf($pattern,[StringComparison]::Ordinal);if($start -ge 0){break}}
+            if($start -lt 0){return "METHOD_NOT_FOUND=$name`r`n"}
+            $brace=$text.IndexOf('{',$start)
+            if($brace -lt 0){return "OPEN_BRACE_NOT_FOUND=$name`r`n"}
+            $depth=0;$inString=$false;$escape=$false;$end=-1
+            for($i=$brace;$i -lt $text.Length;$i++){
+              $c=$text[$i]
+              if($inString){
+                if($escape){$escape=$false;continue}
+                if($c -eq '\'){ $escape=$true; continue }
+                if($c -eq '"'){ $inString=$false }
+                continue
+              }
+              if($c -eq '"'){ $inString=$true; continue }
+              if($c -eq '{'){$depth++}
+              elseif($c -eq '}'){$depth--;if($depth -eq 0){$end=$i+1;break}}
+            }
+            if($end -lt 0){return "CLOSE_BRACE_NOT_FOUND=$name`r`n"}
+            return $text.Substring($start,$end-$start)+"`r`n"
+          }
+          $out=Join-Path $env:RUNNER_TEMP 'ga1116-engine-source'
+          New-Item -ItemType Directory -Path $out -Force|Out-Null
+          $report=@()
+          $report += Extract-Method 'AddCustomMissile'
+          $report += Extract-Method 'OnAgentShootMissile'
+          $report += Extract-Method 'AddMissileAux'
+          $report += Extract-Method 'MissileHitCallback'
+          [IO.File]::WriteAllText((Join-Path $out 'ENGINE_LAUNCH_SOURCE.txt'),($report -join "`r`n"),[Text.UTF8Encoding]::new($false))
+      - name: Upload engine source report
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.16-engine-launch-source
+          path: ${{ runner.temp }}\ga1116-engine-source\ENGINE_LAUNCH_SOURCE.txt
+          if-no-files-found: error
+          retention-days: 7
