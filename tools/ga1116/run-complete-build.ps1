@@ -99,5 +99,32 @@ $buildText=$buildText.Replace($oldInspectorHash,$newInspectorHash)
 [IO.File]::WriteAllText($buildScriptPath,$buildText,[Text.UTF8Encoding]::new($false))
 
 & (Join-Path $repo 'tools/ga1115/run-complete-build.ps1')
-& $buildScriptPath -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
+
+# Harmony 2.4.1 exposes UnpatchAll(id), not UnpatchSelf(). Perform this compatibility
+# substitution only after the v1.1.16 patch hash, final source hashes and regression tests
+# have been checked, immediately before the first v1.1.16 restore/build invocation.
+$script:realDotnet=(Get-Command dotnet -CommandType Application).Source
+$script:rollbackAdjusted=$false
+function global:dotnet {
+    if(!$script:rollbackAdjusted){
+        $bridge=Get-ChildItem (Join-Path $env:RUNNER_TEMP 'ga1116-work') -Filter 'MissileDamageBridge.cs' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if($null -ne $bridge){
+            $source=[IO.File]::ReadAllText($bridge.FullName)
+            $old='_harmony?.UnpatchSelf();'
+            $new='if (_harmony != null) _harmony.UnpatchAll(_harmony.Id);'
+            if(!$source.Contains($old)){throw 'Expected Harmony UnpatchSelf rollback call was not found'}
+            $source=$source.Replace($old,$new)
+            [IO.File]::WriteAllText($bridge.FullName,$source,[Text.UTF8Encoding]::new($false))
+            $script:rollbackAdjusted=$true
+            Write-Host 'GA1116_HARMONY_ROLLBACK_COMPATIBILITY=APPLIED'
+        }
+    }
+    & $script:realDotnet @args
+}
+try{
+    & $buildScriptPath -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
+}finally{
+    Remove-Item Function:\global:dotnet -ErrorAction SilentlyContinue
+}
+if(!$script:rollbackAdjusted){throw 'Harmony rollback compatibility substitution was never applied'}
 Write-Host 'GA1116_COMPLETE_BUILD=SUCCESS'
