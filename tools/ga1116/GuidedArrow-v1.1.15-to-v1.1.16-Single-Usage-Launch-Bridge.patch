@@ -1,0 +1,153 @@
+diff --git a/Source/GuidedArrow.csproj b/Source/GuidedArrow.csproj
+index 67312c7..49d47dc 100644
+--- a/Source/GuidedArrow.csproj
++++ b/Source/GuidedArrow.csproj
+@@ -6,9 +6,9 @@
+     <AssemblyName>GuidedArrow</AssemblyName>
+     <RootNamespace>GuidedArrow</RootNamespace>
+     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+-    <Version>1.1.15</Version>
+-    <FileVersion>1.1.15.0</FileVersion>
+-    <AssemblyVersion>1.1.15.0</AssemblyVersion>
++    <Version>1.1.16</Version>
++    <FileVersion>1.1.16.0</FileVersion>
++    <AssemblyVersion>1.1.16.0</AssemblyVersion>
+     <Deterministic>true</Deterministic>
+     <DebugType>pdbonly</DebugType>
+     <Optimize>true</Optimize>
+diff --git a/Source/MissileDamageBridge.cs b/Source/MissileDamageBridge.cs
+index 67f5a41..b7c246b 100644
+--- a/Source/MissileDamageBridge.cs
++++ b/Source/MissileDamageBridge.cs
+@@ -11,8 +11,9 @@ using TaleWorlds.MountAndBlade;
+ namespace GuidedArrow
+ {
+     /// <summary>
+-    /// Captures the complete resolved native launch packet passed to Mission.AddMissileAux and
+-    /// reuses it only for Guided Arrow's synthetic missiles. MissionWeapon alone is insufficient:
++    /// Captures the complete resolved native launch packet passed to both Mission.AddMissileAux
++    /// and Mission.AddMissileSingleUsageAux, then reuses it only for Guided Arrow's synthetic
++    /// missiles. MissionWeapon alone is insufficient:
+     /// AddCustomMissile otherwise reconstructs a zero-bonus projectile and drops the bow/perk/ability
+     /// contribution that was resolved when the original shot was fired.
+     /// </summary>
+@@ -118,11 +119,14 @@ namespace GuidedArrow
+ 
+             try
+             {
+-                MethodInfo target = typeof(Mission)
+-                    .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+-                    .FirstOrDefault(IsSupportedAddMissileAux);
+-                if (target == null)
++                MethodInfo[] missionMethods = typeof(Mission)
++                    .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic);
++                MethodInfo multiUsageTarget = missionMethods.FirstOrDefault(IsSupportedAddMissileAux);
++                MethodInfo singleUsageTarget = missionMethods.FirstOrDefault(IsSupportedAddMissileSingleUsageAux);
++                if (multiUsageTarget == null)
+                     throw new MissingMethodException(typeof(Mission).FullName, "AddMissileAux");
++                if (singleUsageTarget == null)
++                    throw new MissingMethodException(typeof(Mission).FullName, "AddMissileSingleUsageAux");
+ 
+                 _harmony = new Harmony("guidedarrow.resolvedmissiledamage");
+                 MethodInfo prefix = typeof(MissileDamageBridge).GetMethod(
+@@ -131,10 +135,10 @@ namespace GuidedArrow
+                 MethodInfo postfix = typeof(MissileDamageBridge).GetMethod(
+                     nameof(AddMissileAuxPostfix),
+                     BindingFlags.Static | BindingFlags.NonPublic);
+-                _harmony.Patch(
+-                    target,
+-                    prefix: new HarmonyMethod(prefix),
+-                    postfix: new HarmonyMethod(postfix));
++                HarmonyMethod prefixPatch = new HarmonyMethod(prefix);
++                HarmonyMethod postfixPatch = new HarmonyMethod(postfix);
++                _harmony.Patch(multiUsageTarget, prefix: prefixPatch, postfix: postfixPatch);
++                _harmony.Patch(singleUsageTarget, prefix: prefixPatch, postfix: postfixPatch);
+                 _installed = true;
+             }
+             catch (Exception ex)
+@@ -149,10 +153,24 @@ namespace GuidedArrow
+             if (method == null || method.Name != "AddMissileAux" || method.ReturnType != typeof(int))
+                 return false;
+             ParameterInfo[] parameters = method.GetParameters();
+-            return parameters.Length >= 15 &&
++            return HasSupportedCommonLaunchSignature(parameters) &&
++                parameters[4].ParameterType == typeof(WeaponStatsData[]);
++        }
++
++        private static bool IsSupportedAddMissileSingleUsageAux(MethodInfo method)
++        {
++            if (method == null || method.Name != "AddMissileSingleUsageAux" || method.ReturnType != typeof(int))
++                return false;
++            ParameterInfo[] parameters = method.GetParameters();
++            return HasSupportedCommonLaunchSignature(parameters) &&
++                parameters[4].ParameterType == typeof(WeaponStatsData).MakeByRefType();
++        }
++
++        private static bool HasSupportedCommonLaunchSignature(ParameterInfo[] parameters)
++        {
++            return parameters != null && parameters.Length >= 15 &&
+                 parameters[2].ParameterType == typeof(Agent) &&
+                 parameters[3].ParameterType == typeof(WeaponData).MakeByRefType() &&
+-                parameters[4].ParameterType == typeof(WeaponStatsData[]) &&
+                 parameters[5].ParameterType == typeof(float) &&
+                 parameters[9].ParameterType == typeof(float);
+         }
+@@ -186,10 +204,18 @@ namespace GuidedArrow
+                 return;
+ 
+             ResolvedLaunchData data = request.Data;
++            if (data.WeaponStatsData == null || data.WeaponStatsData.Length == 0)
++                return;
++
++            object nativeStatsArgument = __args[4];
++            if (nativeStatsArgument is WeaponStatsData[])
++                __args[4] = (WeaponStatsData[])data.WeaponStatsData.Clone();
++            else if (nativeStatsArgument is WeaponStatsData)
++                __args[4] = data.WeaponStatsData[0];
++            else
++                return;
++
+             __args[3] = data.WeaponData;
+-            __args[4] = data.WeaponStatsData != null
+-                ? (WeaponStatsData[])data.WeaponStatsData.Clone()
+-                : null;
+             __args[5] = data.DamageBonus;
+             __args[9] = data.BaseSpeed;
+             request.Consumed = true;
+@@ -208,7 +234,13 @@ namespace GuidedArrow
+             {
+                 Agent shooter = __state?.Shooter ?? (__args[2] as Agent);
+                 WeaponData weaponData = (WeaponData)__args[3];
+-                WeaponStatsData[] weaponStatsData = __args[4] as WeaponStatsData[];
++                WeaponStatsData[] weaponStatsData;
++                if (__args[4] is WeaponStatsData[] multiUsageStats)
++                    weaponStatsData = (WeaponStatsData[])multiUsageStats.Clone();
++                else if (__args[4] is WeaponStatsData singleUsageStats)
++                    weaponStatsData = new[] { singleUsageStats };
++                else
++                    return;
+                 float damageBonus = Convert.ToSingle(__args[5]);
+                 float baseSpeed = Convert.ToSingle(__args[9]);
+                 if (weaponStatsData == null || weaponStatsData.Length == 0 ||
+@@ -220,7 +252,7 @@ namespace GuidedArrow
+                 ResolvedLaunchData snapshot = new ResolvedLaunchData
+                 {
+                     WeaponData = weaponData,
+-                    WeaponStatsData = (WeaponStatsData[])weaponStatsData.Clone(),
++                    WeaponStatsData = weaponStatsData,
+                     DamageBonus = damageBonus,
+                     BaseSpeed = baseSpeed,
+                     Shooter = shooter
+diff --git a/SubModule.xml b/SubModule.xml
+index bcebf25..54276ed 100644
+--- a/SubModule.xml
++++ b/SubModule.xml
+@@ -2,7 +2,7 @@
+ <Module>
+   <Name value="Guided Arrow" />
+   <Id value="GuidedArrow" />
+-  <Version value="v1.1.15" />
++  <Version value="v1.1.16" />
+   <DefaultModule value="false" />
+   <SingleplayerModule value="true" />
+   <MultiplayerModule value="false" />
