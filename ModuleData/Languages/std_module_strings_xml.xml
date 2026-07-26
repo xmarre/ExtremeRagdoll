@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<base xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../../Languages.xsd">
+  <tags>
+    <tag language="English" />
+  </tags>
+  <strings>
+    <string id="ER_DisplayName" text="Extreme Ragdoll" />
+    <string id="ER_Group_MainControls" text="Main Controls" />
+    <string id="ER_Group_OnDamageMode" text="On Damage Mode" />
+    <string id="ER_Group_Advanced" text="Advanced" />
+    <string id="ER_Group_Diagnostics" text="Diagnostics" />
+    <string id="ER_OverallStrength_Name" text="Overall Effect Strength" />
+    <string id="ER_OverallStrength_Hint" text="Master multiplier used to derive the amplified native killing-blow impulse. Default12. Enter any non-negative finite number." />
+    <string id="ER_MinimumForce_Name" text="Minimum Death Force" />
+    <string id="ER_MinimumForce_Hint" text="Guaranteed requested-force floor used before conversion to the native killing-blow impulse. Default 150000." />
+    <string id="ER_UpwardLift_Name" text="Upward Lift" />
+    <string id="ER_UpwardLift_Hint" text="Uncapped upward component added to the launch direction. Default 0.25." />
+    <string id="ER_DamageInfluence_Name" text="Damage Influence" />
+    <string id="ER_DamageInfluence_Hint" text="Uncapped scaling from killing-blow damage. Set 0 for uniform launches. Default 1.25." />
+    <string id="ER_ImpactSpin_Name" text="Impact Spin" />
+    <string id="ER_ImpactSpin_Hint" text="Adds a lateral bias to the single native death-impulse direction. Default 0." />
+    <string id="ER_RagdollHandoffDelay_Name" text="Death Animation Time Before Ragdoll (seconds)" />
+    <string id="ER_RagdollHandoffDelay_Hint" text="Original death-animation time before accelerated ragdoll handoff. The launch impulse is already part of the native death event. Default 0.005 seconds." />
+    <string id="ER_MomentumCarryover_Name" text="Movement Momentum Carryover" />
+    <string id="ER_MomentumCarryover_Hint" text="Blends the victim&#x27;s movement at the instant of death into the native launch direction. Default 1.0." />
+    <string id="ER_MaximumForce_Name" text="Maximum Death Force (0 = Unlimited)" />
+    <string id="ER_MaximumForce_Hint" text="Optional user ceiling. Leave 0 for no mod-imposed force cap." />
+    <string id="ER_MountCollisionKillStrength_Name" text="Mount Collision Kill Strength" />
+    <string id="ER_MountCollisionKillStrength_Hint" text="Extra ExtremeRagdoll contribution for lethal horse-body collisions after Bannerlord&#x27;s native charge/shove impulse. 0 = native Bannerlord mount shove only; 1 = full normal fallback contribution. Default 0.10 based on runtime testing: keeps mount kills enhanced while avoiding the cloth-separation threshold seen with larger stacked post-ragdoll translation." />
+    <string id="ER_PushOnDamage_Name" text="Enable Push On Damage" />
+    <string id="ER_PushOnDamage_Hint" text="Applies a visible native KnockBack reaction plus a short directional acceleration burst to surviving agents whenever they take damage. Disabled by default. Agents already in a natural ragdoll use the same mapped central-body ragdoll-force route." />
+    <string id="ER_DamagePushStrength_Name" text="Damage Push Strength" />
+    <string id="ER_DamagePushStrength_Hint" text="Uncapped master multiplier for nonlethal damage pushes. Default 1.0." />
+    <string id="ER_DamagePushBase_Name" text="Base Damage Push" />
+    <string id="ER_DamagePushBase_Hint" text="Base acceleration applied on every damaging nonlethal hit. Default 1.5. Enter any non-negative finite number." />
+    <string id="ER_DamagePushPerDamage_Name" text="Additional Push Per Damage" />
+    <string id="ER_DamagePushPerDamage_Hint" text="Damage scaling. This amount is added for every point of damage before the master multiplier. Default 0.04. Set 0 for fixed-strength pushes." />
+    <string id="ER_DamagePushUpwardLift_Name" text="Damage Push Upward Lift" />
+    <string id="ER_DamagePushUpwardLift_Hint" text="Adds an upward component to nonlethal pushes. Default 0.12." />
+    <string id="ER_KnockdownOnDamage_Name" text="Enable Knockdown Below Health Threshold" />
+    <string id="ER_KnockdownOnDamage_Hint" text="Replaces the normal KnockBack reaction with Bannerlord&#x27;s native KnockDown reaction after a surviving hit leaves the agent at or below the configured health percentage. Enabled by default." />
+    <string id="ER_KnockdownHealthThreshold_Name" text="Knockdown Health Threshold (%)" />
+    <string id="ER_KnockdownHealthThreshold_Hint" text="Post-hit health percentage at or below which the native knockdown is requested. Default 50. Values above 100 make every surviving hit eligible; 0 effectively disables surviving-agent knockdowns." />
+    <string id="ER_RequireThresholdForDamagePush_Name" text="Only Push When Knockdown Threshold Is Met" />
+    <string id="ER_RequireThresholdForDamagePush_Hint" text="When enabled, the normal on-damage push is withheld unless the actual post-hit health is at or below the knockdown threshold. This creates a combined push-and-knockdown trigger instead of pushing on every hit." />
+    <string id="ER_PulseCount_Name" text="Force Pulse Count" />
+    <string id="ER_PulseCount_Hint" text="Legacy pulse count folded into the strength of the single native killing-blow impulse for normal deaths. No post-death translation pulses are applied on the native path. Default 2." />
+    <string id="ER_PulseInterval_Name" text="Pulse Interval (seconds)" />
+    <string id="ER_PulseInterval_Hint" text="Retained for backward-compatible settings. Normal death launches now use one native death impulse, so this no longer spaces post-death translation pulses." />
+    <string id="ER_PulseDecay_Name" text="Pulse Decay" />
+    <string id="ER_PulseDecay_Hint" text="Multiplier used when folding the configured legacy pulse sequence into the equivalent single native killing-blow impulse. Default 0.85." />
+    <string id="ER_EngineImpulseInfluence_Name" text="Engine Killing-Blow Direction Influence" />
+    <string id="ER_EngineImpulseInfluence_Hint" text="Retained for configuration compatibility. The normal death launch now originates directly from the killing Blow inside Bannerlord&#x27;s native death pipeline, so no separate post-death KillingBlow-direction blend is required." />
+    <string id="ER_MaxLinearVelocity_Name" text="Linear Velocity Limit (0 = Disabled)" />
+    <string id="ER_MaxLinearVelocity_Hint" text="Optional engine velocity limit. Leave 0 for no mod-imposed limit." />
+    <string id="ER_MaxAngularVelocity_Name" text="Angular Velocity Limit (0 = Disabled)" />
+    <string id="ER_MaxAngularVelocity_Hint" text="Optional engine spin limit. Leave 0 for no mod-imposed limit." />
+    <string id="ER_DeliveredForceCeiling_Name" text="Delivered Force Ceiling Per Pulse (0 = Unlimited)" />
+    <string id="ER_DeliveredForceCeiling_Hint" text="Legacy per-pulse delivery ceiling used when folding the configured pulse sequence into one native killing-blow impulse. Default 60000. Set 0 for no equivalent-delivery ceiling." />
+    <string id="ER_DebugLogging_Name" text="Debug Logging" />
+    <string id="ER_DebugLogging_Hint" text="Writes hit, kill, ragdoll transition and pulse events to ExtremeRagdoll.Safe.log." />
+  </strings>
+</base>
