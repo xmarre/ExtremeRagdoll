@@ -11,23 +11,53 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '3.1.426'
+          show-progress: false
 
-      - name: Verify and extract reviewed payload
+      - name: Reconstruct payload diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force diagnostic | Out-Null
+          $parts = Get-ChildItem 'v1310_payload2/p*.txt' | Sort-Object Name
+          "count=$($parts.Count)" | Set-Content diagnostic/report.txt
+          $builder = New-Object Text.StringBuilder
+          foreach ($part in $parts) {
+            $raw = [IO.File]::ReadAllText($part.FullName)
+            $trimmed = $raw.Trim()
+            "$($part.Name) raw=$($raw.Length) trimmed=$($trimmed.Length) file_sha=$((Get-FileHash $part.FullName -Algorithm SHA256).Hash.ToLowerInvariant())" | Add-Content diagnostic/report.txt
+            [void]$builder.Append($trimmed)
+          }
+          try {
+            $b64 = $builder.ToString()
+            "base64_chars=$($b64.Length)" | Add-Content diagnostic/report.txt
+            [IO.File]::WriteAllBytes('payload.zip', [Convert]::FromBase64String($b64))
+            $zipHash = (Get-FileHash 'payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+            "zip_bytes=$((Get-Item payload.zip).Length) zip_sha=$zipHash" | Add-Content diagnostic/report.txt
+            Expand-Archive 'payload.zip' 'payload' -Force
+            "extracted=true" | Add-Content diagnostic/report.txt
+          } catch {
+            "error=$($_.Exception.ToString())" | Add-Content diagnostic/report.txt
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1310-transport-diagnostic
+          path: diagnostic/*
+          if-no-files-found: error
+
+      - name: Verify exact reviewed payload
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $parts = Get-ChildItem 'v1310_payload2/p*.txt' | Sort-Object Name
-          if ($parts.Count -ne 6) { throw "Expected 6 chunks, found $($parts.Count)." }
-          $builder = New-Object Text.StringBuilder
-          foreach ($part in $parts) { [void]$builder.Append([IO.File]::ReadAllText($part.FullName).Trim()) }
-          $b64 = $builder.ToString()
-          [IO.File]::WriteAllBytes('payload.zip', [Convert]::FromBase64String($b64))
+          if (-not (Test-Path payload.zip)) { throw 'Payload ZIP was not reconstructed.' }
           $zipHash = (Get-FileHash 'payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($zipHash -ne '6cb3e11f3afce16a2a3db16c0f38041e847917553a65e133a8e4ec5b0ea39b57') { throw "ZIP mismatch: $zipHash" }
-          Expand-Archive 'payload.zip' 'payload' -Force
+          if (-not (Test-Path 'payload/v1310_payload_stage/Source/SafeSubModule.cs')) { throw 'Reviewed source was not extracted.' }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '3.1.426'
 
       - name: Compile, validate, and package
         shell: pwsh
