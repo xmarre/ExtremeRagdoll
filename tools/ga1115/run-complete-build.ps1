@@ -20,7 +20,7 @@ assert "private sealed class RecentLaunch" in bridge
 assert "public readonly List<RecentLaunch> Recent" in bridge
 assert "while (state.Recent.Count > 64)" in bridge
 assert "if (source.ResolvedLaunchData == null)" in behavior
-assert "Standalone splitting is waiting for the original resolved launch packet" in behavior
+assert "Standalone split is waiting for the original shot's resolved native damage packet" in behavior
 
 packet_guard = behavior.index("if (source.ResolvedLaunchData == null)")
 spawn_commit = behavior.index("_standaloneSplitSpawned = true;", packet_guard)
@@ -55,11 +55,11 @@ print("RESOLVED_DAMAGE_PRESERVATION=RETAINED")
 print("RECENT_LAUNCH_HISTORY_CAP=64")
 '@
 Write-Utf8NoBom `$test `$inlineTest
-Assert-Hash `$test '87d63465f21be3bc581a807ed00b6de5e28cd4eea4234d625026d9a0740471db' 'v1.1.15 test'
+Assert-Hash `$test 'ebb8e51ae7281562be44ca8d5e55013cd01f31b1803fc513057cdce13f081ef8' 'v1.1.15 test'
 "@
 if(!$text.Contains($needle)){throw 'Unable to replace v1.1.15 external test decoder'}
 $text=$text.Replace($needle,$replacement)
-$text=$text.Replace('TEST_SHA256=a35c17e83c7c71b493d74b2a7d0848d1ecfcf41c56984e74bcef8905503dca70','TEST_SHA256=87d63465f21be3bc581a807ed00b6de5e28cd4eea4234d625026d9a0740471db')
+$text=$text.Replace('TEST_SHA256=a35c17e83c7c71b493d74b2a7d0848d1ecfcf41c56984e74bcef8905503dca70','TEST_SHA256=ebb8e51ae7281562be44ca8d5e55013cd01f31b1803fc513057cdce13f081ef8')
 [IO.File]::WriteAllText($runtimeBuild,$text,[Text.UTF8Encoding]::new($false))
 & $runtimeBuild -BaseOutputRoot "$env:RUNNER_TEMP\ga1114-output" -OutputRoot "$env:RUNNER_TEMP\ga1115-output"
 Write-Host 'GA1115_COMPLETE_BUILD=SUCCESS'
