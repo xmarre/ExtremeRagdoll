@@ -1,0 +1,65 @@
+name: Temporary Extreme Ragdoll v1.3.10 Transport Diagnostic
+
+on:
+  push:
+    branches: ['tmp/extremeragdoll-v1310-*']
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Reconstruct and report
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force diagnostic | Out-Null
+          $paths = @(
+            'v1310_payload3/p00.txt',
+            'v1310_payload3/p01_00.txt',
+            'v1310_payload3/p01_01.txt',
+            'v1310_payload3/p01_02_00.txt',
+            'v1310_payload3/p01_02_01.txt',
+            'v1310_payload3/p01_02_02.txt',
+            'v1310_payload3/p01_02_03.txt',
+            'v1310_payload3/p01_03.txt',
+            'v1310_payload2/p01.txt',
+            'v1310_payload2/p02.txt',
+            'v1310_payload3/p06.txt',
+            'v1310_payload3/p07.txt',
+            'v1310_payload2/p04.txt',
+            'v1310_payload3/p10_00.txt',
+            'v1310_payload3/p10_01.txt',
+            'v1310_payload3/p10_02.txt'
+          )
+          $builder = New-Object Text.StringBuilder
+          foreach ($path in $paths) {
+            if (-not (Test-Path $path)) {
+              "MISSING $path" | Add-Content diagnostic/report.txt
+              continue
+            }
+            $raw = [IO.File]::ReadAllText($path)
+            $trimmed = $raw.Trim()
+            $hash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$path raw=$($raw.Length) trimmed=$($trimmed.Length) sha256=$hash" | Add-Content diagnostic/report.txt
+            [void]$builder.Append($trimmed)
+          }
+          try {
+            $b64 = $builder.ToString()
+            "base64_length=$($b64.Length)" | Add-Content diagnostic/report.txt
+            [IO.File]::WriteAllBytes('diagnostic/payload.zip', [Convert]::FromBase64String($b64))
+            $zipHash = (Get-FileHash 'diagnostic/payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
+            "zip_bytes=$((Get-Item diagnostic/payload.zip).Length) zip_sha256=$zipHash" | Add-Content diagnostic/report.txt
+            Expand-Archive 'diagnostic/payload.zip' 'diagnostic/extracted' -Force
+            "extracted=true" | Add-Content diagnostic/report.txt
+          } catch {
+            "error=$($_.Exception.ToString())" | Add-Content diagnostic/report.txt
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v1310-transport-diagnostic-2
+          path: diagnostic/*
+          if-no-files-found: error
