@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/clean-v1.3.10-source
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
@@ -16,6 +19,7 @@ jobs:
       - name: Check out bootstrap branch
         uses: actions/checkout@v4
         with:
+          ref: agent/clean-v1.3.10-source
           fetch-depth: 0
 
       - name: Install .NET Core SDK 3.1
