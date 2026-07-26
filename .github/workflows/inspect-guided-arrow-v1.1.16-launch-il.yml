@@ -1,0 +1,48 @@
+name: Inspect Guided Arrow v1.1.16 Launch IL
+
+on:
+  pull_request:
+    branches: [ codex/ga1115-release-base ]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-launch-il:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Inspect launch IL
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $root=Join-Path $env:RUNNER_TEMP 'ga1116-il'
+          New-Item -ItemType Directory -Path $root -Force|Out-Null
+          Copy-Item 'tools/ga1116/InspectLaunchIL.cs' (Join-Path $root 'Program.cs')
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net8.0</TargetFramework>
+              <ImplicitUsings>disable</ImplicitUsings>
+              <Nullable>disable</Nullable>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+              <PackageReference Include="Bannerlord.ReferenceAssemblies.Core" Version="1.3.15.110062" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content -LiteralPath (Join-Path $root 'LaunchInspect.csproj') -Encoding utf8
+          dotnet restore (Join-Path $root 'LaunchInspect.csproj') --nologo
+          dotnet run --project (Join-Path $root 'LaunchInspect.csproj') -c Release --no-restore 2>&1 | Tee-Object -FilePath (Join-Path $root 'LAUNCH_IL.txt')
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.16-launch-il
+          path: ${{ runner.temp }}\ga1116-il\LAUNCH_IL.txt
+          if-no-files-found: error
+          retention-days: 7
