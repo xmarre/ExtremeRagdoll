@@ -14,7 +14,7 @@ $clean=[Text.RegularExpressions.Regex]::Replace([IO.File]::ReadAllText($encoded)
 $bytes=[Convert]::FromBase64String($clean)
 $zip=Join-Path $env:RUNNER_TEMP 'ga1117-runtime-payload.zip'
 [IO.File]::WriteAllBytes($zip,$bytes)
-Assert-Hash $zip '808be75420bae2df9d37fe2b336bdbbe77f39869940f436d2c363ebf09c78bd1' 'v1.1.17 runtime payload zip'
+Assert-Hash $zip '0b0a231aea1a7a97729fb042eb6ef64b0b649a24fbb5ddb797b8dd60e802d2d6' 'v1.1.17 runtime payload zip'
 [IO.Compression.ZipFile]::ExtractToDirectory($zip,$payloadRoot,$true)
 Assert-Hash (Join-Path $payloadRoot 'GuidedArrow-v1.1.16-to-v1.1.17-Collision-Entity.patch') '50da8631284c3de58a0538f5fbe4b9192e064efa506c1f05a0f583f0bfe72dce' 'v1.1.17 patch'
 Assert-Hash (Join-Path $payloadRoot 'InspectMissilePatchContract.cs') 'f6685d1c0a2565ad2eb7290f784c3c496d480040e0d3e8e65668e59d8b07290b' 'v1.1.17 inspector'
