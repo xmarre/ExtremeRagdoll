@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/clean-v1.3.10-source
+  pull_request:
+    branches:
+      - master
 
 jobs:
   prepare:
@@ -13,6 +16,7 @@ jobs:
         with:
           fetch-depth: 1
           show-progress: false
+          ref: ${{ github.head_ref || github.ref_name }}
       - name: Reconstruct verified source
         shell: pwsh
         run: |
