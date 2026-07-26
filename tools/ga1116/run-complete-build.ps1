@@ -14,119 +14,12 @@ $clean=[Text.RegularExpressions.Regex]::Replace([IO.File]::ReadAllText($encoded)
 $bytes=[Convert]::FromBase64String($clean)
 $zip=Join-Path $env:RUNNER_TEMP 'ga1116-runtime-payload.zip'
 [IO.File]::WriteAllBytes($zip,$bytes)
-Assert-Hash $zip '7763262fba960c5ce41fc959931273002aa8bebe1a4b7e2c505a8888e5f4ed04' 'v1.1.16 runtime payload zip'
+Assert-Hash $zip '959b897af624f3f8928baf612f378571fd2e5a7c4b01c6aa9dc0230444dc4cfa' 'v1.1.16 runtime payload zip'
 [IO.Compression.ZipFile]::ExtractToDirectory($zip,$payloadRoot,$true)
-Assert-Hash (Join-Path $payloadRoot 'GuidedArrow-v1.1.15-to-v1.1.16-Single-Usage-Capture.patch') '2d014481fdae2ce5b8a02d1fb13ab6139fa2bd75ec970aa66af4f730c9d8909a' 'v1.1.16 patch'
-Assert-Hash (Join-Path $payloadRoot 'InspectMissileCallGraph.cs') '880af9b8bc15c378364c9866ec262b668e802807374cbe65c470e2185a3b0f04' 'v1.1.16 original inspector'
-Assert-Hash (Join-Path $payloadRoot 'build-ga1116-single-usage-capture.ps1') '0c3c44ddf505f475d698431b9df6d471c5a5679bfa9593b7638c40c2989fa2db' 'v1.1.16 build script'
-Assert-Hash (Join-Path $payloadRoot 'test-ga1116-single-usage-capture.py') '921c77bc66353652cdf81dad4cd72e894fd446ef507c6fcb78031793607ac83e' 'v1.1.16 test'
-
-# Bannerlord.ReferenceAssemblies preserves the private signatures needed for compilation,
-# but its reference method bodies do not preserve the runtime call graph. Validate the
-# exact dual-target API here. The actual 1.3.15 runtime DLL was inspected separately and
-# both OnAgentShootMissile and AddCustomMissile conditionally call both aux methods.
-$signatureInspector=@'
-using System;
-using System.IO;
-using System.Linq;
-using Mono.Cecil;
-
-internal static class InspectMissileCallGraph
-{
-    private static bool IsByRefTo(TypeReference type, string fullName)
-    {
-        return type is ByReferenceType byRef && byRef.ElementType.FullName == fullName;
-    }
-
-    public static int Main(string[] args)
-    {
-        string assemblyPath = args.FirstOrDefault(a => a.EndsWith(".dll", StringComparison.OrdinalIgnoreCase));
-        string version = args.FirstOrDefault(a => !a.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) ?? "unknown";
-        if (string.IsNullOrWhiteSpace(assemblyPath) || !File.Exists(assemblyPath))
-            throw new InvalidOperationException("TaleWorlds.MountAndBlade.dll argument was not supplied");
-
-        using (var assembly = AssemblyDefinition.ReadAssembly(assemblyPath))
-        {
-            var mission = assembly.MainModule.Types.FirstOrDefault(t => t.FullName == "TaleWorlds.MountAndBlade.Mission");
-            if (mission == null)
-                throw new InvalidOperationException(version + ": Mission type missing");
-
-            var arrayAux = mission.Methods.SingleOrDefault(m =>
-                m.Name == "AddMissileAux" &&
-                m.Parameters.Count == 15 &&
-                m.Parameters[4].ParameterType is ArrayType arrayType &&
-                arrayType.ElementType.FullName == "TaleWorlds.MountAndBlade.WeaponStatsData");
-            if (arrayAux == null)
-                throw new InvalidOperationException(version + ": AddMissileAux array-stat signature missing");
-
-            var singleAux = mission.Methods.SingleOrDefault(m =>
-                m.Name == "AddMissileSingleUsageAux" &&
-                m.Parameters.Count == 15 &&
-                IsByRefTo(m.Parameters[4].ParameterType, "TaleWorlds.MountAndBlade.WeaponStatsData"));
-            if (singleAux == null)
-                throw new InvalidOperationException(version + ": AddMissileSingleUsageAux single-stat signature missing");
-
-            if (!IsByRefTo(arrayAux.Parameters[3].ParameterType, "TaleWorlds.MountAndBlade.WeaponData") ||
-                !IsByRefTo(singleAux.Parameters[3].ParameterType, "TaleWorlds.MountAndBlade.WeaponData"))
-                throw new InvalidOperationException(version + ": WeaponData by-ref contract changed");
-
-            if (!IsByRefTo(arrayAux.Parameters[14].ParameterType, "TaleWorlds.Engine.GameEntity") ||
-                !IsByRefTo(singleAux.Parameters[14].ParameterType, "TaleWorlds.Engine.GameEntity"))
-                throw new InvalidOperationException(version + ": GameEntity by-ref contract changed");
-
-            Console.WriteLine("VERSION=" + version);
-            Console.WriteLine("REFERENCE_BODY_MODE=SIGNATURE_ONLY");
-            Console.WriteLine("ADD_MISSILE_AUX_SIGNATURE=PASS");
-            Console.WriteLine("ADD_MISSILE_SINGLE_USAGE_AUX_SIGNATURE=PASS");
-            Console.WriteLine("DUAL_CAPTURE_TARGETS=PASS");
-        }
-        return 0;
-    }
-}
-'@
-$inspectorPath=Join-Path $payloadRoot 'InspectMissileCallGraph.cs'
-[IO.File]::WriteAllText($inspectorPath,$signatureInspector,[Text.UTF8Encoding]::new($false))
-Assert-Hash $inspectorPath 'ada7b436921e74a68bf7954b6492ac6b27e134f025bc37df32febaa72a28b3bd' 'v1.1.16 corrected signature inspector'
-
-# The extracted build script re-verifies the inspector before compiling it. Replace only
-# that expected inspector hash so the remaining source and release hash gates stay intact.
-$buildScriptPath=Join-Path $payloadRoot 'build-ga1116-single-usage-capture.ps1'
-$buildText=[IO.File]::ReadAllText($buildScriptPath)
-$oldInspectorHash='880af9b8bc15c378364c9866ec262b668e802807374cbe65c470e2185a3b0f04'
-$newInspectorHash='ada7b436921e74a68bf7954b6492ac6b27e134f025bc37df32febaa72a28b3bd'
-if(!$buildText.Contains($oldInspectorHash)){throw 'Expected original inspector hash was not found in v1.1.16 build script'}
-$buildText=$buildText.Replace($oldInspectorHash,$newInspectorHash)
-[IO.File]::WriteAllText($buildScriptPath,$buildText,[Text.UTF8Encoding]::new($false))
-
+Assert-Hash (Join-Path $payloadRoot 'GuidedArrow-v1.1.15-to-v1.1.16-Single-Usage-Capture.patch') '2b34735164cf0a706faf9da7e7057dfe70fc4a1caf22e4cc52f3b6cbf59e4d2b' 'v1.1.16 patch'
+Assert-Hash (Join-Path $payloadRoot 'InspectMissileCallGraph.cs') '3d54e93aae37f7078fef6983b4471dbe283568df01fbfc7ca38be8c01bbb26ef' 'v1.1.16 inspector'
+Assert-Hash (Join-Path $payloadRoot 'build-ga1116-single-usage-capture.ps1') '2db067cd08ab888848401943bdd89c1e340793da071cc9514fd4e198869c436c' 'v1.1.16 build script'
+Assert-Hash (Join-Path $payloadRoot 'test-ga1116-single-usage-capture.py') 'e419a685c2a08541f7bd2d5a7c4c3eb0b036bf41710cca23e5530abbdd637142' 'v1.1.16 test'
 & (Join-Path $repo 'tools/ga1115/run-complete-build.ps1')
-
-# Harmony 2.4.1 exposes UnpatchAll(id), not UnpatchSelf(). Perform this compatibility
-# substitution only after the v1.1.16 patch hash, final source hashes and regression tests
-# have been checked, immediately before the first v1.1.16 restore/build invocation.
-$global:GA1116RealDotnet=(Get-Command dotnet -CommandType Application).Source
-$global:GA1116RollbackAdjusted=$false
-function global:dotnet {
-    if(!$global:GA1116RollbackAdjusted){
-        $bridge=Get-ChildItem (Join-Path $env:RUNNER_TEMP 'ga1116-work') -Filter 'MissileDamageBridge.cs' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-        if($null -ne $bridge){
-            $source=[IO.File]::ReadAllText($bridge.FullName)
-            $old='_harmony?.UnpatchSelf();'
-            $new='if (_harmony != null) _harmony.UnpatchAll(_harmony.Id);'
-            if(!$source.Contains($old)){throw 'Expected Harmony UnpatchSelf rollback call was not found'}
-            $source=$source.Replace($old,$new)
-            [IO.File]::WriteAllText($bridge.FullName,$source,[Text.UTF8Encoding]::new($false))
-            $global:GA1116RollbackAdjusted=$true
-            Write-Host 'GA1116_HARMONY_ROLLBACK_COMPATIBILITY=APPLIED'
-        }
-    }
-    & $global:GA1116RealDotnet @args
-}
-try{
-    & $buildScriptPath -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
-}finally{
-    Remove-Item Function:\global:dotnet -ErrorAction SilentlyContinue
-}
-if(!$global:GA1116RollbackAdjusted){throw 'Harmony rollback compatibility substitution was never applied'}
-Remove-Variable GA1116RealDotnet -Scope Global -ErrorAction SilentlyContinue
-Remove-Variable GA1116RollbackAdjusted -Scope Global -ErrorAction SilentlyContinue
+& (Join-Path $payloadRoot 'build-ga1116-single-usage-capture.ps1') -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
 Write-Host 'GA1116_COMPLETE_BUILD=SUCCESS'
