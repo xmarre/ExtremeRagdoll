@@ -14,45 +14,44 @@ jobs:
         with:
           show-progress: false
 
-      - name: Reconstruct payload diagnostics
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          New-Item -ItemType Directory -Force diagnostic | Out-Null
-          $parts = Get-ChildItem 'v1310_payload2/p*.txt' | Sort-Object Name
-          "count=$($parts.Count)" | Set-Content diagnostic/report.txt
-          $builder = New-Object Text.StringBuilder
-          foreach ($part in $parts) {
-            $raw = [IO.File]::ReadAllText($part.FullName)
-            $trimmed = $raw.Trim()
-            "$($part.Name) raw=$($raw.Length) trimmed=$($trimmed.Length) file_sha=$((Get-FileHash $part.FullName -Algorithm SHA256).Hash.ToLowerInvariant())" | Add-Content diagnostic/report.txt
-            [void]$builder.Append($trimmed)
-          }
-          try {
-            $b64 = $builder.ToString()
-            "base64_chars=$($b64.Length)" | Add-Content diagnostic/report.txt
-            [IO.File]::WriteAllBytes('payload.zip', [Convert]::FromBase64String($b64))
-            $zipHash = (Get-FileHash 'payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
-            "zip_bytes=$((Get-Item payload.zip).Length) zip_sha=$zipHash" | Add-Content diagnostic/report.txt
-            Expand-Archive 'payload.zip' 'payload' -Force
-            "extracted=true" | Add-Content diagnostic/report.txt
-          } catch {
-            "error=$($_.Exception.ToString())" | Add-Content diagnostic/report.txt
-          }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: v1310-transport-diagnostic
-          path: diagnostic/*
-          if-no-files-found: error
-
-      - name: Verify exact reviewed payload
+      - name: Reconstruct and verify reviewed payload
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path payload.zip)) { throw 'Payload ZIP was not reconstructed.' }
+          $paths = @(
+            'v1310_payload3/p00.txt',
+            'v1310_payload3/p01.txt',
+            'v1310_payload2/p01.txt',
+            'v1310_payload2/p02.txt',
+            'v1310_payload3/p06.txt',
+            'v1310_payload3/p07.txt',
+            'v1310_payload2/p04.txt',
+            'v1310_payload3/p10.txt'
+          )
+          $expected = @(
+            '0d4f1c10be4ea985a9e37b81856b4338c4f9e47cca32a7f7e93f0fcf4e2985e1',
+            'c58eed534c69fe484a7ec396b230c52d03f24a87991b034753cc0282665f289f',
+            '462c12bf2608a88192400697acab44144fdd44ec453700b360c617270c39806d',
+            'deb71c364633ce877aaf7d135f2408c5cc954d8ce9fa731fa81fbf6c0e321047',
+            '5a95f674c043539d4a651cc7519b2e8c20b5f95b6d2223412ce01a1f296ce7b0',
+            '1361ebaf6ff300bb394d3c429e8a1bc50165316cf7cf92146d33c5b5d2939ea1',
+            '9ff774f5bbf5deed3d5ddc27081072d250129488da51b83e1f4283d228e69b1c',
+            '6b967c06335a7dfbec3eaa85c3072eb1726530af3627d30d5ce18b3663f93c06'
+          )
+          $builder = New-Object Text.StringBuilder
+          for ($i = 0; $i -lt $paths.Count; $i++) {
+            if (-not (Test-Path $paths[$i])) { throw "Missing carrier: $($paths[$i])" }
+            $actual = (Get-FileHash $paths[$i] -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "$($paths[$i])=$actual"
+            if ($actual -ne $expected[$i]) { throw "Carrier mismatch: $($paths[$i])" }
+            [void]$builder.Append([IO.File]::ReadAllText($paths[$i]).Trim())
+          }
+          $b64 = $builder.ToString()
+          if ($b64.Length -ne 84796) { throw "Unexpected Base64 length: $($b64.Length)" }
+          [IO.File]::WriteAllBytes('payload.zip', [Convert]::FromBase64String($b64))
           $zipHash = (Get-FileHash 'payload.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($zipHash -ne '6cb3e11f3afce16a2a3db16c0f38041e847917553a65e133a8e4ec5b0ea39b57') { throw "ZIP mismatch: $zipHash" }
+          Expand-Archive 'payload.zip' 'payload' -Force
           if (-not (Test-Path 'payload/v1310_payload_stage/Source/SafeSubModule.cs')) { throw 'Reviewed source was not extracted.' }
 
       - uses: actions/setup-dotnet@v4
