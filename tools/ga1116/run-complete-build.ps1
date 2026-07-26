@@ -84,8 +84,20 @@ internal static class InspectMissileCallGraph
     }
 }
 '@
-[IO.File]::WriteAllText((Join-Path $payloadRoot 'InspectMissileCallGraph.cs'),$signatureInspector,[Text.UTF8Encoding]::new($false))
+$inspectorPath=Join-Path $payloadRoot 'InspectMissileCallGraph.cs'
+[IO.File]::WriteAllText($inspectorPath,$signatureInspector,[Text.UTF8Encoding]::new($false))
+Assert-Hash $inspectorPath 'ada7b436921e74a68bf7954b6492ac6b27e134f025bc37df32febaa72a28b3bd' 'v1.1.16 corrected signature inspector'
+
+# The extracted build script re-verifies the inspector before compiling it. Replace only
+# that expected inspector hash so the remaining source and release hash gates stay intact.
+$buildScriptPath=Join-Path $payloadRoot 'build-ga1116-single-usage-capture.ps1'
+$buildText=[IO.File]::ReadAllText($buildScriptPath)
+$oldInspectorHash='880af9b8bc15c378364c9866ec262b668e802807374cbe65c470e2185a3b0f04'
+$newInspectorHash='ada7b436921e74a68bf7954b6492ac6b27e134f025bc37df32febaa72a28b3bd'
+if(!$buildText.Contains($oldInspectorHash)){throw 'Expected original inspector hash was not found in v1.1.16 build script'}
+$buildText=$buildText.Replace($oldInspectorHash,$newInspectorHash)
+[IO.File]::WriteAllText($buildScriptPath,$buildText,[Text.UTF8Encoding]::new($false))
 
 & (Join-Path $repo 'tools/ga1115/run-complete-build.ps1')
-& (Join-Path $payloadRoot 'build-ga1116-single-usage-capture.ps1') -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
+& $buildScriptPath -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
 Write-Host 'GA1116_COMPLETE_BUILD=SUCCESS'
