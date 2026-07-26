@@ -1,0 +1,62 @@
+name: Build Guided Arrow v1.1.15 Split Spawn Recovery
+
+on:
+  pull_request:
+    branches: [ codex/ga1114-release-base ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    outputs:
+      failure_message: ${{ steps.build.outputs.failure_message }}
+    steps:
+      - name: Checkout exact payload
+        uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Build and validate Guided Arrow v1.1.15
+        id: build
+        shell: pwsh
+        run: |
+          try {
+            & ./tools/ga1115/run-complete-build.ps1
+          }
+          catch {
+            $message=$_.Exception.Message.Replace("`r",' ').Replace("`n",' ')
+            "failure_message=$message" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+            throw
+          }
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.15-diagnostics
+          path: ${{ runner.temp }}\ga1115-output\diagnostics
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload compiled module
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.15-compiled
+          path: ${{ runner.temp }}\ga1115-output\artifact
+          if-no-files-found: error
+          retention-days: 7
+  concise-result:
+    needs: build-and-validate
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Report result
+        shell: pwsh
+        env:
+          RESULT: ${{ needs.build-and-validate.result }}
+          FAILURE_MESSAGE: ${{ needs.build-and-validate.outputs.failure_message }}
+        run: |
+          Write-Host "BUILD_RESULT=$env:RESULT"
+          Write-Host "FAILURE_MESSAGE=$env:FAILURE_MESSAGE"
+          if($env:RESULT -ne 'success'){exit 1}
