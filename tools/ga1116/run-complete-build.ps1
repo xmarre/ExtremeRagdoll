@@ -103,10 +103,10 @@ $buildText=$buildText.Replace($oldInspectorHash,$newInspectorHash)
 # Harmony 2.4.1 exposes UnpatchAll(id), not UnpatchSelf(). Perform this compatibility
 # substitution only after the v1.1.16 patch hash, final source hashes and regression tests
 # have been checked, immediately before the first v1.1.16 restore/build invocation.
-$script:realDotnet=(Get-Command dotnet -CommandType Application).Source
-$script:rollbackAdjusted=$false
+$global:GA1116RealDotnet=(Get-Command dotnet -CommandType Application).Source
+$global:GA1116RollbackAdjusted=$false
 function global:dotnet {
-    if(!$script:rollbackAdjusted){
+    if(!$global:GA1116RollbackAdjusted){
         $bridge=Get-ChildItem (Join-Path $env:RUNNER_TEMP 'ga1116-work') -Filter 'MissileDamageBridge.cs' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
         if($null -ne $bridge){
             $source=[IO.File]::ReadAllText($bridge.FullName)
@@ -115,16 +115,18 @@ function global:dotnet {
             if(!$source.Contains($old)){throw 'Expected Harmony UnpatchSelf rollback call was not found'}
             $source=$source.Replace($old,$new)
             [IO.File]::WriteAllText($bridge.FullName,$source,[Text.UTF8Encoding]::new($false))
-            $script:rollbackAdjusted=$true
+            $global:GA1116RollbackAdjusted=$true
             Write-Host 'GA1116_HARMONY_ROLLBACK_COMPATIBILITY=APPLIED'
         }
     }
-    & $script:realDotnet @args
+    & $global:GA1116RealDotnet @args
 }
 try{
     & $buildScriptPath -BaseOutputRoot "$env:RUNNER_TEMP\ga1115-output" -OutputRoot "$env:RUNNER_TEMP\ga1116-output"
 }finally{
     Remove-Item Function:\global:dotnet -ErrorAction SilentlyContinue
 }
-if(!$script:rollbackAdjusted){throw 'Harmony rollback compatibility substitution was never applied'}
+if(!$global:GA1116RollbackAdjusted){throw 'Harmony rollback compatibility substitution was never applied'}
+Remove-Variable GA1116RealDotnet -Scope Global -ErrorAction SilentlyContinue
+Remove-Variable GA1116RollbackAdjusted -Scope Global -ErrorAction SilentlyContinue
 Write-Host 'GA1116_COMPLETE_BUILD=SUCCESS'
