@@ -54,11 +54,11 @@ print("RESOLVED_DAMAGE_PRESERVATION=RETAINED")
 print("RECENT_LAUNCH_HISTORY_CAP=64")
 '@
 Write-Utf8NoBom `$test `$inlineTest
-Assert-Hash `$test '48c46c03af9229822f84b6f9080a69be1b73d3dce66c7802f1f8b86fc452310c' 'v1.1.15 test'
+Assert-Hash `$test 'e0c264fc9cb63369c49823660c40584a3bb82ffcbeffe7e5ae2a0aa68ecc86fd' 'v1.1.15 test'
 "@
 if(!$text.Contains($needle)){throw 'Unable to replace v1.1.15 external test decoder'}
 $text=$text.Replace($needle,$replacement)
-$text=$text.Replace('TEST_SHA256=a35c17e83c7c71b493d74b2a7d0848d1ecfcf41c56984e74bcef8905503dca70','TEST_SHA256=48c46c03af9229822f84b6f9080a69be1b73d3dce66c7802f1f8b86fc452310c')
+$text=$text.Replace('TEST_SHA256=a35c17e83c7c71b493d74b2a7d0848d1ecfcf41c56984e74bcef8905503dca70','TEST_SHA256=e0c264fc9cb63369c49823660c40584a3bb82ffcbeffe7e5ae2a0aa68ecc86fd')
 [IO.File]::WriteAllText($runtimeBuild,$text,[Text.UTF8Encoding]::new($false))
 & $runtimeBuild -BaseOutputRoot "$env:RUNNER_TEMP\ga1114-output" -OutputRoot "$env:RUNNER_TEMP\ga1115-output"
 Write-Host 'GA1115_COMPLETE_BUILD=SUCCESS'
