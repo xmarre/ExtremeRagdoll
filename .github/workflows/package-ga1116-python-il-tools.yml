@@ -1,0 +1,27 @@
+name: Package Guided Arrow Python IL Tools
+
+on:
+  pull_request:
+    branches: [ codex/ga1115-split-spawn-recovery ]
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download pinned Python IL tooling
+        run: |
+          mkdir wheels
+          python -m pip download --only-binary=:all: --dest wheels \
+            dnfile==0.18.0 pefile==2024.8.26 dncil==1.0.2
+          sha256sum wheels/* | tee wheels/SHA256SUMS.txt
+      - name: Upload tooling
+        uses: actions/upload-artifact@v4
+        with:
+          name: GuidedArrow-v1.1.16-python-il-tools
+          path: wheels
+          if-no-files-found: error
+          retention-days: 1
