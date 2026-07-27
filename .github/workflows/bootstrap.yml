@@ -27,12 +27,19 @@ jobs:
         with:
           dotnet-version: 3.1.426
 
-      - name: Extract clean source payload
+      - name: Reconstruct and extract clean source payload
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $zip = Join-Path $env:GITHUB_WORKSPACE 'bootstrap/source.zip'
-          if (-not (Test-Path -LiteralPath $zip)) { throw "Missing bootstrap payload: $zip" }
+          $chunkDir = Join-Path $env:GITHUB_WORKSPACE 'bootstrap/chunks'
+          $chunks = Get-ChildItem -LiteralPath $chunkDir -File -Filter 'chunk-*' | Sort-Object Name
+          if ($chunks.Count -ne 11) { throw "Expected 11 payload chunks, found $($chunks.Count)." }
+          $encoded = [string]::Concat(($chunks | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }))
+          $zip = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean.zip'
+          [System.IO.File]::WriteAllBytes($zip, [Convert]::FromBase64String($encoded))
+          $actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expectedHash = '71992d2b6cbb87767b948d0d5840395c03190cfdf3f1baef365b3f6c658935f9'
+          if ($actualHash -ne $expectedHash) { throw "Payload SHA-256 mismatch: $actualHash" }
           $stage = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean'
           if (Test-Path -LiteralPath $stage) { Remove-Item $stage -Recurse -Force }
           Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
