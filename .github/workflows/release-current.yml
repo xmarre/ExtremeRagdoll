@@ -92,6 +92,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollReleaseBuild'
           .\Source\Build\build.ps1 -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
 
           $builtMainPath = Join-Path $out 'bin/ExtremeRagdoll.dll'
           $builtHelperPath = Join-Path $out 'bin/ExtremeRagdoll.ClothSync.dll'
@@ -198,6 +199,7 @@ jobs:
           }
 
           $existingTag = git ls-remote --tags origin "refs/tags/$($env:TAG_NAME)"
+          if ($LASTEXITCODE -ne 0) { throw "git ls-remote failed with exit code $LASTEXITCODE." }
           if ($existingTag) {
             throw "Tag $($env:TAG_NAME) already exists without a release; refusing to move or reuse it automatically."
           }
