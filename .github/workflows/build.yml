@@ -79,11 +79,11 @@ jobs:
           Copy-Item ".\SubModule.xml" $stage
           Copy-Item ".\ModuleData" $stage -Recurse
           Copy-Item ".\bin" $stage -Recurse
-          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.11.zip" -Force
+          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.12.zip" -Force
 
       - name: Upload module artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.11
-          path: ExtremeRagdoll-v1.3.11.zip
+          name: ExtremeRagdoll-v1.3.12
+          path: ExtremeRagdoll-v1.3.12.zip
           if-no-files-found: error

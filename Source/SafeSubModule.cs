@@ -2240,10 +2240,15 @@ namespace ExtremeRagdoll.SafeRuntime
             string capturedSource,
             out string source)
         {
-            Vec3 direction = blowDirection;
+            Vec3 capturedImpact = IsFinite(blowDirection) ? blowDirection : Vec3.Zero;
+            Vec3 direction = capturedImpact;
             source = IsUsableVector(direction)
                 ? (string.IsNullOrEmpty(capturedSource) ? "capturedImpact" : capturedSource)
                 : "unknown";
+
+            Vec3 awayFromAffector;
+            bool hasAwayFromAffector = TryGetAwayFromAffectorDirection(
+                affected, affector, out awayFromAffector);
 
             if (hasEngineImpulse && IsUsableVector(engineImpulse))
             {
@@ -2251,8 +2256,20 @@ namespace ExtremeRagdoll.SafeRuntime
                 float influence = SafeSettings.EngineImpulseInfluence;
                 if (IsUsableVector(direction))
                 {
-                    direction = direction.NormalizedCopy() + engineDirection * influence;
-                    source = "capturedImpact+KillingBlow";
+                    Vec3 capturedDirection = direction.NormalizedCopy();
+                    if (IsOpposingDirection(capturedDirection, engineDirection))
+                    {
+                        // KillingBlow.RagdollImpulseAmount can be reported with the opposite sign,
+                        // especially during the first corpse initialization. The exact hit direction
+                        // is authoritative; an opposing engine vector must never cancel or reverse it.
+                        direction = capturedDirection;
+                        source += "+rejectedOpposingKillingBlow";
+                    }
+                    else
+                    {
+                        direction = capturedDirection + engineDirection * influence;
+                        source = "capturedImpact+KillingBlow";
+                    }
                 }
                 else
                 {
@@ -2261,17 +2278,10 @@ namespace ExtremeRagdoll.SafeRuntime
                 }
             }
 
-            if (!IsUsableVector(direction))
+            if (!IsUsableVector(direction) && hasAwayFromAffector)
             {
-                try
-                {
-                    if (affector != null && !ReferenceEquals(affector, affected))
-                    {
-                        direction = affected.Position - affector.Position;
-                        source = "awayFromAffector";
-                    }
-                }
-                catch { direction = Vec3.Zero; }
+                direction = awayFromAffector;
+                source = "awayFromAffector";
             }
 
             if (!IsUsableVector(direction) && IsUsableVector(victimMomentum))
@@ -2305,9 +2315,110 @@ namespace ExtremeRagdoll.SafeRuntime
             }
 
             direction.z += SafeSettings.UpwardLift;
+            if (hasAwayFromAffector)
+            {
+                direction = EnforceAwayFromAffectorInvariant(
+                    direction, capturedImpact, awayFromAffector, ref source);
+            }
+
             if (!IsUsableVector(direction))
                 return new Vec3(0f, 1f, 0.25f).NormalizedCopy();
             return direction.NormalizedCopy();
+        }
+
+        private static bool TryGetAwayFromAffectorDirection(
+            Agent affected,
+            Agent affector,
+            out Vec3 awayFromAffector)
+        {
+            awayFromAffector = Vec3.Zero;
+            if (affected == null || affector == null || ReferenceEquals(affected, affector))
+                return false;
+
+            try
+            {
+                awayFromAffector = affected.Position - affector.Position;
+                awayFromAffector.z = 0f;
+            }
+            catch
+            {
+                awayFromAffector = Vec3.Zero;
+                return false;
+            }
+
+            if (!IsUsableVector(awayFromAffector))
+                return false;
+            awayFromAffector = awayFromAffector.NormalizedCopy();
+            return true;
+        }
+
+        private static bool IsOpposingDirection(Vec3 left, Vec3 right)
+        {
+            if (!IsUsableVector(left) || !IsUsableVector(right))
+                return false;
+
+            Vec3 leftHorizontal = left;
+            Vec3 rightHorizontal = right;
+            leftHorizontal.z = 0f;
+            rightHorizontal.z = 0f;
+            if (IsUsableVector(leftHorizontal) && IsUsableVector(rightHorizontal))
+            {
+                leftHorizontal = leftHorizontal.NormalizedCopy();
+                rightHorizontal = rightHorizontal.NormalizedCopy();
+                return HorizontalDot(leftHorizontal, rightHorizontal) < 0f;
+            }
+
+            left = left.NormalizedCopy();
+            right = right.NormalizedCopy();
+            return VectorDot(left, right) < 0f;
+        }
+
+        private static Vec3 EnforceAwayFromAffectorInvariant(
+            Vec3 direction,
+            Vec3 capturedImpact,
+            Vec3 awayFromAffector,
+            ref string source)
+        {
+            if (!IsUsableVector(direction) || !IsUsableVector(awayFromAffector))
+                return direction;
+
+            Vec3 horizontalDirection = direction;
+            horizontalDirection.z = 0f;
+            if (IsUsableVector(horizontalDirection) &&
+                HorizontalDot(horizontalDirection, awayFromAffector) >= 0f)
+            {
+                return direction;
+            }
+
+            float vertical = direction.z;
+            Vec3 correctedHorizontal = capturedImpact;
+            correctedHorizontal.z = 0f;
+            if (!IsUsableVector(correctedHorizontal) ||
+                HorizontalDot(correctedHorizontal, awayFromAffector) <= 0f)
+            {
+                correctedHorizontal = awayFromAffector;
+            }
+            else
+            {
+                correctedHorizontal = correctedHorizontal.NormalizedCopy();
+            }
+
+            correctedHorizontal.z = vertical;
+            if (!IsUsableVector(correctedHorizontal))
+                return direction;
+
+            source += "+awayFromAffectorInvariant";
+            return correctedHorizontal.NormalizedCopy();
+        }
+
+        private static float HorizontalDot(Vec3 left, Vec3 right)
+        {
+            return left.x * right.x + left.y * right.y;
+        }
+
+        private static float VectorDot(Vec3 left, Vec3 right)
+        {
+            return left.x * right.x + left.y * right.y + left.z * right.z;
         }
 
         private static Vec3 ResolvePulseDirection(Vec3 baseDirection, int pulseIndex)

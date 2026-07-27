@@ -2,12 +2,12 @@
 
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
-Current repository version: **v1.3.11**  
+Current repository version: **v1.3.12**  
 Supported Bannerlord range: **v1.3.15–v1.4.7**
 
 ## Repository layout
 
-- `Source/` — current v1.3.11 C# source and the minimal deterministic build toolchain.
+- `Source/` — current v1.3.12 C# source and the minimal deterministic build toolchain.
 - `bin/Win64_Shipping_Client/` — compiled runtime DLLs loaded by Bannerlord.
 - `ModuleData/Languages/` — English and Simplified Chinese MCM localization.
 - `SubModule.xml` — Bannerlord module manifest.
@@ -61,15 +61,12 @@ Build output is written to `Source/Build/out/bin`. The reference stubs are compi
 
 Pull-request CI rebuilds the current source and updates the checked-in runtime DLLs when their bytes differ. The default branch then rebuilds and fails if the committed binaries or `RUNTIME_SHA256.txt` do not match the source build.
 
-## v1.3.11 scope
+## v1.3.12 scope
 
-- Corrective distribution release for the maintained Dismemberment Plus compatibility source.
-- Rebuilds and republishes the runtime DLLs under a new version after the earlier Nexus v1.3.10 package was found to contain stale binaries.
-- Automatically detects Dismemberment Plus.
-- Avoids force-finalizing active corpses while Dismemberment Plus may be rebuilding body or armour meshes.
-- Disables Extreme Ragdoll's nonlethal push and knockdown injection only while Dismemberment Plus is loaded.
-- Retains lethal death-launch physics with Dismemberment Plus.
-- Includes complete Simplified Chinese MCM localization.
-- Preserves normal v1.3.9 behavior when Dismemberment Plus is absent.
+- Rejects a `KillingBlow.RagdollImpulseAmount` direction when it opposes the exact captured impact direction.
+- Enforces a final horizontal invariant that an externally caused death launch cannot point back toward the affector when valid positions are available.
+- Applies the same direction safeguards to the first combat death and every later death.
+- Preserves configured force magnitude, pulse delivery, impact-bone routing, upward lift, victim momentum, mount-collision scaling, and corpse lifecycle behavior.
+- Retains the v1.3.11 synchronized runtime baseline, Dismemberment Plus safeguards, and complete Simplified Chinese localization.
 
-v1.3.11 introduces no additional gameplay changes beyond the maintained v1.3.10 source. Runtime validation in a real Bannerlord + Dismemberment Plus + custom-armour battle remains required for the native access-violation interaction.
+Runtime validation inside Bannerlord remains required for native physics behavior that cannot be executed in GitHub Actions.
