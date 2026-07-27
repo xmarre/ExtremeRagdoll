@@ -1,6 +1,9 @@
-name: Publish Extreme Ragdoll v1.3.10
+name: Publish and verify Extreme Ragdoll v1.3.10
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/release-v1.3.10.yml
   push:
     branches:
       - master
@@ -86,8 +89,7 @@ jobs:
           Compress-Archive -LiteralPath $moduleRoot -DestinationPath $assetPath -CompressionLevel Optimal -Force
 
           $assetHash = (Get-FileHash $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          $checksumName = "$($env:ASSET_NAME).sha256"
-          $checksumPath = Join-Path $env:GITHUB_WORKSPACE $checksumName
+          $checksumPath = Join-Path $env:GITHUB_WORKSPACE "$($env:ASSET_NAME).sha256"
           [System.IO.File]::WriteAllText(
             $checksumPath,
             "$assetHash  $($env:ASSET_NAME)`n",
@@ -131,7 +133,8 @@ jobs:
             $notes,
             [System.Text.UTF8Encoding]::new($false))
 
-      - name: Publish GitHub release
+      - name: Publish GitHub release when missing
+        if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -139,7 +142,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            throw "Release $($env:TAG_NAME) already exists; refusing to overwrite it."
+            Write-Host "Release $($env:TAG_NAME) already exists; publication is a no-op."
+            exit 0
           }
 
           $existingTag = git ls-remote --tags origin "refs/tags/$($env:TAG_NAME)"
@@ -154,9 +158,75 @@ jobs:
             --target $env:TARGET_COMMIT `
             --title $env:RELEASE_NAME `
             --notes-file release-notes.md
-
           if ($LASTEXITCODE -ne 0) {
             throw "gh release create failed with exit code $LASTEXITCODE."
           }
 
-          gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --json url,tagName,name,isDraft,isPrerelease
+      - name: Verify published release and assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadataJson = gh release view $env:TAG_NAME `
+            --repo $env:GITHUB_REPOSITORY `
+            --json url,tagName,name,isDraft,isPrerelease,targetCommitish,assets
+          if ($LASTEXITCODE -ne 0) {
+            throw "Published release $($env:TAG_NAME) could not be read."
+          }
+          $metadata = $metadataJson | ConvertFrom-Json
+
+          if ($metadata.tagName -ne $env:TAG_NAME) { throw "Unexpected release tag: $($metadata.tagName)" }
+          if ($metadata.name -ne $env:RELEASE_NAME) { throw "Unexpected release name: $($metadata.name)" }
+          if ($metadata.isDraft) { throw 'Release is still a draft.' }
+          if ($metadata.isPrerelease) { throw 'Release is marked as a prerelease.' }
+          if ($metadata.targetCommitish -ne $env:TARGET_COMMIT) {
+            throw "Release targets $($metadata.targetCommitish), expected $($env:TARGET_COMMIT)."
+          }
+
+          $checksumName = "$($env:ASSET_NAME).sha256"
+          $assetNames = @($metadata.assets | ForEach-Object { $_.name })
+          foreach ($required in @($env:ASSET_NAME, $checksumName)) {
+            if ($assetNames -notcontains $required) { throw "Release asset is missing: $required" }
+          }
+
+          $downloadRoot = Join-Path $env:RUNNER_TEMP 'PublishedRelease'
+          New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+          gh release download $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --pattern $env:ASSET_NAME --dir $downloadRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to download the installable release ZIP.' }
+          gh release download $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --pattern $checksumName --dir $downloadRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to download the release checksum.' }
+
+          $downloadedAsset = Join-Path $downloadRoot $env:ASSET_NAME
+          $downloadedChecksum = Join-Path $downloadRoot $checksumName
+          $checksumLine = (Get-Content $downloadedChecksum -Raw).Trim()
+          if ($checksumLine -notmatch '^([0-9a-fA-F]{64})  (.+)$') { throw 'Release checksum file has an invalid format.' }
+          if ($Matches[2] -ne $env:ASSET_NAME) { throw "Checksum names the wrong asset: $($Matches[2])" }
+          $publishedHash = (Get-FileHash $downloadedAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($publishedHash -ne $Matches[1].ToLowerInvariant()) {
+            throw "Published ZIP checksum mismatch. actual=$publishedHash expected=$($Matches[1])"
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'PublishedReleaseExtracted'
+          Expand-Archive -LiteralPath $downloadedAsset -DestinationPath $extractRoot -Force
+          $moduleRoot = Join-Path $extractRoot 'ExtremeRagdoll'
+          $requiredPaths = @(
+            (Join-Path $moduleRoot 'SubModule.xml')
+            (Join-Path $moduleRoot 'ModuleData')
+            (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.dll')
+            (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll')
+          )
+          foreach ($requiredPath in $requiredPaths) {
+            if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Published module is missing: $requiredPath" }
+          }
+          if (Test-Path -LiteralPath (Join-Path $moduleRoot 'Source')) {
+            throw 'Installable release unexpectedly contains the source tree.'
+          }
+
+          $releasedMain = (Get-FileHash (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $releasedHelper = (Get-FileHash (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($releasedMain -ne $env:MAIN_DLL_SHA256) { throw 'Published main DLL differs from the verified source build.' }
+          if ($releasedHelper -ne $env:HELPER_DLL_SHA256) { throw 'Published helper DLL differs from the verified source build.' }
+
+          Write-Host "Verified release: $($metadata.url)"
+          Write-Host "Installable ZIP SHA-256: $publishedHash"
