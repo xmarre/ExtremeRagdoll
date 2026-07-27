@@ -1,4 +1,4 @@
-name: Publish and verify Extreme Ragdoll v1.3.15
+name: Publish and verify Extreme Ragdoll v1.3.16
 
 on:
   push:
@@ -15,10 +15,10 @@ jobs:
   release:
     runs-on: windows-2022
     env:
-      TAG_NAME: v1.3.15
-      RELEASE_NAME: Extreme Ragdoll v1.3.15
-      TARGET_COMMIT: f564367f0716b1104a46820fe798cdeb18157d13
-      ASSET_NAME: ExtremeRagdoll-v1.3.15-Bannerlord-1.3.15-to-1.4.7.zip
+      TAG_NAME: v1.3.16
+      RELEASE_NAME: Extreme Ragdoll v1.3.16
+      TARGET_COMMIT: 29682c05d513ea075d9ace67d68c1358147fcc66
+      ASSET_NAME: ExtremeRagdoll-v1.3.16-Bannerlord-1.3.15-to-1.4.7.zip
 
     steps:
       - name: Check out immutable release source
@@ -33,7 +33,7 @@ jobs:
         with:
           dotnet-version: 3.1.426
 
-      - name: Verify module and localization metadata
+      - name: Verify module and localization implementation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -41,9 +41,12 @@ jobs:
           [xml]$module = Get-Content '.\SubModule.xml' -Raw
           $versionNode = $module.SelectSingleNode('/Module/Version')
           if ($null -eq $versionNode) { throw 'SubModule.xml has no Version element.' }
-          $moduleVersion = $versionNode.GetAttribute('value')
-          if ($moduleVersion -ne $env:TAG_NAME) {
-            throw "SubModule.xml reports $moduleVersion, expected $($env:TAG_NAME)."
+          if ($versionNode.GetAttribute('value') -ne $env:TAG_NAME) {
+            throw "SubModule.xml reports $($versionNode.GetAttribute('value')), expected $($env:TAG_NAME)."
+          }
+          $entryPoint = [string]$module.Module.SubModules.SubModule.SubModuleClassType.value
+          if ($entryPoint -ne 'ExtremeRagdoll.LocalizedSubModule') {
+            throw "Unexpected runtime entry point: $entryPoint"
           }
 
           [xml]$languageData = Get-Content '.\ModuleData\Languages\CNs\language_data.xml' -Raw
@@ -64,7 +67,6 @@ jobs:
               throw 'Localization string table is missing the standard XML schema namespace declarations.'
             }
           }
-
           if ([string]$english.base.tags.tag.language -ne 'English') {
             throw "Unexpected base language tag: $([string]$english.base.tags.tag.language)"
           }
@@ -86,6 +88,31 @@ jobs:
             throw 'Localization contains an empty translation value.'
           }
 
+          $refreshSource = Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw
+          foreach ($requiredMarker in @(
+            'MCM.UI.GUI.ViewModels.SettingsPropertyVM',
+            'MCM.UI.GUI.ViewModels.SettingsPropertyGroupVM',
+            'MCM.UI.GUI.ViewModels.SettingsVM',
+            'MCM.UI.GUI.ViewModels.SettingsEntryVM',
+            'MCM.UI.GUI.ViewModels.ModOptionsVM',
+            'RequireGetter(propertyVmType, "Name")',
+            'RequireGetter(groupVmType, "GroupNameDisplay")',
+            'RequireGetter(settingsVmType, "DisplayName")',
+            'RequireGetter(settingsEntryVmType, "DisplayName")',
+            'RequireGetter(modOptionsVmType, "SelectedDisplayName")',
+            'ExtremeRagdoll.Localization.log',
+            'OnBeforeInitialModuleScreenSetAsRoot',
+            'AppDomain.CurrentDomain.AssemblyLoad')) {
+            if (-not $refreshSource.Contains($requiredMarker)) {
+              throw "MCM direct-localization source is missing required marker: $requiredMarker"
+            }
+          }
+          if ($refreshSource.Contains('OnMissionTick') -or
+              $refreshSource.Contains('OnApplicationTick') -or
+              $refreshSource.Contains('System.Threading.Timer')) {
+            throw 'MCM localization integration must remain UI/event-driven and must not add a tick or timer path.'
+          }
+
       - name: Build and verify release runtime
         shell: pwsh
         run: |
@@ -103,7 +130,6 @@ jobs:
           $builtHelper = (Get-FileHash $builtHelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $committedMain = (Get-FileHash $committedMainPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $committedHelper = (Get-FileHash $committedHelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
-
           if ($builtMain -ne $committedMain) {
             throw "ExtremeRagdoll.dll differs from the committed runtime. built=$builtMain committed=$committedMain"
           }
@@ -140,7 +166,6 @@ jobs:
 
           $assetPath = Join-Path $env:GITHUB_WORKSPACE $env:ASSET_NAME
           Compress-Archive -LiteralPath $moduleRoot -DestinationPath $assetPath -CompressionLevel Optimal -Force
-
           $assetHash = (Get-FileHash $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $checksumPath = Join-Path $env:GITHUB_WORKSPACE "$($env:ASSET_NAME).sha256"
           [System.IO.File]::WriteAllText(
@@ -153,22 +178,21 @@ jobs:
         shell: pwsh
         run: |
           $notes = @'
-          ## Extreme Ragdoll v1.3.15
+          ## Extreme Ragdoll v1.3.16
 
-          Localization and corpse-collision corrective release.
+          Complete Simplified Chinese MCM localization correction.
 
           **Supported Bannerlord versions:** v1.3.15–v1.4.7  
           **Required:** Harmony and Mod Configuration Menu v5
 
           ### Changes
 
-          - Registers Extreme Ragdoll's localization manifest in Bannerlord's live language registry before MCM builds the settings menu.
-          - Reloads the active non-English dictionary after registration so Simplified Chinese labels resolve during the same startup.
-          - Keeps the registered localization path available for later language changes.
-          - Removes the obsolete 30-second Dismemberment Plus corpse-collision window.
-          - Finalizes naturally settled corpses immediately and starts forced paired `EndRagdollAsCorpse` finalization after two seconds for Active or temporarily skeleton-less corpses.
-          - Retries transient finalization failures only within the absolute three-second total collision ceiling.
-          - Adds debug diagnostics for failed corpse-finalization attempts while preserving death force, direction, pulse delivery, hit-bone routing, and mount scaling.
+          - Fixes the remaining English Extreme Ragdoll labels when Bannerlord uses Simplified Chinese.
+          - Resolves setting names, group headings, the internal mod display name, the left mod-list entry, and the selected-mod title through the active Bannerlord language dictionary whenever MCM reads them.
+          - Restricts the compatibility patch to Extreme Ragdoll's settings entry so other MCM mods are unaffected.
+          - Retries integration during startup and when MCM becomes available, with one-time diagnostic logging for native mismatches.
+          - Retains v1.3.15's authoritative death-direction pipeline and absolute three-second corpse-finalization ceiling.
+          - Adds no mission tick, campaign scan, persistent timer, force, physics, or Dismemberment Plus behaviour changes.
 
           ### Installation
 
@@ -177,7 +201,7 @@ jobs:
           3. Ensure Harmony and MCM v5 are installed.
           4. Enable **Extreme Ragdoll** in the launcher or BLSE and restart the game fully.
 
-          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.15-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
+          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.16-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
           '@
           $notes = $notes.Trim() + "`n`n### Build integrity`n`n"
           $notes += "- `ExtremeRagdoll.dll`: ``$($env:MAIN_DLL_SHA256)```n"
@@ -254,6 +278,9 @@ jobs:
           if ($checksumLine -notmatch '^([0-9a-fA-F]{64})  (.+)$') { throw 'Release checksum file has an invalid format.' }
           if ($Matches[2] -ne $env:ASSET_NAME) { throw "Checksum names the wrong asset: $($Matches[2])" }
           $publishedHash = (Get-FileHash $downloadedAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($publishedHash -ne $env:ASSET_SHA256) {
+            throw "Published ZIP differs from the locally packaged release. actual=$publishedHash expected=$($env:ASSET_SHA256)"
+          }
           if ($publishedHash -ne $Matches[1].ToLowerInvariant()) {
             throw "Published ZIP checksum mismatch. actual=$publishedHash expected=$($Matches[1])"
           }
@@ -279,6 +306,9 @@ jobs:
           [xml]$releasedModule = Get-Content (Join-Path $moduleRoot 'SubModule.xml') -Raw
           if ($releasedModule.Module.Version.value -ne $env:TAG_NAME) {
             throw "Published SubModule.xml reports $($releasedModule.Module.Version.value), expected $($env:TAG_NAME)."
+          }
+          if ($releasedModule.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.LocalizedSubModule') {
+            throw 'Published module uses the wrong runtime entry point.'
           }
           [xml]$releasedLanguage = Get-Content (Join-Path $moduleRoot 'ModuleData/Languages/CNs/language_data.xml') -Raw
           if ($releasedLanguage.LanguageData.LanguageFile.xml_path -ne 'CNs/std_module_strings_xml.xml') {
