@@ -6,8 +6,8 @@
 - Reloaded the active non-English dictionary after registration so Simplified Chinese labels resolve during the same startup.
 - Retained the registered path for later in-game language changes.
 - Removed the 30-second Dismemberment Plus corpse-collision window.
-- Begins forced paired `EndRagdollAsCorpse` finalization after two seconds for Active or temporarily skeleton-less corpses.
-- Retries transient finalization failures only until the absolute three-second collision ceiling.
+- Starts forced paired `EndRagdollAsCorpse` finalization after two seconds for Active or temporarily skeleton-less corpses.
+- Retries transient finalization failures only within the absolute three-second collision ceiling; three seconds is the total maximum, not an additional grace period.
 - Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and a short Dismemberment Plus mesh-rebuild safety bound.
 
 ## v1.3.14
