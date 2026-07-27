@@ -17,6 +17,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           persist-credentials: false
+          show-progress: false
 
       - name: Apply source patch and restore canonical workflow
         shell: pwsh
@@ -70,17 +71,51 @@ jobs:
             'RUNTIME_SHA256.txt',
             "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll`n$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll`n",
             [System.Text.Encoding]::ASCII)
+          git status --short | Set-Content IMPLEMENTATION_STATUS.txt -Encoding UTF8
+
+      - name: Upload complete implementation
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.3.15-complete-implementation
+          path: |
+            Source/SafeSubModule.cs
+            Source/Build/ValidateAssemblies.cs
+            SubModule.xml
+            README.md
+            CHANGELOG.md
+            .github/workflows/build.yml
+            bin/Win64_Shipping_Client/ExtremeRagdoll.dll
+            bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll
+            RUNTIME_SHA256.txt
+            IMPLEMENTATION_STATUS.txt
+          if-no-files-found: error
 
       - name: Commit complete implementation
+        continue-on-error: true
         shell: pwsh
         env:
           GH_PUSH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
+          $diagnostic = 'COMMIT_DIAGNOSTIC.txt'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git status --short | Set-Content $diagnostic -Encoding UTF8
           git add --all
-          git commit -m 'Fix localization registration and corpse collision lifecycle'
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to commit v1.3.15 implementation.' }
-          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to push v1.3.15 implementation.' }
+          $commitOutput = & git commit -m 'Fix localization registration and corpse collision lifecycle' 2>&1
+          $commitCode = $LASTEXITCODE
+          $commitOutput | Add-Content $diagnostic
+          "commitExitCode=$commitCode" | Add-Content $diagnostic
+          if ($commitCode -eq 0) {
+            $pushOutput = & git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}" 2>&1
+            $pushCode = $LASTEXITCODE
+            $pushOutput | Add-Content $diagnostic
+            "pushExitCode=$pushCode" | Add-Content $diagnostic
+          }
+
+      - name: Upload commit diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.3.15-commit-diagnostic
+          path: COMMIT_DIAGNOSTIC.txt
+          if-no-files-found: warn
