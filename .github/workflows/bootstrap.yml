@@ -27,17 +27,41 @@ jobs:
         with:
           dotnet-version: 3.1.426
 
-      - name: Replace bootstrap payload with clean source tree
+      - name: Extract clean source payload
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $zip = Join-Path $env:GITHUB_WORKSPACE 'bootstrap/source.zip'
+          if (-not (Test-Path -LiteralPath $zip)) { throw "Missing bootstrap payload: $zip" }
           $stage = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean'
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          if (Test-Path -LiteralPath $stage) { Remove-Item $stage -Recurse -Force }
           Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force
-          git rm -r -f --ignore-unmatch .
-          Get-ChildItem -LiteralPath $stage -Force |
-            Copy-Item -Destination $env:GITHUB_WORKSPACE -Recurse -Force
+          if (-not (Test-Path -LiteralPath (Join-Path $stage 'Source/SafeSubModule.cs'))) {
+            throw 'Extracted payload is incomplete.'
+          }
+
+      - name: Remove tracked bootstrap payload
+        shell: pwsh
+        run: git rm -r -f --ignore-unmatch -- .
+
+      - name: Copy clean source tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean'
+          $process = Start-Process -FilePath robocopy -ArgumentList @(
+            $stage,
+            $env:GITHUB_WORKSPACE,
+            '/E',
+            '/COPY:DAT',
+            '/R:2',
+            '/W:1',
+            '/NFL',
+            '/NDL',
+            '/NJH',
+            '/NJS'
+          ) -Wait -PassThru -NoNewWindow
+          if ($process.ExitCode -ge 8) { throw "robocopy failed with exit code $($process.ExitCode)." }
 
       - name: Build v1.3.10
         shell: pwsh
