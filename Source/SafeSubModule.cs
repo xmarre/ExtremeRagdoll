@@ -19,12 +19,14 @@ namespace ExtremeRagdoll.SafeRuntime
         protected override void OnSubModuleLoad()
         {
             SafeLog.Reset();
+            LocalizationBootstrap.EnsureRegistered();
             SafeLog.Info("Safe rewrite loaded; native death patches are deferred until a real combat mission is initialized.");
             SafeLog.Info("Non-combat character tableaus are excluded before both mission behavior attachment and Harmony death-patch installation.");
         }
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
         {
+            LocalizationBootstrap.EnsureRegistered();
             SafeLog.Info("Safe runtime menu initialization completed.");
         }
 
@@ -54,6 +56,127 @@ namespace ExtremeRagdoll.SafeRuntime
             SafeLog.Info(
                 "Mission behavior added and native death patch installed for combat only: SafeRagdollBehavior; " +
                 "DismembermentPlusCompatibility=" + dismembermentPlusCompatibility + ".");
+        }
+    }
+
+
+    internal static class LocalizationBootstrap
+    {
+        private static bool _registered;
+
+        internal static void EnsureRegistered()
+        {
+            if (_registered)
+                return;
+
+            try
+            {
+                string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                DirectoryInfo platformDirectory = string.IsNullOrEmpty(assemblyDirectory)
+                    ? null
+                    : new DirectoryInfo(assemblyDirectory);
+                DirectoryInfo binDirectory = platformDirectory == null ? null : platformDirectory.Parent;
+                DirectoryInfo moduleDirectory = binDirectory == null ? null : binDirectory.Parent;
+                if (moduleDirectory == null)
+                    throw new InvalidOperationException("Could not resolve the ExtremeRagdoll module root.");
+
+                Assembly localizationAssembly = typeof(TextObject).Assembly;
+                Type localizedTextManager = localizationAssembly.GetType(
+                    "TaleWorlds.Localization.LocalizedTextManager", false);
+                MethodInfo addLocalizationXml = localizedTextManager == null
+                    ? null
+                    : localizedTextManager.GetMethod(
+                        "AddLocalizationXml",
+                        BindingFlags.Public | BindingFlags.Static,
+                        null,
+                        new[] { typeof(string) },
+                        null);
+                if (addLocalizationXml == null)
+                {
+                    throw new MissingMethodException(
+                        "TaleWorlds.Localization.LocalizedTextManager",
+                        "AddLocalizationXml");
+                }
+
+                // Bannerlord's initial localization discovery runs before submodule loading.
+                // Merge this module's manifest into the live LanguageData registry before MCM
+                // resolves its setting labels. LanguageData de-duplicates an existing path.
+                addLocalizationXml.Invoke(null, new object[] { moduleDirectory.FullName });
+
+                Type mbTextManager = localizationAssembly.GetType(
+                    "TaleWorlds.Localization.MBTextManager", false);
+                PropertyInfo activeLanguageProperty = mbTextManager == null
+                    ? null
+                    : mbTextManager.GetProperty(
+                        "ActiveTextLanguage", BindingFlags.Public | BindingFlags.Static);
+                MethodInfo changeLanguage = mbTextManager == null
+                    ? null
+                    : mbTextManager.GetMethod(
+                        "ChangeLanguage",
+                        BindingFlags.Public | BindingFlags.Static,
+                        null,
+                        new[] { typeof(string) },
+                        null);
+                string activeLanguage = activeLanguageProperty == null
+                    ? null
+                    : activeLanguageProperty.GetValue(null, null) as string;
+
+                // The active dictionary was populated before OnSubModuleLoad. Reload the same
+                // non-English language once after registration. Later language changes retain
+                // and use the native LanguageData path without any per-tick work.
+                if (!string.IsNullOrEmpty(activeLanguage) &&
+                    !string.Equals(activeLanguage, "English", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (changeLanguage == null)
+                    {
+                        throw new MissingMethodException(
+                            "TaleWorlds.Localization.MBTextManager", "ChangeLanguage");
+                    }
+
+                    object changed = changeLanguage.Invoke(null, new object[] { activeLanguage });
+                    if (changed is bool && !(bool)changed)
+                    {
+                        throw new InvalidOperationException(
+                            "Bannerlord rejected localization reload for " + activeLanguage + ".");
+                    }
+                }
+
+                if (IsSimplifiedChinese(activeLanguage))
+                {
+                    string probe = new TextObject("{=ER_DisplayName}Extreme Ragdoll").ToString();
+                    if (string.Equals(probe, "Extreme Ragdoll", StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Simplified Chinese manifest was registered, but ER_DisplayName still resolved to its English fallback.");
+                    }
+                }
+
+                _registered = true;
+                SafeLog.Info(
+                    "Localization manifest registered through Bannerlord LanguageData; activeLanguage=" +
+                    (activeLanguage ?? "<unavailable>") + ".");
+            }
+            catch (TargetInvocationException ex)
+            {
+                SafeLog.Error(
+                    "ExtremeRagdoll localization registration failed",
+                    ex.InnerException ?? ex);
+            }
+            catch (Exception ex)
+            {
+                SafeLog.Error("ExtremeRagdoll localization registration failed", ex);
+            }
+        }
+
+        private static bool IsSimplifiedChinese(string language)
+        {
+            if (string.IsNullOrEmpty(language))
+                return false;
+
+            return language.IndexOf("简体中文", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   language.IndexOf("zh-HANS", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   language.IndexOf("zh-CN", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   language.IndexOf("ChineseSimplified", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 
@@ -352,7 +475,9 @@ namespace ExtremeRagdoll.SafeRuntime
         private const float MaxCentralBoneForcePerTick = 15000f;
         private const float CentralChunkInterval = 0.016f;
         private const float RemainingForceTinySq = 0.01f;
-        private const float CorpseFinalizationTimeout = 30f;
+        // Start fallback finalization at two seconds and permit retries only until
+        // the absolute three-second corpse-collision ceiling.
+        private const float CorpseFinalizationHardDeadline = 3f;
         private const float CorpseActiveStateFallbackTimeout = 2f;
         private const float CorpseFinalizationPollInterval = 0.10f;
         private const float CorpseFinalizationMainLoopDeferral = 3600f;
@@ -2563,14 +2688,17 @@ namespace ExtremeRagdoll.SafeRuntime
             if (agent == null)
                 throw new InvalidOperationException("Corpse finalization requires a live Agent wrapper.");
 
-            MBAgentVisuals visuals = agent.AgentVisuals;
-            Skeleton skeleton = ReferenceEquals(visuals, null) ? null : visuals.GetSkeleton();
-            if (ReferenceEquals(skeleton, null))
-                throw new InvalidOperationException("Corpse finalization requires an active skeleton wrapper.");
+            if (now >= 0f)
+            {
+                MBAgentVisuals visuals = agent.AgentVisuals;
+                Skeleton skeleton = ReferenceEquals(visuals, null) ? null : visuals.GetSkeleton();
+                if (ReferenceEquals(skeleton, null))
+                    throw new InvalidOperationException("Natural corpse finalization requires an active skeleton wrapper.");
 
-            RagdollState state = skeleton.GetCurrentRagdollState();
-            if (state != RagdollState.NeedsDeactivation && now >= 0f)
-                return;
+                RagdollState state = skeleton.GetCurrentRagdollState();
+                if (state != RagdollState.NeedsDeactivation)
+                    return;
+            }
 
             const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
             MethodInfo[] methods = typeof(Agent).GetMethods(Flags);
@@ -2622,12 +2750,23 @@ namespace ExtremeRagdoll.SafeRuntime
                     }
                     catch { skeleton = null; }
 
+                    float finalizationAge = now - pending.RagdollSeenAt;
                     if (ReferenceEquals(skeleton, null))
                     {
-                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
-                            _pending.RemoveAt(i);
-                        else
+                        if (finalizationAge <= CorpseActiveStateFallbackTimeout)
+                        {
                             pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                            continue;
+                        }
+
+                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)
+                        {
+                            // The forced fallback does not require a skeleton wrapper; invoke the
+                            // paired native end call directly once the short safety bound expires.
+                            QueueVisualResync(pending.Agent, -1f);
+                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
+                        }
+                        _pending.RemoveAt(i);
                         continue;
                     }
 
@@ -2646,33 +2785,12 @@ namespace ExtremeRagdoll.SafeRuntime
                             // PulseIndex changes only after Invoke returns, so an exception leaves this retryable.
                             QueueVisualResync(pending.Agent, now);
                             pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
                         }
-                        else if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
-                        {
-                            _pending.RemoveAt(i);
-                        }
-                        else
-                        {
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
-                        }
+                        _pending.RemoveAt(i);
                         continue;
                     }
 
-                    if (_dismembermentPlusCompatibility)
-                    {
-                        // Dismemberment Plus may replace body and armour MetaMeshes while the corpse
-                        // remains in Active. Do not invoke EndRagdollAsCorpse against that live visual
-                        // graph. Retain bounded ownership and finalize only after the native state reaches
-                        // NeedsDeactivation; otherwise abandon the mod-owned pairing after 30 seconds.
-                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
-                            _pending.RemoveAt(i);
-                        else
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
-                        continue;
-                    }
-
-                    if (now - pending.RagdollSeenAt <= CorpseActiveStateFallbackTimeout)
+                    if (finalizationAge <= CorpseActiveStateFallbackTimeout)
                     {
                         pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
                         continue;
@@ -2680,29 +2798,51 @@ namespace ExtremeRagdoll.SafeRuntime
 
                     if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)
                     {
-                        // Compatibility fallback: later Bannerlord builds can leave settled corpses in Active instead
-                        // of reaching NeedsDeactivation. Pair the mod-owned Start call after the short active-state bound.
+                        // Bannerlord and modded corpse paths can leave a settled corpse in Active.
+                        // Begin forced paired finalization at two seconds, leaving one second for
+                        // bounded retries without exceeding the three-second collision ceiling.
                         QueueVisualResync(pending.Agent, -1f);
                         pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
-                        pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                        if (_dismembermentPlusCompatibility)
+                        {
+                            SafeLog.Info(
+                                "Dismemberment Plus bounded corpse-safety window elapsed; paired EndRagdollAsCorpse for agent #" +
+                                SafeAgentIndex(pending.Agent) + ".");
+                        }
                     }
-                    else
-                    {
-                        _pending.RemoveAt(i);
-                    }
+                    _pending.RemoveAt(i);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Keep only this corpse retryable and throttle failures. One broken corpse must not starve later
-                    // entries or crash the mission. The same 30-second ownership bound prevents a permanently failing
-                    // wrapper/reflection path from remaining in the mission queue indefinitely.
+                    if (SafeSettings.DebugLogging)
+                    {
+                        TargetInvocationException invocationException = ex as TargetInvocationException;
+                        SafeLog.Error(
+                            "Corpse finalization retry failed",
+                            invocationException == null || invocationException.InnerException == null
+                                ? ex
+                                : invocationException.InnerException);
+                    }
+
+                    // Retry failed paired finalization only inside the absolute three-second
+                    // collision ceiling. Clamp the next poll to that deadline so no 30-second
+                    // compatibility path can be reintroduced through failure handling.
                     PendingDeath pending = i >= 0 && i < _pending.Count ? _pending[i] : null;
                     if (pending != null && pending.PulseCount < 0)
                     {
-                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
+                        float finalizationAge = now - pending.RagdollSeenAt;
+                        if (finalizationAge >= CorpseFinalizationHardDeadline)
+                        {
+                            if (SafeSettings.DebugLogging)
+                                SafeLog.Error("Corpse finalization exhausted the three-second retry ceiling", ex);
                             _pending.RemoveAt(i);
+                        }
                         else
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                        {
+                            float hardDeadlineAt = pending.RagdollSeenAt + CorpseFinalizationHardDeadline;
+                            pending.CurrentPulseBaseMagnitude =
+                                Math.Min(now + CorpseFinalizationPollInterval, hardDeadlineAt);
+                        }
                     }
                 }
             }

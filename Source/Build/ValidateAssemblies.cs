@@ -80,7 +80,18 @@ internal static class ValidateAssemblies
 
             TypeDefinition subModule = RequireType(main, "ExtremeRagdoll.SafeRuntime.SafeSubModule");
             MethodDefinition onSubModuleLoad = RequireMethod(subModule, "OnSubModuleLoad");
+            MethodDefinition onBeforeInitialScreen = RequireMethod(subModule, "OnBeforeInitialModuleScreenSetAsRoot");
             MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");
+            TypeDefinition localizationBootstrap = RequireType(main, "ExtremeRagdoll.SafeRuntime.LocalizationBootstrap");
+            MethodDefinition ensureLocalization = RequireMethod(localizationBootstrap, "EnsureRegistered");
+            Require(CallsMethod(onSubModuleLoad, "EnsureRegistered"),
+                "OnSubModuleLoad no longer registers the module localization manifest");
+            Require(CallsMethod(onBeforeInitialScreen, "EnsureRegistered"),
+                "initial menu setup no longer retries localization registration");
+            Require(MethodContainsString(ensureLocalization, "AddLocalizationXml"),
+                "localization bootstrap no longer uses Bannerlord's native manifest registration");
+            Require(MethodContainsString(ensureLocalization, "ChangeLanguage"),
+                "localization bootstrap no longer reloads the active non-English dictionary");
             MethodDefinition onMissionTick = RequireMethod(behavior, "OnMissionTick");
             MethodDefinition resolveDirection = RequireMethod(behavior, "ResolveDirection");
             Require(!CallsMethod(resolveDirection, "get_EngineImpulseInfluence"),
@@ -107,6 +118,21 @@ internal static class ValidateAssemblies
 
             Require(CallsMethod(onMissionTick, "TryStartRagdollAsCorpse"),
                 "controlled accelerated StartRagdollAsCorpse handoff is missing");
+            MethodDefinition processCorpseFinalizers = RequireMethod(behavior, "ProcessPendingVisualResyncs");
+            Require(MethodContainsStringContaining(
+                    processCorpseFinalizers,
+                    "Dismemberment Plus bounded corpse-safety window elapsed; paired EndRagdollAsCorpse"),
+                "Dismemberment Plus path can abandon the mod-owned corpse lifecycle pairing");
+            RequireFloatConstant(behavior, "CorpseFinalizationHardDeadline", 3f);
+            RequireFloatConstant(behavior, "CorpseActiveStateFallbackTimeout", 2f);
+            Require(!behavior.Fields.Any(f =>
+                    f.Name == "CorpseFinalizationTimeout" ||
+                    f.Name == "CorpseFinalizationFailureGrace"),
+                "obsolete 30-second corpse finalization timing remains in the runtime");
+            Require(MethodContainsStringContaining(
+                    processCorpseFinalizers,
+                    "Corpse finalization retry failed"),
+                "corpse-finalization retry failures are no longer diagnosable in debug logging");
             Require(!CallsMethod(onMissionTick, "ForceUpdateCorpseBoneFrames"),
                 "confirmed-death path regained corpse skeleton resynchronization");
             Require(CallsMethod(onMissionTick, "TryApplyMappedCentralRagdollForce"),
@@ -184,6 +210,13 @@ internal static class ValidateAssemblies
     {
         FieldDefinition field = type.Fields.Single(f => f.Name == name);
         Require(field.HasConstant && Convert.ToInt32(field.Constant) == expected,
+            type.FullName + "." + name + " has the wrong value");
+    }
+
+    private static void RequireFloatConstant(TypeDefinition type, string name, float expected)
+    {
+        FieldDefinition field = type.Fields.Single(f => f.Name == name);
+        Require(field.HasConstant && Math.Abs(Convert.ToSingle(field.Constant) - expected) < 0.0001f,
             type.FullName + "." + name + " has the wrong value");
     }
 

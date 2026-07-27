@@ -2,12 +2,12 @@
 
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
-Current repository version: **v1.3.14**  
+Current repository version: **v1.3.15**  
 Supported Bannerlord range: **v1.3.15–v1.4.7**
 
 ## Repository layout
 
-- `Source/` — current v1.3.14 C# source and the minimal deterministic build toolchain.
+- `Source/` — current v1.3.15 C# source and the minimal deterministic build toolchain.
 - `bin/Win64_Shipping_Client/` — compiled runtime DLLs loaded by Bannerlord.
 - `ModuleData/Languages/` — English and Simplified Chinese MCM localization.
 - `SubModule.xml` — Bannerlord module manifest.
@@ -61,11 +61,11 @@ Build output is written to `Source/Build/out/bin`. The reference stubs are compi
 
 Pull-request CI rebuilds the current source and updates the checked-in runtime DLLs when their bytes differ. The default branch then rebuilds and fails if the committed binaries or `RUNTIME_SHA256.txt` do not match the source build.
 
-## v1.3.14 scope
+## v1.3.15 scope
 
-- Corrects the English and Simplified Chinese string tables to Bannerlord's required `type="string"` localization XML shape.
-- Retains the corrected `CNs/language_data.xml` registration path and complete Chinese translation set.
-- Adds package checks for the string-table root type, language tags, registered file path, and matching localization IDs.
-- Makes no gameplay, force, ragdoll, corpse lifecycle, compatibility, or performance changes.
+- Registers the module language manifest through Bannerlord's live `LanguageData` registry before MCM resolves its labels.
+- Reloads the active non-English dictionary once after registration and retains the path for later language changes.
+- Begins forced corpse finalization after two seconds and enforces an absolute three-second retry ceiling for every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair, including Dismemberment Plus.
+- Makes no force, direction, hit-bone, pulse, mount-scaling, campaign, or per-frame global-scan changes.
 
 Runtime validation inside Bannerlord remains required for MCM rendering behavior that cannot be executed in GitHub Actions.
