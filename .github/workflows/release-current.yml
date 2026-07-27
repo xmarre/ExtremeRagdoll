@@ -278,6 +278,9 @@ jobs:
           if ($checksumLine -notmatch '^([0-9a-fA-F]{64})  (.+)$') { throw 'Release checksum file has an invalid format.' }
           if ($Matches[2] -ne $env:ASSET_NAME) { throw "Checksum names the wrong asset: $($Matches[2])" }
           $publishedHash = (Get-FileHash $downloadedAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($publishedHash -ne $env:ASSET_SHA256) {
+            throw "Published ZIP differs from the locally packaged release. actual=$publishedHash expected=$($env:ASSET_SHA256)"
+          }
           if ($publishedHash -ne $Matches[1].ToLowerInvariant()) {
             throw "Published ZIP checksum mismatch. actual=$publishedHash expected=$($Matches[1])"
           }
