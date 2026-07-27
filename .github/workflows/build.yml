@@ -127,7 +127,8 @@ jobs:
             throw 'Localization contains an empty translation value.'
           }
 
-          $sourceText = Get-Content '.\Source\SafeSubModule.cs' -Raw
+          $sourceText = (Get-Content '.\Source\SafeSubModule.cs' -Raw) + "`n" +
+                        (Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw)
           $referencedIds = @([regex]::Matches($sourceText, '\{=([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
           $missingIds = @($referencedIds | Where-Object { $_ -notin $englishIds })
           if ($missingIds.Count -gt 0) {
@@ -136,22 +137,27 @@ jobs:
 
           $refreshSource = Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw
           foreach ($requiredMarker in @(
-            'MCM.UI.UIExtenderEx.OptionsVMMixin',
-            'ModOptionsSelected',
-            'RefreshValues',
-            'SelectedDisplayName',
-            'DisplayName',
+            'MCM.UI.GUI.ViewModels.SettingsPropertyVM',
+            'MCM.UI.GUI.ViewModels.SettingsPropertyGroupVM',
+            'MCM.UI.GUI.ViewModels.SettingsVM',
+            'LocalizedCachedStringGetterPostfix',
+            'RequireGetter(propertyVmType, "Name")',
+            'RequireGetter(groupVmType, "GroupNameDisplay")',
+            'RequireGetter(settingsVmType, "DisplayName")',
+            'ExtremeRagdoll.Localization.log',
+            'OnBeforeInitialModuleScreenSetAsRoot',
             'AppDomain.CurrentDomain.AssemblyLoad')) {
             if (-not $refreshSource.Contains($requiredMarker)) {
-              throw "MCM live-localization refresh source is missing required marker: $requiredMarker"
+              throw "MCM direct-localization source is missing required marker: $requiredMarker"
             }
           }
-          if ($refreshSource.Contains('OnMissionTick') -or $refreshSource.Contains('OnApplicationTick')) {
-            throw 'MCM localization refresh must remain event-driven and must not add a tick path.'
+          if ($refreshSource.Contains('OnMissionTick') -or $refreshSource.Contains('OnApplicationTick') -or
+              $refreshSource.Contains('System.Threading.Timer')) {
+            throw 'MCM localization integration must remain UI/event-driven and must not add a tick or timer path.'
           }
           foreach ($buildScript in @('.\Source\Build\build.ps1', '.\Source\Build\build.sh')) {
             if (-not (Get-Content $buildScript -Raw).Contains('McmLiveLocalizationRefresh.cs')) {
-              throw "Build script does not compile the MCM localization refresh source: $buildScript"
+              throw "Build script does not compile the MCM localization source: $buildScript"
             }
           }
 
