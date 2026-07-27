@@ -62,7 +62,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add --all
           git commit -m "Fix localization registration and corpse collision lifecycle"
-'@
+          '@
           $standardCommit = @'
           if (-not (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt)) {
             Write-Host "Runtime binaries already match the current source."
@@ -73,7 +73,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
           git commit -m "Build current runtime binaries"
-'@
+          '@
           if (-not $buildText.Contains($temporaryCommit)) { throw 'Temporary commit block not found.' }
           $buildText = $buildText.Replace($temporaryCommit, $standardCommit)
           [System.IO.File]::WriteAllText($buildPath, $buildText, [System.Text.UTF8Encoding]::new($false))
