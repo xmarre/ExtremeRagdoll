@@ -70,6 +70,20 @@ jobs:
           ) -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ge 8) { throw "robocopy failed with exit code $($process.ExitCode)." }
 
+      - name: Fix restore project identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = '.\Source\Build\Tools\Mono.Cecil.csproj'
+          $content = Get-Content -LiteralPath $project -Raw
+          $needle = '    <TargetFramework>netstandard2.0</TargetFramework>'
+          $replacement = @"
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <PackageId>ExtremeRagdoll.BuildDependencies</PackageId>
+"@.TrimEnd()
+          if (-not $content.Contains($needle)) { throw 'Expected TargetFramework element was not found.' }
+          $content.Replace($needle, $replacement) | Set-Content -LiteralPath $project -Encoding utf8
+
       - name: Build v1.3.10
         id: build
         continue-on-error: true
