@@ -38,6 +38,7 @@ jobs:
           $end = $carrier.IndexOf($endMarker, $start)
           if ($end -lt 0) { throw 'Implementation script end marker not found.' }
           $script = $carrier.Substring($start, $end - $start)
+          $script = [regex]::Replace($script, '(?m)^          ', '')
           $scriptPath = Join-Path $env:RUNNER_TEMP 'apply_v1_3_15.py'
           [System.IO.File]::WriteAllText($scriptPath, $script, [System.Text.UTF8Encoding]::new($false))
           python $scriptPath
