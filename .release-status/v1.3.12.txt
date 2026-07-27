@@ -1,0 +1,11 @@
+tag=v1.3.12
+release_name=Extreme Ragdoll v1.3.12
+target_commit=aa888aa3f789877e1f28e4b42342e13bb71bc1e3
+asset=ExtremeRagdoll-v1.3.12-Bannerlord-1.3.15-to-1.4.7.zip
+asset_sha256=d88877dfbb73268fe31764df6699235336defe4a6351782887a80ab0c0412f0a
+main_dll_sha256=6aab0a7850f6477ae8b04f75b514165d366cc733056a65eedb7821f1ac42bd89
+helper_dll_sha256=5a8ec4d1c79f9c0ebb1770a3e80aa7a90fea325525bb0c4904e5a2f2cadf32c0
+module_version=v1.3.12
+draft=false
+prerelease=false
+verification=passed
