@@ -70,16 +70,30 @@ jobs:
           ) -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ge 8) { throw "robocopy failed with exit code $($process.ExitCode)." }
 
-      - name: Fix restore project identity
+      - name: Apply source maintenance fixes
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
           $project = '.\Source\Build\Tools\Mono.Cecil.csproj'
-          $content = Get-Content -LiteralPath $project -Raw
-          $needle = '    <TargetFramework>netstandard2.0</TargetFramework>'
-          $replacement = $needle + "`r`n    <PackageId>ExtremeRagdoll.BuildDependencies</PackageId>"
-          if (-not $content.Contains($needle)) { throw 'Expected TargetFramework element was not found.' }
-          $content.Replace($needle, $replacement) | Set-Content -LiteralPath $project -Encoding utf8
+          $projectContent = Get-Content -LiteralPath $project -Raw
+          $projectNeedle = '    <TargetFramework>netstandard2.0</TargetFramework>'
+          $projectReplacement = $projectNeedle + "`r`n    <PackageId>ExtremeRagdoll.BuildDependencies</PackageId>"
+          if (-not $projectContent.Contains($projectNeedle)) { throw 'Expected TargetFramework element was not found.' }
+          $projectContent.Replace($projectNeedle, $projectReplacement) | Set-Content -LiteralPath $project -Encoding utf8
+
+          $validator = '.\Source\Build\ValidateAssemblies.cs'
+          $validatorContent = Get-Content -LiteralPath $validator -Raw
+          $oldInvariant = @'
+            Require(strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),
+                "non-missile post-ragdoll route marker is missing");
+'@
+          $newInvariant = @'
+            Require(!strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),
+                "obsolete non-missile-only route marker remains");
+'@
+          if (-not $validatorContent.Contains($oldInvariant.Trim())) { throw 'Expected stale route-marker invariant was not found.' }
+          $validatorContent.Replace($oldInvariant.Trim(), $newInvariant.Trim()) | Set-Content -LiteralPath $validator -Encoding utf8
 
       - name: Build v1.3.10
         id: build
