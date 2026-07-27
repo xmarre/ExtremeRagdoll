@@ -16,7 +16,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $base = 'https://raw.githubusercontent.com/xmarre/ExtremeRagdoll/agent/clean-v1.3.10-source/bootstrap'
+          $base = 'https://raw.githubusercontent.com/xmarre/ExtremeRagdoll/refs/heads/agent/clean-v1.3.10-source/bootstrap'
           $names = @('chunk-000.txt','chunk-001.txt','chunk-01.txt','chunk-02.txt','chunk-03.txt','chunk-04.txt','chunk-05.txt','chunk-06.txt','chunk-07.txt','chunk-08.txt','chunk-09x0.txt','chunk-09x1.txt','chunk-09x2.txt','chunk-09z0.txt','chunk-09z1.txt','chunk-09z2.txt','chunk-09z3.txt','chunk-09z4.txt','chunk-09z5.txt','chunk-09z6.txt','chunk-09z7.txt','chunk-10.txt')
           $encoded = ($names | ForEach-Object { (Invoke-WebRequest -UseBasicParsing "$base/$_").Content }) -join ''
           $zip = Join-Path $env:RUNNER_TEMP 'clean.zip'
