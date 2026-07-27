@@ -9,10 +9,11 @@ on:
       - master
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   bootstrap:
+    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2022
     steps:
       - name: Check out bootstrap branch
@@ -20,6 +21,10 @@ jobs:
         with:
           ref: agent/clean-v1.3.10-source
           fetch-depth: 0
+
+      - name: Preserve bootstrap workflow
+        shell: pwsh
+        run: Copy-Item '.\.github\workflows\bootstrap.yml' (Join-Path $env:RUNNER_TEMP 'bootstrap.yml') -Force
 
       - name: Install .NET Core SDK 3.1
         uses: actions/setup-dotnet@v4
@@ -46,14 +51,11 @@ jobs:
             throw 'Extracted payload is incomplete.'
           }
 
-      - name: Remove tracked bootstrap payload
-        shell: pwsh
-        run: git rm -r -f --ignore-unmatch -- .
-
-      - name: Copy clean source tree
+      - name: Replace repository contents
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          git rm -r -f --ignore-unmatch -- .
           $stage = Join-Path $env:RUNNER_TEMP 'extreme-ragdoll-clean'
           $process = Start-Process -FilePath robocopy -ArgumentList @(
             $stage,
@@ -68,6 +70,9 @@ jobs:
             '/NJS'
           ) -Wait -PassThru -NoNewWindow
           if ($process.ExitCode -ge 8) { throw "robocopy failed with exit code $($process.ExitCode)." }
+          Remove-Item '.\.github\workflows\build.yml' -Force
+          New-Item -ItemType Directory -Path '.\.github\workflows' -Force | Out-Null
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'bootstrap.yml') '.\.github\workflows\bootstrap.yml' -Force
 
       - name: Apply source maintenance fixes
         shell: pwsh
@@ -97,7 +102,7 @@ jobs:
         shell: pwsh
         run: .\Source\Build\build.ps1
 
-      - name: Stage runtime binaries and hashes
+      - name: Stage runtime binaries and clean generated files
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -112,21 +117,14 @@ jobs:
             "$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
           ) | Set-Content -LiteralPath '.\RUNTIME_SHA256.txt' -Encoding ascii
           Remove-Item '.\Source\Build\out' -Recurse -Force
+          Remove-Item '.\Source\Build\Tools\obj' -Recurse -Force
 
-      - name: Upload verified clean repository
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExtremeRagdoll-v1.3.10-clean-repository
-          include-hidden-files: true
-          if-no-files-found: error
-          path: |
-            .gitattributes
-            .github/workflows/build.yml
-            .gitignore
-            CHANGELOG.md
-            README.md
-            RUNTIME_SHA256.txt
-            SubModule.xml
-            ModuleData
-            Source
-            bin
+      - name: Commit verified clean tree
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git status --short
+          git commit -m 'Clean repository and build v1.3.10'
+          git push origin HEAD:agent/clean-v1.3.10-source
