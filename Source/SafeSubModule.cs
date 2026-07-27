@@ -19,12 +19,14 @@ namespace ExtremeRagdoll.SafeRuntime
         protected override void OnSubModuleLoad()
         {
             SafeLog.Reset();
+            LocalizationBootstrap.EnsureRegistered();
             SafeLog.Info("Safe rewrite loaded; native death patches are deferred until a real combat mission is initialized.");
             SafeLog.Info("Non-combat character tableaus are excluded before both mission behavior attachment and Harmony death-patch installation.");
         }
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()
         {
+            LocalizationBootstrap.EnsureRegistered();
             SafeLog.Info("Safe runtime menu initialization completed.");
         }
 
@@ -54,6 +56,118 @@ namespace ExtremeRagdoll.SafeRuntime
             SafeLog.Info(
                 "Mission behavior added and native death patch installed for combat only: SafeRagdollBehavior; " +
                 "DismembermentPlusCompatibility=" + dismembermentPlusCompatibility + ".");
+        }
+    }
+
+
+    internal static class LocalizationBootstrap
+    {
+        private static bool _registered;
+
+        internal static void EnsureRegistered()
+        {
+  if (_registered)
+      return;
+
+  try
+  {
+      string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+      DirectoryInfo platformDirectory = string.IsNullOrEmpty(assemblyDirectory)
+          ? null
+          : new DirectoryInfo(assemblyDirectory);
+      DirectoryInfo binDirectory = platformDirectory == null ? null : platformDirectory.Parent;
+      DirectoryInfo moduleDirectory = binDirectory == null ? null : binDirectory.Parent;
+      if (moduleDirectory == null)
+          throw new InvalidOperationException("Could not resolve the ExtremeRagdoll module root.");
+
+      Assembly localizationAssembly = typeof(TextObject).Assembly;
+      Type localizedTextManager = localizationAssembly.GetType(
+          "TaleWorlds.Localization.LocalizedTextManager", false);
+      MethodInfo addLocalizationXml = localizedTextManager == null
+          ? null
+          : localizedTextManager.GetMethod(
+              "AddLocalizationXml",
+              BindingFlags.Public | BindingFlags.Static,
+              null,
+              new[] { typeof(string) },
+              null);
+      if (addLocalizationXml == null)
+          throw new MissingMethodException(
+              "TaleWorlds.Localization.LocalizedTextManager",
+              "AddLocalizationXml");
+
+      // Bannerlord's initial localization discovery runs before submodule loading.
+      // Merge this module's manifest into the live LanguageData registry before MCM
+      // resolves its setting labels. LanguageData de-duplicates an existing path.
+      addLocalizationXml.Invoke(null, new object[] { moduleDirectory.FullName });
+
+      Type mbTextManager = localizationAssembly.GetType(
+          "TaleWorlds.Localization.MBTextManager", false);
+      PropertyInfo activeLanguageProperty = mbTextManager == null
+          ? null
+          : mbTextManager.GetProperty(
+              "ActiveTextLanguage", BindingFlags.Public | BindingFlags.Static);
+      MethodInfo changeLanguage = mbTextManager == null
+          ? null
+          : mbTextManager.GetMethod(
+              "ChangeLanguage",
+              BindingFlags.Public | BindingFlags.Static,
+              null,
+              new[] { typeof(string) },
+              null);
+      string activeLanguage = activeLanguageProperty == null
+          ? null
+          : activeLanguageProperty.GetValue(null, null) as string;
+
+      // The active dictionary was populated before OnSubModuleLoad. Reload the same
+      // non-English language once after registration. Later language changes retain
+      // and use the native LanguageData path without any per-tick work.
+      if (!string.IsNullOrEmpty(activeLanguage) &&
+          !string.Equals(activeLanguage, "English", StringComparison.OrdinalIgnoreCase))
+      {
+          if (changeLanguage == null)
+              throw new MissingMethodException(
+                  "TaleWorlds.Localization.MBTextManager", "ChangeLanguage");
+          object changed = changeLanguage.Invoke(null, new object[] { activeLanguage });
+          if (changed is bool && !(bool)changed)
+              throw new InvalidOperationException(
+                  "Bannerlord rejected localization reload for " + activeLanguage + ".");
+      }
+
+      if (IsSimplifiedChinese(activeLanguage))
+      {
+          string probe = new TextObject("{=ER_DisplayName}Extreme Ragdoll").ToString();
+          if (string.Equals(probe, "Extreme Ragdoll", StringComparison.Ordinal))
+              throw new InvalidOperationException(
+                  "Simplified Chinese manifest was registered, but ER_DisplayName still resolved to its English fallback.");
+      }
+
+      _registered = true;
+      SafeLog.Info(
+          "Localization manifest registered through Bannerlord LanguageData; activeLanguage=" +
+          (activeLanguage ?? "<unavailable>") + ".");
+  }
+  catch (TargetInvocationException ex)
+  {
+      SafeLog.Error(
+          "ExtremeRagdoll localization registration failed",
+          ex.InnerException ?? ex);
+  }
+  catch (Exception ex)
+  {
+      SafeLog.Error("ExtremeRagdoll localization registration failed", ex);
+  }
+        }
+
+        private static bool IsSimplifiedChinese(string language)
+        {
+  if (string.IsNullOrEmpty(language))
+      return false;
+
+  return language.IndexOf("简体中文", StringComparison.OrdinalIgnoreCase) >= 0 ||
+         language.IndexOf("zh-HANS", StringComparison.OrdinalIgnoreCase) >= 0 ||
+         language.IndexOf("zh-CN", StringComparison.OrdinalIgnoreCase) >= 0 ||
+         language.IndexOf("ChineseSimplified", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }
 
@@ -2661,14 +2775,29 @@ namespace ExtremeRagdoll.SafeRuntime
 
                     if (_dismembermentPlusCompatibility)
                     {
-                        // Dismemberment Plus may replace body and armour MetaMeshes while the corpse
-                        // remains in Active. Do not invoke EndRagdollAsCorpse against that live visual
-                        // graph. Retain bounded ownership and finalize only after the native state reaches
-                        // NeedsDeactivation; otherwise abandon the mod-owned pairing after 30 seconds.
-                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
-                            _pending.RemoveAt(i);
-                        else
+                        // Dismemberment Plus can rebuild body and armour MetaMeshes immediately after death.
+                        // Preserve the full 30-second mesh-safety window, then pair every successful
+                        // StartRagdollAsCorpse call with EndRagdollAsCorpse. The old branch discarded
+                        // lifecycle ownership here and could leave the corpse as a permanent obstacle.
+                        if (now - pending.RagdollSeenAt <= CorpseFinalizationTimeout)
+                        {
                             pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                            continue;
+                        }
+
+                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)
+                        {
+                            QueueVisualResync(pending.Agent, -1f);
+                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
+                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                            SafeLog.Info(
+                                "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse for agent #" +
+                                SafeAgentIndex(pending.Agent) + ".");
+                        }
+                        else
+                        {
+                            _pending.RemoveAt(i);
+                        }
                         continue;
                     }
 

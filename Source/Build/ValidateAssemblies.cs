@@ -80,7 +80,18 @@ internal static class ValidateAssemblies
 
             TypeDefinition subModule = RequireType(main, "ExtremeRagdoll.SafeRuntime.SafeSubModule");
             MethodDefinition onSubModuleLoad = RequireMethod(subModule, "OnSubModuleLoad");
+            MethodDefinition onBeforeInitialScreen = RequireMethod(subModule, "OnBeforeInitialModuleScreenSetAsRoot");
             MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");
+            TypeDefinition localizationBootstrap = RequireType(main, "ExtremeRagdoll.SafeRuntime.LocalizationBootstrap");
+            MethodDefinition ensureLocalization = RequireMethod(localizationBootstrap, "EnsureRegistered");
+            Require(CallsMethod(onSubModuleLoad, "EnsureRegistered"),
+                "OnSubModuleLoad no longer registers the module localization manifest");
+            Require(CallsMethod(onBeforeInitialScreen, "EnsureRegistered"),
+                "initial menu setup no longer retries localization registration");
+            Require(MethodContainsString(ensureLocalization, "AddLocalizationXml"),
+                "localization bootstrap no longer uses Bannerlord's native manifest registration");
+            Require(MethodContainsString(ensureLocalization, "ChangeLanguage"),
+                "localization bootstrap no longer reloads the active non-English dictionary");
             MethodDefinition onMissionTick = RequireMethod(behavior, "OnMissionTick");
             MethodDefinition resolveDirection = RequireMethod(behavior, "ResolveDirection");
             Require(!CallsMethod(resolveDirection, "get_EngineImpulseInfluence"),
@@ -107,6 +118,11 @@ internal static class ValidateAssemblies
 
             Require(CallsMethod(onMissionTick, "TryStartRagdollAsCorpse"),
                 "controlled accelerated StartRagdollAsCorpse handoff is missing");
+            MethodDefinition processCorpseFinalizers = RequireMethod(behavior, "ProcessPendingVisualResyncs");
+            Require(MethodContainsStringContaining(
+                    processCorpseFinalizers,
+                    "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse"),
+                "Dismemberment Plus timeout can abandon the mod-owned corpse lifecycle pairing");
             Require(!CallsMethod(onMissionTick, "ForceUpdateCorpseBoneFrames"),
                 "confirmed-death path regained corpse skeleton resynchronization");
             Require(CallsMethod(onMissionTick, "TryApplyMappedCentralRagdollForce"),
