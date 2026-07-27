@@ -1,0 +1,256 @@
+name: Apply Extreme Ragdoll v1.3.15 fixes
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/fix-localization-corpse-collision-v1.3.15'
+    runs-on: windows-2022
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply scoped source and metadata changes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          source_path = Path('Source/SafeSubModule.cs')
+          source = source_path.read_text(encoding='utf-8')
+          if 'internal static class LocalizationBootstrap' in source:
+              raise RuntimeError('LocalizationBootstrap already exists; refusing duplicate patch')
+
+          replace_once(
+              source_path,
+              '''        protected override void OnSubModuleLoad()\n        {\n            SafeLog.Reset();\n            SafeLog.Info("Safe rewrite loaded; native death patches are deferred until a real combat mission is initialized.");''',
+              '''        protected override void OnSubModuleLoad()\n        {\n            SafeLog.Reset();\n            LocalizationBootstrap.EnsureRegistered();\n            SafeLog.Info("Safe rewrite loaded; native death patches are deferred until a real combat mission is initialized.");''')
+
+          replace_once(
+              source_path,
+              '''        protected override void OnBeforeInitialModuleScreenSetAsRoot()\n        {\n            SafeLog.Info("Safe runtime menu initialization completed.");\n        }''',
+              '''        protected override void OnBeforeInitialModuleScreenSetAsRoot()\n        {\n            LocalizationBootstrap.EnsureRegistered();\n            SafeLog.Info("Safe runtime menu initialization completed.");\n        }''')
+
+          bootstrap = r'''
+    internal static class LocalizationBootstrap
+    {
+        private static bool _registered;
+
+        internal static void EnsureRegistered()
+        {
+            if (_registered)
+                return;
+
+            try
+            {
+                string assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                DirectoryInfo platformDirectory = string.IsNullOrEmpty(assemblyDirectory)
+                    ? null
+                    : new DirectoryInfo(assemblyDirectory);
+                DirectoryInfo binDirectory = platformDirectory == null ? null : platformDirectory.Parent;
+                DirectoryInfo moduleDirectory = binDirectory == null ? null : binDirectory.Parent;
+                if (moduleDirectory == null)
+                    throw new InvalidOperationException("Could not resolve the ExtremeRagdoll module root.");
+
+                Assembly localizationAssembly = typeof(TextObject).Assembly;
+                Type localizedTextManager = localizationAssembly.GetType(
+                    "TaleWorlds.Localization.LocalizedTextManager", false);
+                MethodInfo addLocalizationXml = localizedTextManager == null
+                    ? null
+                    : localizedTextManager.GetMethod(
+                        "AddLocalizationXml",
+                        BindingFlags.Public | BindingFlags.Static,
+                        null,
+                        new[] { typeof(string) },
+                        null);
+                if (addLocalizationXml == null)
+                    throw new MissingMethodException(
+                        "TaleWorlds.Localization.LocalizedTextManager",
+                        "AddLocalizationXml");
+
+                // Bannerlord's initial localization discovery runs before submodule loading.
+                // Merge this module's manifest into the live LanguageData registry before MCM
+                // resolves its setting labels. LanguageData de-duplicates an existing path.
+                addLocalizationXml.Invoke(null, new object[] { moduleDirectory.FullName });
+
+                Type mbTextManager = localizationAssembly.GetType(
+                    "TaleWorlds.Localization.MBTextManager", false);
+                PropertyInfo activeLanguageProperty = mbTextManager == null
+                    ? null
+                    : mbTextManager.GetProperty(
+                        "ActiveTextLanguage", BindingFlags.Public | BindingFlags.Static);
+                MethodInfo changeLanguage = mbTextManager == null
+                    ? null
+                    : mbTextManager.GetMethod(
+                        "ChangeLanguage",
+                        BindingFlags.Public | BindingFlags.Static,
+                        null,
+                        new[] { typeof(string) },
+                        null);
+                string activeLanguage = activeLanguageProperty == null
+                    ? null
+                    : activeLanguageProperty.GetValue(null, null) as string;
+
+                // The active dictionary was populated before OnSubModuleLoad. Reload the same
+                // non-English language once after registration. Later language changes retain
+                // and use the native LanguageData path without any per-tick work.
+                if (!string.IsNullOrEmpty(activeLanguage) &&
+                    !string.Equals(activeLanguage, "English", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (changeLanguage == null)
+                        throw new MissingMethodException(
+                            "TaleWorlds.Localization.MBTextManager", "ChangeLanguage");
+                    object changed = changeLanguage.Invoke(null, new object[] { activeLanguage });
+                    if (changed is bool && !(bool)changed)
+                        throw new InvalidOperationException(
+                            "Bannerlord rejected localization reload for " + activeLanguage + ".");
+                }
+
+                if (IsSimplifiedChinese(activeLanguage))
+                {
+                    string probe = new TextObject("{=ER_DisplayName}Extreme Ragdoll").ToString();
+                    if (string.Equals(probe, "Extreme Ragdoll", StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            "Simplified Chinese manifest was registered, but ER_DisplayName still resolved to its English fallback.");
+                }
+
+                _registered = true;
+                SafeLog.Info(
+                    "Localization manifest registered through Bannerlord LanguageData; activeLanguage=" +
+                    (activeLanguage ?? "<unavailable>") + ".");
+            }
+            catch (TargetInvocationException ex)
+            {
+                SafeLog.Error(
+                    "ExtremeRagdoll localization registration failed",
+                    ex.InnerException ?? ex);
+            }
+            catch (Exception ex)
+            {
+                SafeLog.Error("ExtremeRagdoll localization registration failed", ex);
+            }
+        }
+
+        private static bool IsSimplifiedChinese(string language)
+        {
+            if (string.IsNullOrEmpty(language))
+                return false;
+
+            return language.IndexOf("简体中文", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   language.IndexOf("zh-HANS", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   language.IndexOf("zh-CN", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   language.IndexOf("ChineseSimplified", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+    }
+
+'''
+          replace_once(
+              source_path,
+              '    internal static class CompatibilityState\n',
+              bootstrap + '    internal static class CompatibilityState\n')
+
+          old_dp = '''                    if (_dismembermentPlusCompatibility)\n                    {\n                        // Dismemberment Plus may replace body and armour MetaMeshes while the corpse\n                        // remains in Active. Do not invoke EndRagdollAsCorpse against that live visual\n                        // graph. Retain bounded ownership and finalize only after the native state reaches\n                        // NeedsDeactivation; otherwise abandon the mod-owned pairing after 30 seconds.\n                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)\n                            _pending.RemoveAt(i);\n                        else\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                        continue;\n                    }'''
+          new_dp = '''                    if (_dismembermentPlusCompatibility)\n                    {\n                        // Dismemberment Plus can rebuild body and armour MetaMeshes immediately after death.\n                        // Preserve the full 30-second mesh-safety window, then pair every successful\n                        // StartRagdollAsCorpse call with EndRagdollAsCorpse. The old branch discarded\n                        // lifecycle ownership here and could leave the corpse as a permanent obstacle.\n                        if (now - pending.RagdollSeenAt <= CorpseFinalizationTimeout)\n                        {\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                            continue;\n                        }\n\n                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                        {\n                            QueueVisualResync(pending.Agent, -1f);\n                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                            SafeLog.Info(\n                                "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse for agent #" +\n                                SafeAgentIndex(pending.Agent) + ".");\n                        }\n                        else\n                        {\n                            _pending.RemoveAt(i);\n                        }\n                        continue;\n                    }'''
+          replace_once(source_path, old_dp, new_dp)
+
+          validator = Path('Source/Build/ValidateAssemblies.cs')
+          replace_once(
+              validator,
+              '''            TypeDefinition subModule = RequireType(main, "ExtremeRagdoll.SafeRuntime.SafeSubModule");\n            MethodDefinition onSubModuleLoad = RequireMethod(subModule, "OnSubModuleLoad");\n            MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");''',
+              '''            TypeDefinition subModule = RequireType(main, "ExtremeRagdoll.SafeRuntime.SafeSubModule");\n            MethodDefinition onSubModuleLoad = RequireMethod(subModule, "OnSubModuleLoad");\n            MethodDefinition onBeforeInitialScreen = RequireMethod(subModule, "OnBeforeInitialModuleScreenSetAsRoot");\n            MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");\n            TypeDefinition localizationBootstrap = RequireType(main, "ExtremeRagdoll.SafeRuntime.LocalizationBootstrap");\n            MethodDefinition ensureLocalization = RequireMethod(localizationBootstrap, "EnsureRegistered");\n            Require(CallsMethod(onSubModuleLoad, "EnsureRegistered"),\n                "OnSubModuleLoad no longer registers the module localization manifest");\n            Require(CallsMethod(onBeforeInitialScreen, "EnsureRegistered"),\n                "initial menu setup no longer retries localization registration");\n            Require(MethodContainsString(ensureLocalization, "AddLocalizationXml"),\n                "localization bootstrap no longer uses Bannerlord's native manifest registration");\n            Require(MethodContainsString(ensureLocalization, "ChangeLanguage"),\n                "localization bootstrap no longer reloads the active non-English dictionary");''')
+          replace_once(
+              validator,
+              '''            Require(CallsMethod(onMissionTick, "TryStartRagdollAsCorpse"),\n                "controlled accelerated StartRagdollAsCorpse handoff is missing");''',
+              '''            Require(CallsMethod(onMissionTick, "TryStartRagdollAsCorpse"),\n                "controlled accelerated StartRagdollAsCorpse handoff is missing");\n            MethodDefinition processCorpseFinalizers = RequireMethod(behavior, "ProcessPendingVisualResyncs");\n            Require(MethodContainsStringContaining(\n                    processCorpseFinalizers,\n                    "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse"),\n                "Dismemberment Plus timeout can abandon the mod-owned corpse lifecycle pairing");''')
+
+          replace_once('SubModule.xml', '<Version value="v1.3.14" />', '<Version value="v1.3.15" />')
+
+          build = Path('.github/workflows/build.yml')
+          build_text = build.read_text(encoding='utf-8')
+          build_text = build_text.replace("'v1.3.14'", "'v1.3.15'")
+          build_text = build_text.replace('ExtremeRagdoll-v1.3.14', 'ExtremeRagdoll-v1.3.15')
+          if 'v1.3.14' in build_text:
+              raise RuntimeError('build.yml still contains v1.3.14')
+          build.write_text(build_text, encoding='utf-8')
+
+          readme = Path('README.md')
+          text = readme.read_text(encoding='utf-8')
+          text = text.replace('Current repository version: **v1.3.14**', 'Current repository version: **v1.3.15**')
+          text = text.replace('current v1.3.14 C# source', 'current v1.3.15 C# source')
+          scope_start = text.index('## v1.3.14 scope')
+          scope_end = text.index('\nRuntime validation inside Bannerlord', scope_start)
+          replacement = '''## v1.3.15 scope\n\n- Registers the module language manifest through Bannerlord's live `LanguageData` registry before MCM resolves its labels.\n- Reloads the active non-English dictionary once after registration and retains the path for later language changes.\n- Preserves Dismemberment Plus mesh safety for 30 seconds, then completes every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair instead of abandoning collision ownership.\n- Makes no force, direction, hit-bone, pulse, mount-scaling, campaign, or per-frame global-scan changes.\n'''
+          text = text[:scope_start] + replacement + text[scope_end:]
+          readme.write_text(text, encoding='utf-8')
+
+          changelog = Path('CHANGELOG.md')
+          old = changelog.read_text(encoding='utf-8')
+          entry = '''# Changelog\n\n## v1.3.15\n\n- Registered Extreme Ragdoll's language manifest in Bannerlord's live localization registry before MCM builds the menu.\n- Reloaded the active non-English dictionary after registration so Simplified Chinese labels resolve during the same startup.\n- Retained the registered path for later in-game language changes.\n- Fixed the Dismemberment Plus compatibility path abandoning a successful corpse-ragdoll lifecycle after its 30-second mesh-safety timeout.\n- Paired the delayed `EndRagdollAsCorpse` call after that safety window so corpses do not remain permanent physical obstacles.\n- Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and Dismemberment Plus's immediate mesh-rebuild safety window.\n\n'''
+          if not old.startswith('# Changelog\n\n'):
+              raise RuntimeError('unexpected changelog header')
+          changelog.write_text(entry + old[len('# Changelog\n\n'):], encoding='utf-8')
+
+          final_source = source_path.read_text(encoding='utf-8')
+          for marker in (
+              'LocalizationBootstrap.EnsureRegistered();',
+              'AddLocalizationXml',
+              'ChangeLanguage',
+              'Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse'):
+              if marker not in final_source:
+                  raise RuntimeError(f'missing source invariant: {marker}')
+          if 'otherwise abandon the mod-owned pairing after 30 seconds' in final_source:
+              raise RuntimeError('obsolete Dismemberment Plus lifecycle abandonment remains')
+          '@ | Set-Content -Encoding UTF8 "$env:RUNNER_TEMP\apply_patch.py"
+          python "$env:RUNNER_TEMP\apply_patch.py"
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Build and validate patched runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll-v1.3.15-build'
+          .\Source\Build\build.ps1 -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE" }
+          Copy-Item "$out\bin\ExtremeRagdoll.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Force
+          Copy-Item "$out\bin\ExtremeRagdoll.ClothSync.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Force
+          $main = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:GITHUB_WORKSPACE 'RUNTIME_SHA256.txt'),
+            "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll`n$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll`n",
+            [System.Text.Encoding]::ASCII)
+
+      - name: Remove implementation workflow and commit complete patch
+        shell: pwsh
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item '.github/workflows/apply-v1.3.15-fixes.yml' -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git commit -m 'Fix localization registration and corpse collision lifecycle'
+          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
