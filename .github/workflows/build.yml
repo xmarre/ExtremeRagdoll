@@ -41,8 +41,13 @@ jobs:
           $script = [regex]::Replace($script, '(?m)^          ', '')
           $scriptPath = Join-Path $env:RUNNER_TEMP 'apply_v1_3_15.py'
           [System.IO.File]::WriteAllText($scriptPath, $script, [System.Text.UTF8Encoding]::new($false))
-          python $scriptPath
-          if ($LASTEXITCODE -ne 0) { throw "v1.3.15 patch script failed with exit code $LASTEXITCODE." }
+          $diagnosticPath = Join-Path $env:GITHUB_WORKSPACE 'PATCH_DIAGNOSTIC.txt'
+          $patchOutput = & python $scriptPath 2>&1
+          $patchExitCode = $LASTEXITCODE
+          $patchOutput | Set-Content -LiteralPath $diagnosticPath -Encoding UTF8
+          $patchOutput | Write-Host
+          if ($patchExitCode -ne 0) { throw "v1.3.15 patch script failed with exit code $patchExitCode." }
+          Remove-Item $diagnosticPath -Force
 
           Remove-Item $carrierPath -Force
           $buildPath = '.github/workflows/build.yml'
@@ -79,6 +84,14 @@ jobs:
           $buildText = $buildText.Replace($temporaryCommit, $standardCommit)
           [System.IO.File]::WriteAllText($buildPath, $buildText, [System.Text.UTF8Encoding]::new($false))
       # APPLY_V1315_END
+
+      - name: Upload patch diagnostic
+        if: failure() && hashFiles('PATCH_DIAGNOSTIC.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: v1.3.15-patch-diagnostic
+          path: PATCH_DIAGNOSTIC.txt
+          if-no-files-found: error
 
       - name: Install .NET Core SDK 3.1
         uses: actions/setup-dotnet@v4
