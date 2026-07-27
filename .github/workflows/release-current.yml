@@ -98,7 +98,7 @@ jobs:
             'RequireGetter(propertyVmType, "Name")',
             'RequireGetter(groupVmType, "GroupNameDisplay")',
             'RequireGetter(settingsVmType, "DisplayName")',
-            'RequireGetter(settingsEntryVmType, "DisplayName")',
+            'RequireGetter(entryVmType, "DisplayName")',
             'RequireGetter(modOptionsVmType, "SelectedDisplayName")',
             'ExtremeRagdoll.Localization.log',
             'OnBeforeInitialModuleScreenSetAsRoot',
