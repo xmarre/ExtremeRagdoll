@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.11
+
+- Rebuilt and republished the runtime DLLs from the maintained source after the earlier Nexus v1.3.10 package was found to contain stale binaries.
+- Synchronized the module version, repository metadata, compiled runtime verification, package naming, and release assets.
+- Retained the complete v1.3.10 Dismemberment Plus compatibility safeguards and Simplified Chinese localization.
+- Added no further gameplay changes beyond the maintained v1.3.10 source.
+
 ## v1.3.10
 
 - Added automatic Dismemberment Plus compatibility safeguards.
