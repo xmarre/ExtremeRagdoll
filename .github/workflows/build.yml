@@ -63,7 +63,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
           git commit -m "Build current runtime binaries"
-          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push "https://x-access-token:${env:GH_PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
 
       - name: Verify committed runtime on default branch
         if: github.event_name != 'pull_request'
@@ -114,7 +114,9 @@ jobs:
           $chineseIds = @($chineseNodes | ForEach-Object { [string]$_.id })
           if (($englishIds | Sort-Object -Unique).Count -ne $englishIds.Count) { throw 'Duplicate English localization IDs.' }
           if (($chineseIds | Sort-Object -Unique).Count -ne $chineseIds.Count) { throw 'Duplicate Chinese localization IDs.' }
-          if (($englishIds | Sort-Object) -join "`n" -ne ($chineseIds | Sort-Object) -join "`n") {
+          $englishKeySet = ($englishIds | Sort-Object) -join "`n"
+          $chineseKeySet = ($chineseIds | Sort-Object) -join "`n"
+          if ($englishKeySet -ne $chineseKeySet) {
             throw 'English and Simplified Chinese localization ID sets differ.'
           }
           if (@($englishNodes | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.text) }).Count -gt 0 -or
