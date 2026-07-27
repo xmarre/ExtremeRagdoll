@@ -2,12 +2,12 @@
 
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
-Current repository version: **v1.3.15**  
+Current repository version: **v1.3.16**  
 Supported Bannerlord range: **v1.3.15–v1.4.7**
 
 ## Repository layout
 
-- `Source/` — current v1.3.15 C# source and the minimal deterministic build toolchain.
+- `Source/` — current v1.3.16 C# source and the minimal deterministic build toolchain.
 - `bin/Win64_Shipping_Client/` — compiled runtime DLLs loaded by Bannerlord.
 - `ModuleData/Languages/` — English and Simplified Chinese MCM localization.
 - `SubModule.xml` — Bannerlord module manifest.
@@ -61,11 +61,12 @@ Build output is written to `Source/Build/out/bin`. The reference stubs are compi
 
 Pull-request CI rebuilds the current source and updates the checked-in runtime DLLs when their bytes differ. The default branch then rebuilds and fails if the committed binaries or `RUNTIME_SHA256.txt` do not match the source build.
 
-## v1.3.15 scope
+## v1.3.16 scope
 
-- Registers the module language manifest through Bannerlord's live `LanguageData` registry before MCM resolves its labels.
-- Reloads the active non-English dictionary once after registration and retains the path for later language changes.
-- Begins forced corpse finalization after two seconds and enforces an absolute three-second retry ceiling for every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair, including Dismemberment Plus.
-- Makes no force, direction, hit-bone, pulse, mount-scaling, campaign, or per-frame global-scan changes.
+- Retains the v1.3.15 live localization registration and full English/Simplified Chinese translation tables.
+- Corrects MCM v5.12.1's stale-language view-model state by calling MCM's own `RefreshValues` path whenever the Mod Options category becomes active.
+- Refreshes setting labels, group headings, the mod-list entry, and the selected mod title after an in-game text-language change.
+- Uses a guarded, reflection-based Harmony integration that becomes a no-op if the expected MCM UI type is unavailable.
+- Adds no mission tick, campaign scan, persistent polling, physics, force, corpse-finalization, or Dismemberment Plus changes.
 
-Runtime validation inside Bannerlord remains required for MCM rendering behavior that cannot be executed in GitHub Actions.
+Runtime validation inside Bannerlord remains required for MCM rendering behaviour that cannot be executed in GitHub Actions.
