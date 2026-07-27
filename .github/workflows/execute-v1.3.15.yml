@@ -1,0 +1,86 @@
+name: Execute v1.3.15 implementation
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.event.pull_request.head.ref == 'agent/fix-localization-corpse-collision-v1.3.15'
+    runs-on: windows-2022
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply source patch and restore canonical workflow
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $carrier = Get-Content '.github/workflows/apply-v1.3.15-fixes.yml' -Raw
+          $startMarker = "@'"
+          $endMarker = "'@ | Set-Content"
+          $start = $carrier.IndexOf($startMarker)
+          $end = $carrier.IndexOf($endMarker, $start + $startMarker.Length)
+          if ($start -lt 0 -or $end -lt 0) { throw 'Implementation carrier markers were not found.' }
+          $script = $carrier.Substring($start + $startMarker.Length, $end - $start - $startMarker.Length)
+          $script = [regex]::Replace($script, '(?m)^          ', '')
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'apply_v1_3_15.py'
+          [System.IO.File]::WriteAllText($scriptPath, $script, [System.Text.UTF8Encoding]::new($false))
+          & python $scriptPath
+          if ($LASTEXITCODE -ne 0) { throw "v1.3.15 patch failed with exit code $LASTEXITCODE." }
+
+          Remove-Item '.github/workflows/apply-v1.3.15-fixes.yml' -Force
+          Remove-Item '.github/workflows/diagnose-v1.3.15.yml' -Force
+          Remove-Item '.github/workflows/execute-v1.3.15.yml' -Force
+
+          $canonicalBuild = git show origin/master:.github/workflows/build.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to read canonical build workflow from master.' }
+          $canonicalBuild = ($canonicalBuild -join "`n") + "`n"
+          $canonicalBuild = $canonicalBuild.Replace("'v1.3.14'", "'v1.3.15'")
+          $canonicalBuild = $canonicalBuild.Replace('ExtremeRagdoll-v1.3.14', 'ExtremeRagdoll-v1.3.15')
+          if ($canonicalBuild.Contains('v1.3.14')) { throw 'Canonical build workflow still contains v1.3.14.' }
+          [System.IO.File]::WriteAllText(
+            '.github/workflows/build.yml',
+            $canonicalBuild,
+            [System.Text.UTF8Encoding]::new($false))
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Build and validate runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll-v1.3.15-build'
+          .\Source\Build\build.ps1 -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
+          Copy-Item "$out\bin\ExtremeRagdoll.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Force
+          Copy-Item "$out\bin\ExtremeRagdoll.ClothSync.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Force
+          $main = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            'RUNTIME_SHA256.txt',
+            "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll`n$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll`n",
+            [System.Text.Encoding]::ASCII)
+
+      - name: Commit complete implementation
+        shell: pwsh
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git commit -m 'Fix localization registration and corpse collision lifecycle'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to commit v1.3.15 implementation.' }
+          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to push v1.3.15 implementation.' }
