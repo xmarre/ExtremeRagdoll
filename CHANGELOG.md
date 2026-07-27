@@ -5,7 +5,7 @@
 - Replaced the v1.3.12 direction guards with an authoritative-source direction pipeline.
 - Stopped blending native `KillingBlow.RagdollImpulseAmount` result data into an already captured hit direction.
 - Applied victim movement momentum once and prevented its opposing longitudinal component from reversing the killing blow.
-- Added the missing Simplified Chinese `language_data.xml` registration manifest.
+- Corrected the Simplified Chinese `language_data.xml` registration path and language metadata so Bannerlord loads the existing translation file.
 - Resolved the MCM display name through `TextObject` so the raw `{=ER_DisplayName}` token is no longer shown.
 
 ## v1.3.12
