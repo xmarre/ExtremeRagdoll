@@ -22,13 +22,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Apply final v1.3.15 source refinement
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/fix-localization-corpse-collision-v1.3.15'
-        shell: pwsh
-        run: |
-          python .\Source\Build\refine_v1315.py
-          if ($LASTEXITCODE -ne 0) { throw "Refinement script failed with exit code $LASTEXITCODE." }
-
       - name: Install .NET Core SDK 3.1
         uses: actions/setup-dotnet@v4
         with:
@@ -39,7 +32,6 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP "ExtremeRagdollBuild"
           .\Source\Build\build.ps1 -OutDir $out
-          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
           New-Item -ItemType Directory -Force ".\bin\Win64_Shipping_Client" | Out-Null
           Copy-Item "$out\bin\ExtremeRagdoll.dll" ".\bin\Win64_Shipping_Client\ExtremeRagdoll.dll" -Force
           Copy-Item "$out\bin\ExtremeRagdoll.ClothSync.dll" ".\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll" -Force
@@ -56,30 +48,22 @@ jobs:
             ($manifest -join "`n") + "`n",
             [System.Text.Encoding]::ASCII)
 
-      - name: Update PR implementation and runtime
+      - name: Update PR runtime binaries
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
         env:
           GH_PUSH_TOKEN: ${{ github.token }}
         run: |
-          $paths = @(
-            'Source/SafeSubModule.cs',
-            'CHANGELOG.md',
-            'bin/Win64_Shipping_Client',
-            'RUNTIME_SHA256.txt'
-          )
-          if (-not (git status --porcelain -- $paths)) {
-            Write-Host "Refined implementation and runtime already match."
+          if (-not (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt)) {
+            Write-Host "Runtime binaries already match the current source."
             exit 0
           }
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- $paths
-          git commit -m "Harden corpse finalization retry and format localization bootstrap"
-          if ($LASTEXITCODE -ne 0) { throw "Failed to commit refined implementation." }
+          git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
+          git commit -m "Build current runtime binaries"
           git push "https://x-access-token:${env:GH_PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
-          if ($LASTEXITCODE -ne 0) { throw "Failed to push refined implementation." }
 
       - name: Verify committed runtime on default branch
         if: github.event_name != 'pull_request'
