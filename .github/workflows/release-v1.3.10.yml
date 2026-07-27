@@ -1,0 +1,162 @@
+name: Publish Extreme Ragdoll v1.3.10
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/release-v1.3.10.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    env:
+      TAG_NAME: v1.3.10
+      RELEASE_NAME: Extreme Ragdoll v1.3.10
+      TARGET_COMMIT: a70b77cd58b33290b75ea9a4ddefc05d0f7a8ce2
+      ASSET_NAME: ExtremeRagdoll-v1.3.10-Bannerlord-1.3.15-to-1.4.7.zip
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Build and verify release runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollReleaseBuild'
+          .\Source\Build\build.ps1 -OutDir $out
+
+          $builtMainPath = Join-Path $out 'bin/ExtremeRagdoll.dll'
+          $builtHelperPath = Join-Path $out 'bin/ExtremeRagdoll.ClothSync.dll'
+          $committedMainPath = '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll'
+          $committedHelperPath = '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll'
+
+          $builtMain = (Get-FileHash $builtMainPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $builtHelper = (Get-FileHash $builtHelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $committedMain = (Get-FileHash $committedMainPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $committedHelper = (Get-FileHash $committedHelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          if ($builtMain -ne $committedMain) {
+            throw "ExtremeRagdoll.dll differs from the verified committed runtime. built=$builtMain committed=$committedMain"
+          }
+          if ($builtHelper -ne $committedHelper) {
+            throw "ExtremeRagdoll.ClothSync.dll differs from the verified committed runtime. built=$builtHelper committed=$committedHelper"
+          }
+
+          $expectedManifest = @(
+            "$builtMain  bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
+            "$builtHelper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
+          )
+          $actualManifest = @(Get-Content '.\RUNTIME_SHA256.txt' | Where-Object { $_.Trim().Length -gt 0 })
+          if (($actualManifest -join "`n") -ne ($expectedManifest -join "`n")) {
+            throw 'RUNTIME_SHA256.txt does not describe the freshly rebuilt release assemblies.'
+          }
+
+          "RELEASE_BUILD_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MAIN_DLL_SHA256=$builtMain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HELPER_DLL_SHA256=$builtHelper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Package installable module
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseRoot = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollRelease'
+          $moduleRoot = Join-Path $releaseRoot 'ExtremeRagdoll'
+          $moduleBin = Join-Path $moduleRoot 'bin/Win64_Shipping_Client'
+          New-Item -ItemType Directory -Path $moduleBin -Force | Out-Null
+
+          Copy-Item '.\SubModule.xml' $moduleRoot -Force
+          Copy-Item '.\ModuleData' $moduleRoot -Recurse -Force
+          Copy-Item (Join-Path $env:RELEASE_BUILD_OUT 'bin/ExtremeRagdoll.dll') $moduleBin -Force
+          Copy-Item (Join-Path $env:RELEASE_BUILD_OUT 'bin/ExtremeRagdoll.ClothSync.dll') $moduleBin -Force
+
+          $assetPath = Join-Path $env:GITHUB_WORKSPACE $env:ASSET_NAME
+          Compress-Archive -LiteralPath $moduleRoot -DestinationPath $assetPath -CompressionLevel Optimal -Force
+
+          $assetHash = (Get-FileHash $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumName = "$($env:ASSET_NAME).sha256"
+          $checksumPath = Join-Path $env:GITHUB_WORKSPACE $checksumName
+          [System.IO.File]::WriteAllText(
+            $checksumPath,
+            "$assetHash  $($env:ASSET_NAME)`n",
+            [System.Text.Encoding]::ASCII)
+          "ASSET_SHA256=$assetHash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          $notes = @'
+          ## Extreme Ragdoll v1.3.10
+
+          Directional death physics for Mount & Blade II: Bannerlord.
+
+          **Supported Bannerlord versions:** v1.3.15–v1.4.7  
+          **Required:** Harmony and Mod Configuration Menu v5
+
+          ### Changes
+
+          - Added automatic Dismemberment Plus compatibility safeguards.
+          - Prevented Extreme Ragdoll from force-finalizing corpses while Dismemberment Plus may still be rebuilding body or armour meshes.
+          - Disabled only Extreme Ragdoll's nonlethal push and knockdown injection while Dismemberment Plus is loaded; lethal death-launch physics remain enabled.
+          - Added complete Simplified Chinese localisation for the MCM menu, including groups, setting names, and hints.
+          - Preserved normal v1.3.9 behaviour when Dismemberment Plus is not loaded.
+
+          ### Installation
+
+          1. Download the installable ZIP attached to this release.
+          2. Extract the included `ExtremeRagdoll` folder into Bannerlord's `Modules` directory.
+          3. Ensure Harmony and MCM v5 are installed.
+          4. Enable **Extreme Ragdoll** in the launcher or BLSE.
+
+          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.10-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
+          '@
+          $notes = $notes.Trim() + "`n`n### Build integrity`n`n"
+          $notes += "- `ExtremeRagdoll.dll`: ``$($env:MAIN_DLL_SHA256)```n"
+          $notes += "- `ExtremeRagdoll.ClothSync.dll`: ``$($env:HELPER_DLL_SHA256)```n"
+          $notes += "- Installable ZIP: ``$($env:ASSET_SHA256)```n"
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:GITHUB_WORKSPACE 'release-notes.md'),
+            $notes,
+            [System.Text.UTF8Encoding]::new($false))
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release $($env:TAG_NAME) already exists; refusing to overwrite it."
+          }
+
+          $existingTag = git ls-remote --tags origin "refs/tags/$($env:TAG_NAME)"
+          if ($existingTag) {
+            throw "Tag $($env:TAG_NAME) already exists without a release; refusing to move or reuse it automatically."
+          }
+
+          gh release create $env:TAG_NAME `
+            $env:ASSET_NAME `
+            "$($env:ASSET_NAME).sha256" `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:TARGET_COMMIT `
+            --title $env:RELEASE_NAME `
+            --notes-file release-notes.md
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "gh release create failed with exit code $LASTEXITCODE."
+          }
+
+          gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --json url,tagName,name,isDraft,isPrerelease
