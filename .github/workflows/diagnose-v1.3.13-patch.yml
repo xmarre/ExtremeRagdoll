@@ -1,0 +1,21 @@
+name: Diagnose v1.3.13 patch
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/diagnose-v1.3.13-patch.yml
+
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v1.3.13-root-direction-localization
+          fetch-depth: 1
+          show-progress: false
+      - name: Run patch only
+        shell: pwsh
+        run: python .\Source\Build\apply_v1313_root_fix.py
