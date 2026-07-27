@@ -77,10 +77,7 @@ jobs:
           $project = '.\Source\Build\Tools\Mono.Cecil.csproj'
           $content = Get-Content -LiteralPath $project -Raw
           $needle = '    <TargetFramework>netstandard2.0</TargetFramework>'
-          $replacement = @"
-    <TargetFramework>netstandard2.0</TargetFramework>
-    <PackageId>ExtremeRagdoll.BuildDependencies</PackageId>
-"@.TrimEnd()
+          $replacement = $needle + "`r`n    <PackageId>ExtremeRagdoll.BuildDependencies</PackageId>"
           if (-not $content.Contains($needle)) { throw 'Expected TargetFramework element was not found.' }
           $content.Replace($needle, $replacement) | Set-Content -LiteralPath $project -Encoding utf8
 
