@@ -1,6 +1,12 @@
 name: Apply and verify deathblow direction fix
 
 on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - Source/Build/apply_direction_fix.py
+      - .github/workflows/apply-v1.3.12-direction-fix.yml
   push:
     branches:
       - agent/fix-deathblow-direction
