@@ -475,8 +475,9 @@ namespace ExtremeRagdoll.SafeRuntime
         private const float MaxCentralBoneForcePerTick = 15000f;
         private const float CentralChunkInterval = 0.016f;
         private const float RemainingForceTinySq = 0.01f;
-        private const float CorpseFinalizationTimeout = 30f;
-        private const float CorpseFinalizationFailureGrace = 5f;
+        // Start fallback finalization at two seconds and permit retries only until
+        // the absolute three-second corpse-collision ceiling.
+        private const float CorpseFinalizationHardDeadline = 3f;
         private const float CorpseActiveStateFallbackTimeout = 2f;
         private const float CorpseFinalizationPollInterval = 0.10f;
         private const float CorpseFinalizationMainLoopDeferral = 3600f;
@@ -2687,14 +2688,17 @@ namespace ExtremeRagdoll.SafeRuntime
             if (agent == null)
                 throw new InvalidOperationException("Corpse finalization requires a live Agent wrapper.");
 
-            MBAgentVisuals visuals = agent.AgentVisuals;
-            Skeleton skeleton = ReferenceEquals(visuals, null) ? null : visuals.GetSkeleton();
-            if (ReferenceEquals(skeleton, null))
-                throw new InvalidOperationException("Corpse finalization requires an active skeleton wrapper.");
+            if (now >= 0f)
+            {
+                MBAgentVisuals visuals = agent.AgentVisuals;
+                Skeleton skeleton = ReferenceEquals(visuals, null) ? null : visuals.GetSkeleton();
+                if (ReferenceEquals(skeleton, null))
+                    throw new InvalidOperationException("Natural corpse finalization requires an active skeleton wrapper.");
 
-            RagdollState state = skeleton.GetCurrentRagdollState();
-            if (state != RagdollState.NeedsDeactivation && now >= 0f)
-                return;
+                RagdollState state = skeleton.GetCurrentRagdollState();
+                if (state != RagdollState.NeedsDeactivation)
+                    return;
+            }
 
             const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
             MethodInfo[] methods = typeof(Agent).GetMethods(Flags);
@@ -2746,12 +2750,23 @@ namespace ExtremeRagdoll.SafeRuntime
                     }
                     catch { skeleton = null; }
 
+                    float finalizationAge = now - pending.RagdollSeenAt;
                     if (ReferenceEquals(skeleton, null))
                     {
-                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
-                            _pending.RemoveAt(i);
-                        else
+                        if (finalizationAge <= CorpseActiveStateFallbackTimeout)
+                        {
                             pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                            continue;
+                        }
+
+                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)
+                        {
+                            // The forced fallback does not require a skeleton wrapper; invoke the
+                            // paired native end call directly once the short safety bound expires.
+                            QueueVisualResync(pending.Agent, -1f);
+                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
+                        }
+                        _pending.RemoveAt(i);
                         continue;
                     }
 
@@ -2770,48 +2785,12 @@ namespace ExtremeRagdoll.SafeRuntime
                             // PulseIndex changes only after Invoke returns, so an exception leaves this retryable.
                             QueueVisualResync(pending.Agent, now);
                             pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
                         }
-                        else if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)
-                        {
-                            _pending.RemoveAt(i);
-                        }
-                        else
-                        {
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
-                        }
+                        _pending.RemoveAt(i);
                         continue;
                     }
 
-                    if (_dismembermentPlusCompatibility)
-                    {
-                        // Dismemberment Plus can rebuild body and armour MetaMeshes immediately after death.
-                        // Preserve the full 30-second mesh-safety window, then pair every successful
-                        // StartRagdollAsCorpse call with EndRagdollAsCorpse. The old branch discarded
-                        // lifecycle ownership here and could leave the corpse as a permanent obstacle.
-                        if (now - pending.RagdollSeenAt <= CorpseFinalizationTimeout)
-                        {
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
-                            continue;
-                        }
-
-                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)
-                        {
-                            QueueVisualResync(pending.Agent, -1f);
-                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
-                            SafeLog.Info(
-                                "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse for agent #" +
-                                SafeAgentIndex(pending.Agent) + ".");
-                        }
-                        else
-                        {
-                            _pending.RemoveAt(i);
-                        }
-                        continue;
-                    }
-
-                    if (now - pending.RagdollSeenAt <= CorpseActiveStateFallbackTimeout)
+                    if (finalizationAge <= CorpseActiveStateFallbackTimeout)
                     {
                         pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
                         continue;
@@ -2819,32 +2798,41 @@ namespace ExtremeRagdoll.SafeRuntime
 
                     if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)
                     {
-                        // Compatibility fallback: later Bannerlord builds can leave settled corpses in Active instead
-                        // of reaching NeedsDeactivation. Pair the mod-owned Start call after the short active-state bound.
+                        // Bannerlord and modded corpse paths can leave a settled corpse in Active.
+                        // Begin forced paired finalization at two seconds, leaving one second for
+                        // bounded retries without exceeding the three-second collision ceiling.
                         QueueVisualResync(pending.Agent, -1f);
                         pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;
-                        pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                        if (_dismembermentPlusCompatibility)
+                        {
+                            SafeLog.Info(
+                                "Dismemberment Plus bounded corpse-safety window elapsed; paired EndRagdollAsCorpse for agent #" +
+                                SafeAgentIndex(pending.Agent) + ".");
+                        }
                     }
-                    else
-                    {
-                        _pending.RemoveAt(i);
-                    }
+                    _pending.RemoveAt(i);
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Keep only this corpse retryable and throttle failures. A transient
-                    // EndRagdollAsCorpse failure after the Dismemberment Plus safety window gets
-                    // a short bounded grace period; one broken native wrapper still cannot remain
-                    // in the mission queue indefinitely or starve later corpses.
+                    // Retry failed paired finalization only inside the absolute three-second
+                    // collision ceiling. Clamp the next poll to that deadline so no 30-second
+                    // compatibility path can be reintroduced through failure handling.
                     PendingDeath pending = i >= 0 && i < _pending.Count ? _pending[i] : null;
                     if (pending != null && pending.PulseCount < 0)
                     {
-                        float failureDeadline =
-                            CorpseFinalizationTimeout + CorpseFinalizationFailureGrace;
-                        if (now - pending.RagdollSeenAt > failureDeadline)
+                        float finalizationAge = now - pending.RagdollSeenAt;
+                        if (finalizationAge >= CorpseFinalizationHardDeadline)
+                        {
+                            if (SafeSettings.DebugLogging)
+                                SafeLog.Error("Corpse finalization exhausted the three-second retry ceiling", ex);
                             _pending.RemoveAt(i);
+                        }
                         else
-                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;
+                        {
+                            float hardDeadlineAt = pending.RagdollSeenAt + CorpseFinalizationHardDeadline;
+                            pending.CurrentPulseBaseMagnitude =
+                                Math.Min(now + CorpseFinalizationPollInterval, hardDeadlineAt);
+                        }
                     }
                 }
             }

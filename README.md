@@ -65,7 +65,7 @@ Pull-request CI rebuilds the current source and updates the checked-in runtime D
 
 - Registers the module language manifest through Bannerlord's live `LanguageData` registry before MCM resolves its labels.
 - Reloads the active non-English dictionary once after registration and retains the path for later language changes.
-- Preserves Dismemberment Plus mesh safety for 30 seconds, then completes every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair instead of abandoning collision ownership.
+- Begins forced corpse finalization after two seconds and enforces an absolute three-second retry ceiling for every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair, including Dismemberment Plus.
 - Makes no force, direction, hit-bone, pulse, mount-scaling, campaign, or per-frame global-scan changes.
 
 Runtime validation inside Bannerlord remains required for MCM rendering behavior that cannot be executed in GitHub Actions.

@@ -5,10 +5,10 @@
 - Registered Extreme Ragdoll's language manifest in Bannerlord's live localization registry before MCM builds the menu.
 - Reloaded the active non-English dictionary after registration so Simplified Chinese labels resolve during the same startup.
 - Retained the registered path for later in-game language changes.
-- Fixed the Dismemberment Plus compatibility path abandoning a successful corpse-ragdoll lifecycle after its 30-second mesh-safety timeout.
-- Paired the delayed `EndRagdollAsCorpse` call after that safety window so corpses do not remain permanent physical obstacles.
-- Retries transient corpse-finalization failures for five seconds after the mesh-safety timeout before abandoning a broken native wrapper.
-- Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and Dismemberment Plus's immediate mesh-rebuild safety window.
+- Removed the 30-second Dismemberment Plus corpse-collision window.
+- Begins forced paired `EndRagdollAsCorpse` finalization after two seconds for Active or temporarily skeleton-less corpses.
+- Retries transient finalization failures only until the absolute three-second collision ceiling.
+- Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and a short Dismemberment Plus mesh-rebuild safety bound.
 
 ## v1.3.14
 
