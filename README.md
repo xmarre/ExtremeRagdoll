@@ -63,10 +63,11 @@ Pull-request CI rebuilds the current source and updates the checked-in runtime D
 
 ## v1.3.16 scope
 
-- Retains the v1.3.15 live localization registration and full English/Simplified Chinese translation tables.
-- Corrects MCM v5.12.1's stale-language view-model state by calling MCM's own `RefreshValues` path whenever the Mod Options category becomes active.
-- Refreshes setting labels, group headings, the mod-list entry, and the selected mod title after an in-game text-language change.
-- Uses a guarded, reflection-based Harmony integration that becomes a no-op if the expected MCM UI type is unavailable.
-- Adds no mission tick, campaign scan, persistent polling, physics, force, corpse-finalization, or Dismemberment Plus changes.
+- Retains the v1.3.15 live localization registration and complete English/Simplified Chinese translation tables.
+- Patches MCM's visible cached-label getters directly for Extreme Ragdoll: setting names, group headings, and the mod display name are resolved through the current Bannerlord language dictionary whenever the UI reads them.
+- Retains MCM's native `RefreshValues` route only as a secondary optimisation; correct localization no longer depends on a tab-selection event firing.
+- Retries installation before the initial module screen and when the required MCM/Harmony assemblies load.
+- Writes one-time patch-installation and first-translation evidence to `ExtremeRagdoll.Localization.log` for native verification.
+- Adds no mission tick, application tick, campaign scan, timer, persistent polling, physics, force, corpse-finalization, or Dismemberment Plus changes.
 
 Runtime validation inside Bannerlord remains required for MCM rendering behaviour that cannot be executed in GitHub Actions.
