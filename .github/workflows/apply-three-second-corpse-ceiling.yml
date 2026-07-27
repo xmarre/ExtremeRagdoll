@@ -1,0 +1,139 @@
+name: Apply three-second corpse ceiling
+
+on:
+  push:
+    branches:
+      - agent/fix-localization-corpse-collision-v1.3.15
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-2022
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-localization-corpse-collision-v1.3.15
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply scoped lifecycle correction
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          source = 'Source/SafeSubModule.cs'
+
+          replace_once(
+              source,
+              '''        private const float CorpseFinalizationTimeout = 30f;\n        private const float CorpseFinalizationFailureGrace = 5f;\n        private const float CorpseActiveStateFallbackTimeout = 2f;''',
+              '''        // Start fallback finalization at two seconds and permit retries only until\n        // the absolute three-second corpse-collision ceiling.\n        private const float CorpseFinalizationHardDeadline = 3f;\n        private const float CorpseActiveStateFallbackTimeout = 2f;''')
+
+          replace_once(
+              source,
+              '''            MBAgentVisuals visuals = agent.AgentVisuals;\n            Skeleton skeleton = ReferenceEquals(visuals, null) ? null : visuals.GetSkeleton();\n            if (ReferenceEquals(skeleton, null))\n                throw new InvalidOperationException("Corpse finalization requires an active skeleton wrapper.");\n\n            RagdollState state = skeleton.GetCurrentRagdollState();\n            if (state != RagdollState.NeedsDeactivation && now >= 0f)\n                return;''',
+              '''            if (now >= 0f)\n            {\n                MBAgentVisuals visuals = agent.AgentVisuals;\n                Skeleton skeleton = ReferenceEquals(visuals, null) ? null : visuals.GetSkeleton();\n                if (ReferenceEquals(skeleton, null))\n                    throw new InvalidOperationException("Natural corpse finalization requires an active skeleton wrapper.");\n\n                RagdollState state = skeleton.GetCurrentRagdollState();\n                if (state != RagdollState.NeedsDeactivation)\n                    return;\n            }''')
+
+          replace_once(
+              source,
+              '''                    if (ReferenceEquals(skeleton, null))\n                    {\n                        if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)\n                            _pending.RemoveAt(i);\n                        else\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                        continue;\n                    }''',
+              '''                    float finalizationAge = now - pending.RagdollSeenAt;\n                    if (ReferenceEquals(skeleton, null))\n                    {\n                        if (finalizationAge <= CorpseActiveStateFallbackTimeout)\n                        {\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                            continue;\n                        }\n\n                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                        {\n                            // The forced fallback does not require a skeleton wrapper; invoke the\n                            // paired native end call directly once the short safety bound expires.\n                            QueueVisualResync(pending.Agent, -1f);\n                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                        }\n                        _pending.RemoveAt(i);\n                        continue;\n                    }''')
+
+          replace_once(
+              source,
+              '''                    if (state == RagdollState.NeedsDeactivation)\n                    {\n                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                        {\n                            // Pair only the StartRagdollAsCorpse call that ExtremeRagdoll itself successfully made.\n                            // PulseIndex changes only after Invoke returns, so an exception leaves this retryable.\n                            QueueVisualResync(pending.Agent, now);\n                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                        }\n                        else if (now - pending.RagdollSeenAt > CorpseFinalizationTimeout)\n                        {\n                            _pending.RemoveAt(i);\n                        }\n                        else\n                        {\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                        }\n                        continue;\n                    }''',
+              '''                    if (state == RagdollState.NeedsDeactivation)\n                    {\n                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                        {\n                            // Pair only the StartRagdollAsCorpse call that ExtremeRagdoll itself successfully made.\n                            // PulseIndex changes only after Invoke returns, so an exception leaves this retryable.\n                            QueueVisualResync(pending.Agent, now);\n                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                        }\n                        _pending.RemoveAt(i);\n                        continue;\n                    }''')
+
+          replace_once(
+              source,
+              '''                    if (_dismembermentPlusCompatibility)\n                    {\n                        // Dismemberment Plus can rebuild body and armour MetaMeshes immediately after death.\n                        // Preserve the full 30-second mesh-safety window, then pair every successful\n                        // StartRagdollAsCorpse call with EndRagdollAsCorpse. The old branch discarded\n                        // lifecycle ownership here and could leave the corpse as a permanent obstacle.\n                        if (now - pending.RagdollSeenAt <= CorpseFinalizationTimeout)\n                        {\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                            continue;\n                        }\n\n                        if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                        {\n                            QueueVisualResync(pending.Agent, -1f);\n                            pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                            SafeLog.Info(\n                                "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse for agent #" +\n                                SafeAgentIndex(pending.Agent) + ".");\n                        }\n                        else\n                        {\n                            _pending.RemoveAt(i);\n                        }\n                        continue;\n                    }\n\n                    if (now - pending.RagdollSeenAt <= CorpseActiveStateFallbackTimeout)\n                    {\n                        pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                        continue;\n                    }\n\n                    if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                    {\n                        // Compatibility fallback: later Bannerlord builds can leave settled corpses in Active instead\n                        // of reaching NeedsDeactivation. Pair the mod-owned Start call after the short active-state bound.\n                        QueueVisualResync(pending.Agent, -1f);\n                        pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                        pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                    }\n                    else\n                    {\n                        _pending.RemoveAt(i);\n                    }''',
+              '''                    if (finalizationAge <= CorpseActiveStateFallbackTimeout)\n                    {\n                        pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                        continue;\n                    }\n\n                    if (pending.PulseIndex == CorpseFinalizerPendingPulseIndex)\n                    {\n                        // Bannerlord and modded corpse paths can leave a settled corpse in Active.\n                        // Begin forced paired finalization at two seconds, leaving one second for\n                        // bounded retries without exceeding the three-second collision ceiling.\n                        QueueVisualResync(pending.Agent, -1f);\n                        pending.PulseIndex = CorpseFinalizerInvokedPulseIndex;\n                        if (_dismembermentPlusCompatibility)\n                        {\n                            SafeLog.Info(\n                                "Dismemberment Plus bounded corpse-safety window elapsed; paired EndRagdollAsCorpse for agent #" +\n                                SafeAgentIndex(pending.Agent) + ".");\n                        }\n                    }\n                    _pending.RemoveAt(i);''')
+
+          replace_once(
+              source,
+              '''                catch\n                {\n                    // Keep only this corpse retryable and throttle failures. A transient\n                    // EndRagdollAsCorpse failure after the Dismemberment Plus safety window gets\n                    // a short bounded grace period; one broken native wrapper still cannot remain\n                    // in the mission queue indefinitely or starve later corpses.\n                    PendingDeath pending = i >= 0 && i < _pending.Count ? _pending[i] : null;\n                    if (pending != null && pending.PulseCount < 0)\n                    {\n                        float failureDeadline =\n                            CorpseFinalizationTimeout + CorpseFinalizationFailureGrace;\n                        if (now - pending.RagdollSeenAt > failureDeadline)\n                            _pending.RemoveAt(i);\n                        else\n                            pending.CurrentPulseBaseMagnitude = now + CorpseFinalizationPollInterval;\n                    }\n                }''',
+              '''                catch (Exception ex)\n                {\n                    // Retry failed paired finalization only inside the absolute three-second\n                    // collision ceiling. Clamp the next poll to that deadline so no 30-second\n                    // compatibility path can be reintroduced through failure handling.\n                    PendingDeath pending = i >= 0 && i < _pending.Count ? _pending[i] : null;\n                    if (pending != null && pending.PulseCount < 0)\n                    {\n                        float finalizationAge = now - pending.RagdollSeenAt;\n                        if (finalizationAge >= CorpseFinalizationHardDeadline)\n                        {\n                            if (SafeSettings.DebugLogging)\n                                SafeLog.Error("Corpse finalization exhausted the three-second retry ceiling", ex);\n                            _pending.RemoveAt(i);\n                        }\n                        else\n                        {\n                            float hardDeadlineAt = pending.RagdollSeenAt + CorpseFinalizationHardDeadline;\n                            pending.CurrentPulseBaseMagnitude =\n                                Math.Min(now + CorpseFinalizationPollInterval, hardDeadlineAt);\n                        }\n                    }\n                }''')
+
+          validator = 'Source/Build/ValidateAssemblies.cs'
+          replace_once(
+              validator,
+              '''            Require(MethodContainsStringContaining(\n                    processCorpseFinalizers,\n                    "Dismemberment Plus corpse mesh-safety window elapsed; paired EndRagdollAsCorpse"),\n                "Dismemberment Plus timeout can abandon the mod-owned corpse lifecycle pairing");''',
+              '''            Require(MethodContainsStringContaining(\n                    processCorpseFinalizers,\n                    "Dismemberment Plus bounded corpse-safety window elapsed; paired EndRagdollAsCorpse"),\n                "Dismemberment Plus path can abandon the mod-owned corpse lifecycle pairing");\n            RequireFloatConstant(behavior, "CorpseFinalizationHardDeadline", 3f);\n            RequireFloatConstant(behavior, "CorpseActiveStateFallbackTimeout", 2f);\n            Require(!behavior.Fields.Any(f =>\n                    f.Name == "CorpseFinalizationTimeout" ||\n                    f.Name == "CorpseFinalizationFailureGrace"),\n                "obsolete 30-second corpse finalization timing remains in the runtime");''')
+
+          replace_once(
+              validator,
+              '''    private static void RequireEnumValue(TypeDefinition type, string name, int expected)\n    {\n        FieldDefinition field = type.Fields.Single(f => f.Name == name);\n        Require(field.HasConstant && Convert.ToInt32(field.Constant) == expected,\n            type.FullName + "." + name + " has the wrong value");\n    }''',
+              '''    private static void RequireEnumValue(TypeDefinition type, string name, int expected)\n    {\n        FieldDefinition field = type.Fields.Single(f => f.Name == name);\n        Require(field.HasConstant && Convert.ToInt32(field.Constant) == expected,\n            type.FullName + "." + name + " has the wrong value");\n    }\n\n    private static void RequireFloatConstant(TypeDefinition type, string name, float expected)\n    {\n        FieldDefinition field = type.Fields.Single(f => f.Name == name);\n        Require(field.HasConstant && Math.Abs(Convert.ToSingle(field.Constant) - expected) < 0.0001f,\n            type.FullName + "." + name + " has the wrong value");\n    }''')
+
+          replace_once(
+              'README.md',
+              "- Preserves Dismemberment Plus mesh safety for 30 seconds, then completes every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair instead of abandoning collision ownership.",
+              "- Begins forced corpse finalization after two seconds and enforces an absolute three-second retry ceiling for every mod-owned `StartRagdollAsCorpse`/`EndRagdollAsCorpse` pair, including Dismemberment Plus.")
+
+          replace_once(
+              'CHANGELOG.md',
+              '''- Fixed the Dismemberment Plus compatibility path abandoning a successful corpse-ragdoll lifecycle after its 30-second mesh-safety timeout.\n- Paired the delayed `EndRagdollAsCorpse` call after that safety window so corpses do not remain permanent physical obstacles.\n- Retries transient corpse-finalization failures for five seconds after the mesh-safety timeout before abandoning a broken native wrapper.\n- Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and Dismemberment Plus's immediate mesh-rebuild safety window.''',
+              '''- Removed the 30-second Dismemberment Plus corpse-collision window.\n- Begins forced paired `EndRagdollAsCorpse` finalization after two seconds for Active or temporarily skeleton-less corpses.\n- Retries transient finalization failures only until the absolute three-second collision ceiling.\n- Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and a short Dismemberment Plus mesh-rebuild safety bound.''')
+
+          final_source = Path(source).read_text(encoding='utf-8')
+          for forbidden in ('CorpseFinalizationTimeout = 30f', 'CorpseFinalizationFailureGrace', 'full 30-second mesh-safety window'):
+              if forbidden in final_source:
+                  raise RuntimeError(f'obsolete collision timing remains: {forbidden}')
+          for required in ('CorpseFinalizationHardDeadline = 3f', 'CorpseActiveStateFallbackTimeout = 2f', 'bounded corpse-safety window elapsed'):
+              if required not in final_source:
+                  raise RuntimeError(f'missing lifecycle invariant: {required}')
+          '@ | Set-Content -Encoding UTF8 "$env:RUNNER_TEMP\apply_three_second_ceiling.py"
+          python "$env:RUNNER_TEMP\apply_three_second_ceiling.py"
+
+          Remove-Item '.github/workflows/apply-three-second-corpse-ceiling.yml' -Force
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Build and verify runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll-v1.3.15-three-second-ceiling'
+          .\Source\Build\build.ps1 -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
+
+          Copy-Item "$out\bin\ExtremeRagdoll.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Force
+          Copy-Item "$out\bin\ExtremeRagdoll.ClothSync.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Force
+
+          $main = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            'RUNTIME_SHA256.txt',
+            "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll`n$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll`n",
+            [System.Text.Encoding]::ASCII)
+
+          Remove-Item '.\Source\Build\Tools\obj' -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Commit complete correction
+        shell: pwsh
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git commit -m 'Enforce three-second corpse collision ceiling'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to commit three-second corpse ceiling.' }
+          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" 'HEAD:agent/fix-localization-corpse-collision-v1.3.15'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to push three-second corpse ceiling.' }
