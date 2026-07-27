@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.12
+
+- Fixed reversed deathblow launches, including the first kill in a combat mission.
+- Rejects oppositely signed `KillingBlow.RagdollImpulseAmount` vectors when an exact captured impact direction is available.
+- Enforces a final horizontal source-away invariant after engine-impulse, victim-momentum, and upward-lift blending.
+- Preserves force strength, pulse delivery, hit-bone routing, mount-collision scaling, ragdoll handoff, corpse finalization, and Dismemberment Plus safeguards.
+
 ## v1.3.11
 
 - Rebuilt and republished the runtime DLLs from the maintained source after the earlier Nexus v1.3.10 package was found to contain stale binaries.
