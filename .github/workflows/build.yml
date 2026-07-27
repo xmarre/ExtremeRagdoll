@@ -20,6 +20,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install .NET Core SDK 3.1
         uses: actions/setup-dotnet@v4
@@ -50,6 +51,8 @@ jobs:
       - name: Update PR runtime binaries
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
         run: |
           if (-not (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt)) {
             Write-Host "Runtime binaries already match the current source."
@@ -60,7 +63,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
           git commit -m "Build current runtime binaries"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
 
       - name: Verify committed runtime on default branch
         if: github.event_name != 'pull_request'
@@ -71,6 +74,61 @@ jobs:
             throw "Committed runtime binaries do not match the current source build."
           }
 
+      - name: Validate module and localization data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          [xml]$module = Get-Content '.\SubModule.xml' -Raw
+          if ($module.Module.Version.value -ne 'v1.3.14') {
+            throw "Unexpected module version: $($module.Module.Version.value)"
+          }
+
+          [xml]$languageData = Get-Content '.\ModuleData\Languages\CNs\language_data.xml' -Raw
+          $registeredFiles = @($languageData.LanguageData.LanguageFile | ForEach-Object { $_.xml_path })
+          if ($registeredFiles.Count -ne 1 -or $registeredFiles[0] -ne 'CNs/std_module_strings_xml.xml') {
+            throw "Unexpected Simplified Chinese language registration: $($registeredFiles -join ', ')"
+          }
+
+          [xml]$english = Get-Content '.\ModuleData\Languages\std_module_strings_xml.xml' -Raw
+          [xml]$chinese = Get-Content '.\ModuleData\Languages\CNs\std_module_strings_xml.xml' -Raw
+          foreach ($table in @($english, $chinese)) {
+            $root = $table.DocumentElement
+            if ($root.LocalName -ne 'base' -or $root.GetAttribute('type') -ne 'string') {
+              throw 'Localization string table must use a <base type="string"> root.'
+            }
+            if ($root.GetNamespaceOfPrefix('xsi') -ne 'http://www.w3.org/2001/XMLSchema-instance' -or
+                $root.GetNamespaceOfPrefix('xsd') -ne 'http://www.w3.org/2001/XMLSchema') {
+              throw 'Localization string table is missing the standard XML schema namespace declarations.'
+            }
+          }
+
+          $englishLanguage = [string]$english.base.tags.tag.language
+          $chineseLanguage = [string]$chinese.base.tags.tag.language
+          if ($englishLanguage -ne 'English') { throw "Unexpected base language tag: $englishLanguage" }
+          if ($chineseLanguage -ne '简体中文') { throw "Unexpected Chinese language tag: $chineseLanguage" }
+
+          $englishNodes = @($english.base.strings.string)
+          $chineseNodes = @($chinese.base.strings.string)
+          $englishIds = @($englishNodes | ForEach-Object { [string]$_.id })
+          $chineseIds = @($chineseNodes | ForEach-Object { [string]$_.id })
+          if (($englishIds | Sort-Object -Unique).Count -ne $englishIds.Count) { throw 'Duplicate English localization IDs.' }
+          if (($chineseIds | Sort-Object -Unique).Count -ne $chineseIds.Count) { throw 'Duplicate Chinese localization IDs.' }
+          if (($englishIds | Sort-Object) -join "`n" -ne ($chineseIds | Sort-Object) -join "`n") {
+            throw 'English and Simplified Chinese localization ID sets differ.'
+          }
+          if (@($englishNodes | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.text) }).Count -gt 0 -or
+              @($chineseNodes | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.text) }).Count -gt 0) {
+            throw 'Localization contains an empty translation value.'
+          }
+
+          $sourceText = Get-Content '.\Source\SafeSubModule.cs' -Raw
+          $referencedIds = @([regex]::Matches($sourceText, '\{=([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+          $missingIds = @($referencedIds | Where-Object { $_ -notin $englishIds })
+          if ($missingIds.Count -gt 0) {
+            throw "Source references missing localization IDs: $($missingIds -join ', ')"
+          }
+
       - name: Package module artifact
         shell: pwsh
         run: |
@@ -79,11 +137,11 @@ jobs:
           Copy-Item ".\SubModule.xml" $stage
           Copy-Item ".\ModuleData" $stage -Recurse
           Copy-Item ".\bin" $stage -Recurse
-          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.13.zip" -Force
+          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.14.zip" -Force
 
       - name: Upload module artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.13
-          path: ExtremeRagdoll-v1.3.13.zip
+          name: ExtremeRagdoll-v1.3.14
+          path: ExtremeRagdoll-v1.3.14.zip
           if-no-files-found: error
