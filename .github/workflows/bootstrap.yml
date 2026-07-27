@@ -95,14 +95,14 @@ jobs:
             '==========================================='
             ''
             (Get-Content -LiteralPath $log -Tail 250)
-          ) | Set-Content -LiteralPath '.build-error.txt' -Encoding utf8
+          ) | Set-Content -LiteralPath 'build-error.txt' -Encoding utf8
 
       - name: Upload build failure diagnostics
         if: steps.build.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: ExtremeRagdoll-v1.3.10-build-error
-          path: .build-error.txt
+          path: build-error.txt
           if-no-files-found: error
 
       - name: Stage runtime binaries and hashes
