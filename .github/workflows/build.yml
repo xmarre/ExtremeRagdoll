@@ -1,0 +1,84 @@
+name: Build and verify runtime
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out source branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Build current source
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "ExtremeRagdollBuild"
+          .\Source\Build\build.ps1 -OutDir $out
+          New-Item -ItemType Directory -Force ".\bin\Win64_Shipping_Client" | Out-Null
+          Copy-Item "$out\bin\ExtremeRagdoll.dll" ".\bin\Win64_Shipping_Client\ExtremeRagdoll.dll" -Force
+          Copy-Item "$out\bin\ExtremeRagdoll.ClothSync.dll" ".\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll" -Force
+
+          $main = (Get-FileHash ".\bin\Win64_Shipping_Client\ExtremeRagdoll.dll" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash ".\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll" -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
+            "$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
+          ) | Set-Content ".\RUNTIME_SHA256.txt" -Encoding ascii
+
+      - name: Update PR runtime binaries
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: pwsh
+        run: |
+          if (-not (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt)) {
+            Write-Host "Runtime binaries already match the current source."
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
+          git commit -m "Build current runtime binaries"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+
+      - name: Verify committed runtime on default branch
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        run: |
+          if (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt) {
+            git diff -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
+            throw "Committed runtime binaries do not match the current source build."
+          }
+
+      - name: Package module artifact
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "ExtremeRagdoll"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item ".\SubModule.xml" $stage
+          Copy-Item ".\ModuleData" $stage -Recurse
+          Copy-Item ".\bin" $stage -Recurse
+          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.10.zip" -Force
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.3.10
+          path: ExtremeRagdoll-v1.3.10.zip
+          if-no-files-found: error
