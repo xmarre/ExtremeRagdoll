@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.3.14
+
+- Corrected both localization string files to Bannerlord's required `type="string"` XML format.
+- Added the standard XML namespace declaration used by working Bannerlord module localization files.
+- Retained the corrected Simplified Chinese language manifest and complete translation key set.
+- Added package validation that rejects malformed base or Simplified Chinese string-table roots before release.
+- No gameplay or physics behavior changed.
+
 ## v1.3.13
 
 - Replaced the v1.3.12 direction guards with an authoritative-source direction pipeline.
