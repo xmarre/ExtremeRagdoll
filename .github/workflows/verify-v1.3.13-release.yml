@@ -1,0 +1,138 @@
+name: Verify published Extreme Ragdoll v1.3.13
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/verify-v1.3.13-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: windows-2022
+    env:
+      TAG_NAME: v1.3.13
+      RELEASE_NAME: Extreme Ragdoll v1.3.13
+      TARGET_COMMIT: cb46032ad3dcc800c30e4ec232209d419e186722
+      ASSET_NAME: ExtremeRagdoll-v1.3.13-Bannerlord-1.3.15-to-1.4.7.zip
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Rebuild immutable release commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git checkout --detach $env:TARGET_COMMIT
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollIndependentVerificationBuild'
+          .\Source\Build\build.ps1 -OutDir $out
+          $main = (Get-FileHash (Join-Path $out 'bin/ExtremeRagdoll.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash (Join-Path $out 'bin/ExtremeRagdoll.ClothSync.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          "MAIN_DLL_SHA256=$main" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HELPER_DLL_SHA256=$helper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Download and verify published release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadataJson = gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --json url,tagName,name,isDraft,isPrerelease,targetCommitish,assets
+          if ($LASTEXITCODE -ne 0) { throw 'Published release could not be read.' }
+          $metadata = $metadataJson | ConvertFrom-Json
+          if ($metadata.tagName -ne $env:TAG_NAME) { throw 'Release tag mismatch.' }
+          if ($metadata.name -ne $env:RELEASE_NAME) { throw 'Release name mismatch.' }
+          if ($metadata.isDraft -or $metadata.isPrerelease) { throw 'Release is draft or prerelease.' }
+          if ($metadata.targetCommitish -ne $env:TARGET_COMMIT) {
+            throw "Release target mismatch: $($metadata.targetCommitish)"
+          }
+
+          $checksumName = "$($env:ASSET_NAME).sha256"
+          $assetNames = @($metadata.assets | ForEach-Object { $_.name })
+          foreach ($required in @($env:ASSET_NAME, $checksumName)) {
+            if ($assetNames -notcontains $required) { throw "Missing release asset: $required" }
+          }
+
+          $download = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollPublishedV1313'
+          New-Item -ItemType Directory -Force $download | Out-Null
+          gh release download $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --pattern $env:ASSET_NAME --dir $download
+          if ($LASTEXITCODE -ne 0) { throw 'Installable ZIP download failed.' }
+          gh release download $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --pattern $checksumName --dir $download
+          if ($LASTEXITCODE -ne 0) { throw 'Checksum download failed.' }
+
+          $zip = Join-Path $download $env:ASSET_NAME
+          $checksum = Join-Path $download $checksumName
+          $checksumLine = (Get-Content $checksum -Raw).Trim()
+          if ($checksumLine -notmatch '^([0-9a-fA-F]{64})  (.+)$') { throw 'Invalid checksum file.' }
+          if ($Matches[2] -ne $env:ASSET_NAME) { throw 'Checksum references wrong asset.' }
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($zipHash -ne $Matches[1].ToLowerInvariant()) { throw 'Installable ZIP checksum mismatch.' }
+
+          $extract = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollPublishedV1313Extracted'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+          $module = Join-Path $extract 'ExtremeRagdoll'
+          if (Test-Path (Join-Path $module 'Source')) { throw 'Installable ZIP contains source.' }
+          foreach ($path in @(
+            'SubModule.xml',
+            'ModuleData/Languages/CNs/language_data.xml',
+            'ModuleData/Languages/CNs/std_module_strings_xml.xml',
+            'bin/Win64_Shipping_Client/ExtremeRagdoll.dll',
+            'bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll'
+          )) {
+            if (-not (Test-Path (Join-Path $module $path))) { throw "Missing packaged path: $path" }
+          }
+
+          [xml]$subModule = Get-Content (Join-Path $module 'SubModule.xml') -Raw
+          if ($subModule.Module.Version.value -ne $env:TAG_NAME) { throw 'Packaged module version mismatch.' }
+          [xml]$language = Get-Content (Join-Path $module 'ModuleData/Languages/CNs/language_data.xml') -Raw
+          if ($language.LanguageData.LanguageFile.xml_path -ne 'CNs/std_module_strings_xml.xml') {
+            throw 'Packaged Chinese language registration path mismatch.'
+          }
+
+          $main = (Get-FileHash (Join-Path $module 'bin/Win64_Shipping_Client/ExtremeRagdoll.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash (Join-Path $module 'bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($main -ne $env:MAIN_DLL_SHA256) { throw 'Packaged main DLL differs from fresh source build.' }
+          if ($helper -ne $env:HELPER_DLL_SHA256) { throw 'Packaged helper DLL differs from fresh source build.' }
+
+          $record = @(
+            "tag=$($env:TAG_NAME)",
+            "release_name=$($env:RELEASE_NAME)",
+            "target_commit=$($env:TARGET_COMMIT)",
+            "asset=$($env:ASSET_NAME)",
+            "asset_sha256=$zipHash",
+            "main_dll_sha256=$main",
+            "helper_dll_sha256=$helper",
+            "module_version=$($subModule.Module.Version.value)",
+            "chinese_language_file=$($language.LanguageData.LanguageFile.xml_path)",
+            "draft=$($metadata.isDraft.ToString().ToLowerInvariant())",
+            "prerelease=$($metadata.isPrerelease.ToString().ToLowerInvariant())",
+            "verification=passed"
+          ) -join "`n"
+          [System.IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'RELEASE_v1.3.13_VERIFIED.txt'), $record + "`n", [System.Text.Encoding]::ASCII)
+
+      - name: Record independent verification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git checkout master
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'RELEASE_v1.3.13_VERIFIED.txt') '.\RELEASE_v1.3.13_VERIFIED.txt' -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- RELEASE_v1.3.13_VERIFIED.txt
+          if (-not (git diff --cached --quiet)) {
+            git commit -m 'Record verified Extreme Ragdoll v1.3.13 release'
+            git push origin master
+          }
