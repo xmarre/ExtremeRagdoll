@@ -22,6 +22,63 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # APPLY_V1315_START
+      - name: Apply complete v1.3.15 implementation
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/fix-localization-corpse-collision-v1.3.15'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $carrierPath = '.github/workflows/apply-v1.3.15-fixes.yml'
+          $carrier = Get-Content $carrierPath -Raw
+          $startMarker = "@'"
+          $endMarker = "'@ | Set-Content"
+          $start = $carrier.IndexOf($startMarker)
+          if ($start -lt 0) { throw 'Implementation script start marker not found.' }
+          $start += $startMarker.Length
+          $end = $carrier.IndexOf($endMarker, $start)
+          if ($end -lt 0) { throw 'Implementation script end marker not found.' }
+          $script = $carrier.Substring($start, $end - $start)
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'apply_v1_3_15.py'
+          [System.IO.File]::WriteAllText($scriptPath, $script, [System.Text.UTF8Encoding]::new($false))
+          python $scriptPath
+          if ($LASTEXITCODE -ne 0) { throw "v1.3.15 patch script failed with exit code $LASTEXITCODE." }
+
+          Remove-Item $carrierPath -Force
+          $buildPath = '.github/workflows/build.yml'
+          $buildText = Get-Content $buildPath -Raw
+          $blockStart = $buildText.IndexOf('      # APPLY_V1315_START')
+          $blockEndMarker = "      # APPLY_V1315_END`n"
+          $blockEnd = $buildText.IndexOf($blockEndMarker, $blockStart)
+          if ($blockStart -lt 0 -or $blockEnd -lt 0) { throw 'Temporary build block markers not found.' }
+          $blockEnd += $blockEndMarker.Length
+          $buildText = $buildText.Remove($blockStart, $blockEnd - $blockStart)
+          $temporaryCommit = @'
+          if (-not (git status --porcelain)) {
+            Write-Host "Implementation and runtime already match."
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Fix localization registration and corpse collision lifecycle"
+'@
+          $standardCommit = @'
+          if (-not (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt)) {
+            Write-Host "Runtime binaries already match the current source."
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
+          git commit -m "Build current runtime binaries"
+'@
+          if (-not $buildText.Contains($temporaryCommit)) { throw 'Temporary commit block not found.' }
+          $buildText = $buildText.Replace($temporaryCommit, $standardCommit)
+          [System.IO.File]::WriteAllText($buildPath, $buildText, [System.Text.UTF8Encoding]::new($false))
+      # APPLY_V1315_END
+
       - name: Install .NET Core SDK 3.1
         uses: actions/setup-dotnet@v4
         with:
@@ -54,15 +111,15 @@ jobs:
         env:
           GH_PUSH_TOKEN: ${{ github.token }}
         run: |
-          if (-not (git status --porcelain -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt)) {
-            Write-Host "Runtime binaries already match the current source."
+          if (-not (git status --porcelain)) {
+            Write-Host "Implementation and runtime already match."
             exit 0
           }
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- bin/Win64_Shipping_Client RUNTIME_SHA256.txt
-          git commit -m "Build current runtime binaries"
+          git add --all
+          git commit -m "Fix localization registration and corpse collision lifecycle"
           git push "https://x-access-token:${env:GH_PUSH_TOKEN}@github.com/${{ github.repository }}.git" "HEAD:${{ github.event.pull_request.head.ref }}"
 
       - name: Verify committed runtime on default branch
