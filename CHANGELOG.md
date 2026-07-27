@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.16
+
+- Fixed MCM retaining cached English mod titles, group headings, and setting names after Simplified Chinese became active.
+- Replaced the unreliable tab-selection-only refresh with direct UI-binding getter patches for `SettingsPropertyVM.Name`, `SettingsPropertyGroupVM.GroupNameDisplay`, and `SettingsVM.DisplayName`.
+- Resolves only Extreme Ragdoll's cached MCM labels through the currently active Bannerlord language dictionary whenever the UI reads them.
+- Retained MCM's native `RefreshValues` path as a secondary optimisation, but localisation correctness no longer depends on that event firing.
+- Retries patch installation before the initial module screen and when MCM/Harmony assemblies load.
+- Added `ExtremeRagdoll.Localization.log` with one-time installation and first-translation diagnostics.
+- Added no polling, mission tick, application tick, campaign scan, physics, or corpse-lifecycle work.
+
 ## v1.3.15
 
 - Registered Extreme Ragdoll's language manifest in Bannerlord's live localization registry before MCM builds the menu.

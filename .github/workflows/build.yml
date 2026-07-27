@@ -80,8 +80,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           [xml]$module = Get-Content '.\SubModule.xml' -Raw
-          if ($module.Module.Version.value -ne 'v1.3.15') {
+          if ($module.Module.Version.value -ne 'v1.3.16') {
             throw "Unexpected module version: $($module.Module.Version.value)"
+          }
+          if ($module.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.LocalizedSubModule') {
+            throw "Unexpected runtime entry point: $($module.Module.SubModules.SubModule.SubModuleClassType.value)"
           }
 
           [xml]$languageData = Get-Content '.\ModuleData\Languages\CNs\language_data.xml' -Raw
@@ -124,11 +127,42 @@ jobs:
             throw 'Localization contains an empty translation value.'
           }
 
-          $sourceText = Get-Content '.\Source\SafeSubModule.cs' -Raw
+          $sourceText = (Get-Content '.\Source\SafeSubModule.cs' -Raw) + "`n" +
+                        (Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw)
           $referencedIds = @([regex]::Matches($sourceText, '\{=([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
           $missingIds = @($referencedIds | Where-Object { $_ -notin $englishIds })
           if ($missingIds.Count -gt 0) {
             throw "Source references missing localization IDs: $($missingIds -join ', ')"
+          }
+
+          $refreshSource = Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw
+          foreach ($requiredMarker in @(
+            'MCM.UI.GUI.ViewModels.SettingsPropertyVM',
+            'MCM.UI.GUI.ViewModels.SettingsPropertyGroupVM',
+            'MCM.UI.GUI.ViewModels.SettingsVM',
+            'MCM.UI.GUI.ViewModels.SettingsEntryVM',
+            'MCM.UI.GUI.ViewModels.ModOptionsVM',
+            'LocalizedCachedStringGetterPostfix',
+            'RequireGetter(propertyVmType, "Name")',
+            'RequireGetter(groupVmType, "GroupNameDisplay")',
+            'RequireGetter(settingsVmType, "DisplayName")',
+            'RequireGetter(entryVmType, "DisplayName")',
+            'RequireGetter(modOptionsVmType, "SelectedDisplayName")',
+            'ExtremeRagdoll.Localization.log',
+            'OnBeforeInitialModuleScreenSetAsRoot',
+            'AppDomain.CurrentDomain.AssemblyLoad')) {
+            if (-not $refreshSource.Contains($requiredMarker)) {
+              throw "MCM direct-localization source is missing required marker: $requiredMarker"
+            }
+          }
+          if ($refreshSource.Contains('OnMissionTick') -or $refreshSource.Contains('OnApplicationTick') -or
+              $refreshSource.Contains('System.Threading.Timer')) {
+            throw 'MCM localization integration must remain UI/event-driven and must not add a tick or timer path.'
+          }
+          foreach ($buildScript in @('.\Source\Build\build.ps1', '.\Source\Build\build.sh')) {
+            if (-not (Get-Content $buildScript -Raw).Contains('McmLiveLocalizationRefresh.cs')) {
+              throw "Build script does not compile the MCM localization source: $buildScript"
+            }
           }
 
       - name: Package module artifact
@@ -139,11 +173,11 @@ jobs:
           Copy-Item ".\SubModule.xml" $stage
           Copy-Item ".\ModuleData" $stage -Recurse
           Copy-Item ".\bin" $stage -Recurse
-          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.15.zip" -Force
+          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.16.zip" -Force
 
       - name: Upload module artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.15
-          path: ExtremeRagdoll-v1.3.15.zip
+          name: ExtremeRagdoll-v1.3.16
+          path: ExtremeRagdoll-v1.3.16.zip
           if-no-files-found: error
