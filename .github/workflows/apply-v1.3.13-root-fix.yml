@@ -16,6 +16,8 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   apply:
@@ -35,17 +37,16 @@ jobs:
 
       - name: Apply exact root patch
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $output = & python .\Source\Build\apply_v1313_root_fix.py 2>&1
           $exitCode = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }
           if ($exitCode -ne 0) {
-            $output | Set-Content '.\patch-failure.log' -Encoding utf8
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add -- patch-failure.log
-            git commit -m 'Record v1.3.13 patch failure'
-            git push origin HEAD:agent/v1.3.13-root-direction-localization
+            $body = "### v1.3.13 guarded patch failure`n`n```text`n" + ($output -join "`n") + "`n```"
+            [System.IO.File]::WriteAllText('.\patch-failure.md', $body, [System.Text.UTF8Encoding]::new($false))
+            gh pr comment 220 --repo $env:GITHUB_REPOSITORY --body-file '.\patch-failure.md'
             exit $exitCode
           }
 
