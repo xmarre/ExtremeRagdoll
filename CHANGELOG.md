@@ -7,6 +7,7 @@
 - Retained the registered path for later in-game language changes.
 - Fixed the Dismemberment Plus compatibility path abandoning a successful corpse-ragdoll lifecycle after its 30-second mesh-safety timeout.
 - Paired the delayed `EndRagdollAsCorpse` call after that safety window so corpses do not remain permanent physical obstacles.
+- Retries transient corpse-finalization failures for five seconds after the mesh-safety timeout before abandoning a broken native wrapper.
 - Preserved death force, direction, pulse delivery, hit-bone routing, mount scaling, and Dismemberment Plus's immediate mesh-rebuild safety window.
 
 ## v1.3.14
