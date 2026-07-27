@@ -66,7 +66,7 @@ Pull-request CI rebuilds the current source and updates the checked-in runtime D
 - Makes the captured hit direction authoritative for normal death launches.
 - Uses `KillingBlow.RagdollImpulseAmount` only as a last-resort fallback when neither impact data nor attacker geometry exists.
 - Applies victim momentum exactly once during first-pulse force construction and removes only the opposing longitudinal component.
-- Registers the Simplified Chinese string file through `CNs/language_data.xml`.
+- Corrects the Simplified Chinese language manifest path and metadata so Bannerlord loads the existing translation file.
 - Resolves the MCM display name through Bannerlord `TextObject` instead of exposing the raw localization token.
 - Retains force magnitude, pulse delivery, hit-bone routing, mount-collision scaling, corpse lifecycle behavior, and Dismemberment Plus safeguards.
 
