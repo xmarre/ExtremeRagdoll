@@ -1,0 +1,299 @@
+name: Publish and verify Extreme Ragdoll v1.3.14
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/release-current.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    env:
+      TAG_NAME: v1.3.14
+      RELEASE_NAME: Extreme Ragdoll v1.3.14
+      TARGET_COMMIT: 165d164be8074b319ec47da8d619cba75c155638
+      ASSET_NAME: ExtremeRagdoll-v1.3.14-Bannerlord-1.3.15-to-1.4.7.zip
+
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Verify module and localization metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          [xml]$module = Get-Content '.\SubModule.xml' -Raw
+          $versionNode = $module.SelectSingleNode('/Module/Version')
+          if ($null -eq $versionNode) { throw 'SubModule.xml has no Version element.' }
+          $moduleVersion = $versionNode.GetAttribute('value')
+          if ($moduleVersion -ne $env:TAG_NAME) {
+            throw "SubModule.xml reports $moduleVersion, expected $($env:TAG_NAME)."
+          }
+
+          [xml]$languageData = Get-Content '.\ModuleData\Languages\CNs\language_data.xml' -Raw
+          $registeredFiles = @($languageData.LanguageData.LanguageFile | ForEach-Object { [string]$_.xml_path })
+          if ($registeredFiles.Count -ne 1 -or $registeredFiles[0] -ne 'CNs/std_module_strings_xml.xml') {
+            throw "Unexpected Simplified Chinese language registration: $($registeredFiles -join ', ')"
+          }
+
+          [xml]$english = Get-Content '.\ModuleData\Languages\std_module_strings_xml.xml' -Raw
+          [xml]$chinese = Get-Content '.\ModuleData\Languages\CNs\std_module_strings_xml.xml' -Raw
+          foreach ($table in @($english, $chinese)) {
+            $root = $table.DocumentElement
+            if ($root.LocalName -ne 'base' -or $root.GetAttribute('type') -ne 'string') {
+              throw 'Localization string table must use a <base type="string"> root.'
+            }
+            if ($root.GetNamespaceOfPrefix('xsi') -ne 'http://www.w3.org/2001/XMLSchema-instance' -or
+                $root.GetNamespaceOfPrefix('xsd') -ne 'http://www.w3.org/2001/XMLSchema') {
+              throw 'Localization string table is missing the standard XML schema namespace declarations.'
+            }
+          }
+
+          if ([string]$english.base.tags.tag.language -ne 'English') {
+            throw "Unexpected base language tag: $([string]$english.base.tags.tag.language)"
+          }
+          if ([string]$chinese.base.tags.tag.language -ne '简体中文') {
+            throw "Unexpected Chinese language tag: $([string]$chinese.base.tags.tag.language)"
+          }
+
+          $englishNodes = @($english.base.strings.string)
+          $chineseNodes = @($chinese.base.strings.string)
+          $englishIds = @($englishNodes | ForEach-Object { [string]$_.id })
+          $chineseIds = @($chineseNodes | ForEach-Object { [string]$_.id })
+          if (($englishIds | Sort-Object -Unique).Count -ne $englishIds.Count) { throw 'Duplicate English localization IDs.' }
+          if (($chineseIds | Sort-Object -Unique).Count -ne $chineseIds.Count) { throw 'Duplicate Chinese localization IDs.' }
+          if ((($englishIds | Sort-Object) -join "`n") -ne (($chineseIds | Sort-Object) -join "`n")) {
+            throw 'English and Simplified Chinese localization ID sets differ.'
+          }
+          if (@($englishNodes | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.text) }).Count -gt 0 -or
+              @($chineseNodes | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.text) }).Count -gt 0) {
+            throw 'Localization contains an empty translation value.'
+          }
+
+      - name: Build and verify release runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollReleaseBuild'
+          .\Source\Build\build.ps1 -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
+
+          $builtMainPath = Join-Path $out 'bin/ExtremeRagdoll.dll'
+          $builtHelperPath = Join-Path $out 'bin/ExtremeRagdoll.ClothSync.dll'
+          $committedMainPath = '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll'
+          $committedHelperPath = '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll'
+
+          $builtMain = (Get-FileHash $builtMainPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $builtHelper = (Get-FileHash $builtHelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $committedMain = (Get-FileHash $committedMainPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $committedHelper = (Get-FileHash $committedHelperPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          if ($builtMain -ne $committedMain) {
+            throw "ExtremeRagdoll.dll differs from the committed runtime. built=$builtMain committed=$committedMain"
+          }
+          if ($builtHelper -ne $committedHelper) {
+            throw "ExtremeRagdoll.ClothSync.dll differs from the committed runtime. built=$builtHelper committed=$committedHelper"
+          }
+
+          $expectedManifest = @(
+            "$builtMain  bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
+            "$builtHelper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
+          )
+          $actualManifest = @(Get-Content '.\RUNTIME_SHA256.txt' | Where-Object { $_.Trim().Length -gt 0 })
+          if (($actualManifest -join "`n") -ne ($expectedManifest -join "`n")) {
+            throw 'RUNTIME_SHA256.txt does not describe the freshly rebuilt assemblies.'
+          }
+
+          "RELEASE_BUILD_OUT=$out" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "MAIN_DLL_SHA256=$builtMain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HELPER_DLL_SHA256=$builtHelper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Package installable module
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseRoot = Join-Path $env:RUNNER_TEMP 'ExtremeRagdollRelease'
+          $moduleRoot = Join-Path $releaseRoot 'ExtremeRagdoll'
+          $moduleBin = Join-Path $moduleRoot 'bin/Win64_Shipping_Client'
+          New-Item -ItemType Directory -Path $moduleBin -Force | Out-Null
+
+          Copy-Item '.\SubModule.xml' $moduleRoot -Force
+          Copy-Item '.\ModuleData' $moduleRoot -Recurse -Force
+          Copy-Item (Join-Path $env:RELEASE_BUILD_OUT 'bin/ExtremeRagdoll.dll') $moduleBin -Force
+          Copy-Item (Join-Path $env:RELEASE_BUILD_OUT 'bin/ExtremeRagdoll.ClothSync.dll') $moduleBin -Force
+
+          $assetPath = Join-Path $env:GITHUB_WORKSPACE $env:ASSET_NAME
+          Compress-Archive -LiteralPath $moduleRoot -DestinationPath $assetPath -CompressionLevel Optimal -Force
+
+          $assetHash = (Get-FileHash $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksumPath = Join-Path $env:GITHUB_WORKSPACE "$($env:ASSET_NAME).sha256"
+          [System.IO.File]::WriteAllText(
+            $checksumPath,
+            "$assetHash  $($env:ASSET_NAME)`n",
+            [System.Text.Encoding]::ASCII)
+          "ASSET_SHA256=$assetHash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          $notes = @'
+          ## Extreme Ragdoll v1.3.14
+
+          Corrective release for Simplified Chinese MCM localization loading.
+
+          **Supported Bannerlord versions:** v1.3.15–v1.4.7  
+          **Required:** Harmony and Mod Configuration Menu v5
+
+          ### Changes
+
+          - Corrected both localization string tables to Bannerlord's required `<base type="string">` resource format.
+          - Added the standard XML schema namespace declarations used by working Bannerlord localization files.
+          - Retained the corrected `CNs/language_data.xml` registration path and complete Simplified Chinese translation set.
+          - Added validation for localization structure, language tags, duplicate IDs, empty values, and English/Chinese key parity.
+          - Made no gameplay, physics, corpse lifecycle, compatibility, or performance changes.
+
+          ### Installation
+
+          1. Remove the existing `ExtremeRagdoll` module folder.
+          2. Extract the included `ExtremeRagdoll` folder into Bannerlord's `Modules` directory.
+          3. Ensure Harmony and MCM v5 are installed.
+          4. Enable **Extreme Ragdoll** in the launcher or BLSE and restart the game fully.
+
+          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.14-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
+          '@
+          $notes = $notes.Trim() + "`n`n### Build integrity`n`n"
+          $notes += "- `ExtremeRagdoll.dll`: ``$($env:MAIN_DLL_SHA256)```n"
+          $notes += "- `ExtremeRagdoll.ClothSync.dll`: ``$($env:HELPER_DLL_SHA256)```n"
+          $notes += "- Installable ZIP: ``$($env:ASSET_SHA256)```n"
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:GITHUB_WORKSPACE 'release-notes.md'),
+            $notes,
+            [System.Text.UTF8Encoding]::new($false))
+
+      - name: Publish GitHub release when missing
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $($env:TAG_NAME) already exists; publication is a no-op."
+            exit 0
+          }
+
+          $existingTag = git ls-remote --tags origin "refs/tags/$($env:TAG_NAME)"
+          if ($LASTEXITCODE -ne 0) { throw "git ls-remote failed with exit code $LASTEXITCODE." }
+          if ($existingTag) {
+            throw "Tag $($env:TAG_NAME) already exists without a release; refusing to move or reuse it automatically."
+          }
+
+          gh release create $env:TAG_NAME `
+            $env:ASSET_NAME `
+            "$($env:ASSET_NAME).sha256" `
+            --repo $env:GITHUB_REPOSITORY `
+            --target $env:TARGET_COMMIT `
+            --title $env:RELEASE_NAME `
+            --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed with exit code $LASTEXITCODE." }
+
+      - name: Verify published release and assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadataJson = gh release view $env:TAG_NAME `
+            --repo $env:GITHUB_REPOSITORY `
+            --json url,tagName,name,isDraft,isPrerelease,targetCommitish,assets
+          if ($LASTEXITCODE -ne 0) { throw "Published release $($env:TAG_NAME) could not be read." }
+          $metadata = $metadataJson | ConvertFrom-Json
+
+          if ($metadata.tagName -ne $env:TAG_NAME) { throw "Unexpected release tag: $($metadata.tagName)" }
+          if ($metadata.name -ne $env:RELEASE_NAME) { throw "Unexpected release name: $($metadata.name)" }
+          if ($metadata.isDraft) { throw 'Release is still a draft.' }
+          if ($metadata.isPrerelease) { throw 'Release is marked as a prerelease.' }
+          if ($metadata.targetCommitish -ne $env:TARGET_COMMIT) {
+            throw "Release targets $($metadata.targetCommitish), expected $($env:TARGET_COMMIT)."
+          }
+
+          $checksumName = "$($env:ASSET_NAME).sha256"
+          $assetNames = @($metadata.assets | ForEach-Object { $_.name })
+          foreach ($required in @($env:ASSET_NAME, $checksumName)) {
+            if ($assetNames -notcontains $required) { throw "Release asset is missing: $required" }
+          }
+
+          $downloadRoot = Join-Path $env:RUNNER_TEMP 'PublishedRelease'
+          New-Item -ItemType Directory -Path $downloadRoot -Force | Out-Null
+          gh release download $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --pattern $env:ASSET_NAME --dir $downloadRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to download the published installable ZIP.' }
+          gh release download $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --pattern $checksumName --dir $downloadRoot
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to download the published checksum.' }
+
+          $downloadedAsset = Join-Path $downloadRoot $env:ASSET_NAME
+          $downloadedChecksum = Join-Path $downloadRoot $checksumName
+          $checksumLine = (Get-Content $downloadedChecksum -Raw).Trim()
+          if ($checksumLine -notmatch '^([0-9a-fA-F]{64})  (.+)$') { throw 'Release checksum file has an invalid format.' }
+          if ($Matches[2] -ne $env:ASSET_NAME) { throw "Checksum names the wrong asset: $($Matches[2])" }
+          $publishedHash = (Get-FileHash $downloadedAsset -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($publishedHash -ne $Matches[1].ToLowerInvariant()) {
+            throw "Published ZIP checksum mismatch. actual=$publishedHash expected=$($Matches[1])"
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'PublishedReleaseExtracted'
+          Expand-Archive -LiteralPath $downloadedAsset -DestinationPath $extractRoot -Force
+          $moduleRoot = Join-Path $extractRoot 'ExtremeRagdoll'
+          $requiredPaths = @(
+            (Join-Path $moduleRoot 'SubModule.xml'),
+            (Join-Path $moduleRoot 'ModuleData/Languages/std_module_strings_xml.xml'),
+            (Join-Path $moduleRoot 'ModuleData/Languages/CNs/language_data.xml'),
+            (Join-Path $moduleRoot 'ModuleData/Languages/CNs/std_module_strings_xml.xml'),
+            (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.dll'),
+            (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll')
+          )
+          foreach ($requiredPath in $requiredPaths) {
+            if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Published module is missing: $requiredPath" }
+          }
+          if (Test-Path -LiteralPath (Join-Path $moduleRoot 'Source')) {
+            throw 'Installable release unexpectedly contains the source tree.'
+          }
+
+          [xml]$releasedModule = Get-Content (Join-Path $moduleRoot 'SubModule.xml') -Raw
+          if ($releasedModule.Module.Version.value -ne $env:TAG_NAME) {
+            throw "Published SubModule.xml reports $($releasedModule.Module.Version.value), expected $($env:TAG_NAME)."
+          }
+          [xml]$releasedLanguage = Get-Content (Join-Path $moduleRoot 'ModuleData/Languages/CNs/language_data.xml') -Raw
+          if ($releasedLanguage.LanguageData.LanguageFile.xml_path -ne 'CNs/std_module_strings_xml.xml') {
+            throw 'Published Chinese language manifest contains the wrong string-file path.'
+          }
+          [xml]$releasedEnglish = Get-Content (Join-Path $moduleRoot 'ModuleData/Languages/std_module_strings_xml.xml') -Raw
+          [xml]$releasedChinese = Get-Content (Join-Path $moduleRoot 'ModuleData/Languages/CNs/std_module_strings_xml.xml') -Raw
+          foreach ($table in @($releasedEnglish, $releasedChinese)) {
+            if ($table.DocumentElement.GetAttribute('type') -ne 'string') {
+              throw 'Published localization table lost the type="string" resource marker.'
+            }
+          }
+
+          $releasedMain = (Get-FileHash (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          $releasedHelper = (Get-FileHash (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($releasedMain -ne $env:MAIN_DLL_SHA256) { throw 'Published main DLL differs from the verified source build.' }
+          if ($releasedHelper -ne $env:HELPER_DLL_SHA256) { throw 'Published helper DLL differs from the verified source build.' }
+
+          Write-Host "Verified release: $($metadata.url)"
+          Write-Host "Installable ZIP SHA-256: $publishedHash"
