@@ -1,0 +1,126 @@
+name: Verify Extreme Ragdoll v1.3.15 release
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/verify-release-v1.3.15.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: v1.3.15
+      RELEASE_NAME: Extreme Ragdoll v1.3.15
+      TARGET_COMMIT: f564367f0716b1104a46820fe798cdeb18157d13
+      ASSET_NAME: ExtremeRagdoll-v1.3.15-Bannerlord-1.3.15-to-1.4.7.zip
+      STATUS_PATH: .release-status/v1.3.15.txt
+
+    steps:
+      - name: Check out immutable release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify published release and package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          metadata="$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json url,tagName,name,isDraft,isPrerelease,targetCommitish,assets)"
+          test "$(jq -r '.tagName' <<<"$metadata")" = "$TAG_NAME"
+          test "$(jq -r '.name' <<<"$metadata")" = "$RELEASE_NAME"
+          test "$(jq -r '.isDraft' <<<"$metadata")" = "false"
+          test "$(jq -r '.isPrerelease' <<<"$metadata")" = "false"
+          test "$(jq -r '.targetCommitish' <<<"$metadata")" = "$TARGET_COMMIT"
+
+          checksum_name="$ASSET_NAME.sha256"
+          jq -e --arg name "$ASSET_NAME" '.assets[] | select(.name == $name)' <<<"$metadata" >/dev/null
+          jq -e --arg name "$checksum_name" '.assets[] | select(.name == $name)' <<<"$metadata" >/dev/null
+
+          mkdir -p published extracted
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir published
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --pattern "$checksum_name" --dir published
+
+          (cd published && sha256sum -c "$checksum_name")
+          asset_sha256="$(sha256sum "published/$ASSET_NAME" | awk '{print $1}')"
+
+          unzip -q "published/$ASSET_NAME" -d extracted
+          test -f extracted/ExtremeRagdoll/SubModule.xml
+          test -f extracted/ExtremeRagdoll/ModuleData/Languages/std_module_strings_xml.xml
+          test -f extracted/ExtremeRagdoll/ModuleData/Languages/CNs/language_data.xml
+          test -f extracted/ExtremeRagdoll/ModuleData/Languages/CNs/std_module_strings_xml.xml
+          test -f extracted/ExtremeRagdoll/bin/Win64_Shipping_Client/ExtremeRagdoll.dll
+          test -f extracted/ExtremeRagdoll/bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll
+          test ! -e extracted/ExtremeRagdoll/Source
+
+          python - <<'PY'
+          import os
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          module = ET.parse('extracted/ExtremeRagdoll/SubModule.xml').getroot()
+          version = module.find('Version')
+          if version is None or version.attrib.get('value') != os.environ['TAG_NAME']:
+              raise SystemExit('Published SubModule.xml has the wrong version.')
+
+          language = ET.parse('extracted/ExtremeRagdoll/ModuleData/Languages/CNs/language_data.xml').getroot()
+          files = language.findall('LanguageFile')
+          if len(files) != 1 or files[0].attrib.get('xml_path') != 'CNs/std_module_strings_xml.xml':
+              raise SystemExit('Published Simplified Chinese language registration is invalid.')
+
+          for path in (
+              'extracted/ExtremeRagdoll/ModuleData/Languages/std_module_strings_xml.xml',
+              'extracted/ExtremeRagdoll/ModuleData/Languages/CNs/std_module_strings_xml.xml',
+          ):
+              root = ET.parse(path).getroot()
+              if root.tag != 'base' or root.attrib.get('type') != 'string':
+                  raise SystemExit(f'Published localization table is invalid: {path}')
+          PY
+
+          expected_main="$(awk '$2 == "bin/Win64_Shipping_Client/ExtremeRagdoll.dll" {print $1}' RUNTIME_SHA256.txt)"
+          expected_helper="$(awk '$2 == "bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll" {print $1}' RUNTIME_SHA256.txt)"
+          actual_main="$(sha256sum extracted/ExtremeRagdoll/bin/Win64_Shipping_Client/ExtremeRagdoll.dll | awk '{print $1}')"
+          actual_helper="$(sha256sum extracted/ExtremeRagdoll/bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll | awk '{print $1}')"
+          test "$actual_main" = "$expected_main"
+          test "$actual_helper" = "$expected_helper"
+
+          release_url="$(jq -r '.url' <<<"$metadata")"
+          status="$(cat <<EOF
+          tag=$TAG_NAME
+          release_name=$RELEASE_NAME
+          release_url=$release_url
+          target_commit=$TARGET_COMMIT
+          asset=$ASSET_NAME
+          asset_sha256=$asset_sha256
+          main_dll_sha256=$actual_main
+          helper_dll_sha256=$actual_helper
+          module_version=$TAG_NAME
+          draft=false
+          prerelease=false
+          verification=passed
+          EOF
+          )"
+
+          encoded="$(printf '%s\n' "$status" | base64 -w0)"
+          existing_sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/$STATUS_PATH?ref=master" --jq '.sha' 2>/dev/null || true)"
+          if [[ -n "$existing_sha" ]]; then
+            jq -n --arg message "Record verified Extreme Ragdoll v1.3.15 release" --arg content "$encoded" --arg branch master --arg sha "$existing_sha" \
+              '{message:$message,content:$content,branch:$branch,sha:$sha}' \
+              | gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_PATH" --input - >/dev/null
+          else
+            jq -n --arg message "Record verified Extreme Ragdoll v1.3.15 release" --arg content "$encoded" --arg branch master \
+              '{message:$message,content:$content,branch:$branch}' \
+              | gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/$STATUS_PATH" --input - >/dev/null
+          fi
+
+          printf '%s\n' "$status"
