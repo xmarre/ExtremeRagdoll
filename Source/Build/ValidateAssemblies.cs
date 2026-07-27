@@ -82,6 +82,14 @@ internal static class ValidateAssemblies
             MethodDefinition onSubModuleLoad = RequireMethod(subModule, "OnSubModuleLoad");
             MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");
             MethodDefinition onMissionTick = RequireMethod(behavior, "OnMissionTick");
+            MethodDefinition resolveDirection = RequireMethod(behavior, "ResolveDirection");
+            Require(CallsMethod(resolveDirection, "IsOpposingDirection"),
+                "death direction no longer rejects oppositely signed KillingBlow impulses");
+            Require(CallsMethod(resolveDirection, "EnforceAwayFromAffectorInvariant"),
+                "death direction no longer enforces the source-away invariant after momentum/lift blending");
+            RequireMethod(behavior, "TryGetAwayFromAffectorDirection");
+            RequireMethod(behavior, "HorizontalDot");
+            RequireMethod(behavior, "VectorDot");
 
             Require(!CallsMethod(onSubModuleLoad, "EnsureNativeDeathPatch"),
                 "OnSubModuleLoad installs the global Agent patch before the NoCombat/tableau gate");
@@ -130,6 +138,10 @@ internal static class ValidateAssemblies
                 "truthful queued fallback-force diagnostic is missing");
             Require(strings.Any(s => s.Contains("FIRST_COMBAT_DEATH_POST_RAGDOLL_WARMUP")),
                 "first actual combat death post-ragdoll warmup route is missing");
+            Require(strings.Any(s => s.Contains("rejectedOpposingKillingBlow")),
+                "opposing KillingBlow rejection telemetry is missing");
+            Require(strings.Any(s => s.Contains("awayFromAffectorInvariant")),
+                "source-away direction invariant telemetry is missing");
             Require(!strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),
                 "obsolete non-missile-only route marker remains");
             Require(strings.Any(s => s.Contains("resultCallbackAgentVelocity=")),

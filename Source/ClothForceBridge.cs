@@ -538,9 +538,9 @@ namespace ExtremeRagdoll
             return __exception;
         }
 
-        // Harmony prefix for Agent.Die(Blow, KillInfo). v1.2.74 preserves the first-death
-        // sentinel, then returns before any ExtremeRagdoll Blow mutation so all deaths use
-        // the main controlled post-ragdoll actuator.
+        // Harmony prefix for Agent.Die(Blow, KillInfo). The first-death sentinel remains an
+        // ownership safeguard only; launch direction is validated by the main post-ragdoll path.
+        // No ExtremeRagdoll Blow mutation is performed here.
         private static void AgentDiePrefix(Agent __instance, ref Blow b)
         {
             if (!IsEligibleCombatDeath(__instance))
@@ -602,8 +602,8 @@ namespace ExtremeRagdoll
             // often only produced a weak upward hop, while the post-ragdoll central-force route
             // produced the intended visible deathblow. Mount-body collisions still enter the same
             // route but remain independently scaled by MountCollisionKillStrength in the main
-            // mission behavior. The first-combat-death sentinel above is preserved unchanged; its
-            // separate reverse-launch defect is not claimed fixed by this revision.
+            // mission behavior. The first-combat-death sentinel above remains an ownership-only
+            // safeguard; the main resolver rejects reversed engine impulses for every death.
             //
             // Keep the harmless current-Blow missile probe aligned with the exact patched release
             // body, then return before any native magnitude/direction/WeaponRecord mutation. No
