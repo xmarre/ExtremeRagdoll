@@ -35,7 +35,19 @@ jobs:
 
       - name: Apply exact root patch
         shell: pwsh
-        run: python .\Source\Build\apply_v1313_root_fix.py
+        run: |
+          $output = & python .\Source\Build\apply_v1313_root_fix.py 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            $output | Set-Content '.\patch-failure.log' -Encoding utf8
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -- patch-failure.log
+            git commit -m 'Record v1.3.13 patch failure'
+            git push origin HEAD:agent/v1.3.13-root-direction-localization
+            exit $exitCode
+          }
 
       - name: Build and validate assemblies
         shell: pwsh
