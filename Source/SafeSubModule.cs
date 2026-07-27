@@ -2365,12 +2365,12 @@ namespace ExtremeRagdoll.SafeRuntime
             {
                 leftHorizontal = leftHorizontal.NormalizedCopy();
                 rightHorizontal = rightHorizontal.NormalizedCopy();
-                return HorizontalDot(leftHorizontal, rightHorizontal) < -0.05f;
+                return HorizontalDot(leftHorizontal, rightHorizontal) < 0f;
             }
 
             left = left.NormalizedCopy();
             right = right.NormalizedCopy();
-            return VectorDot(left, right) < -0.05f;
+            return VectorDot(left, right) < 0f;
         }
 
         private static Vec3 EnforceAwayFromAffectorInvariant(
