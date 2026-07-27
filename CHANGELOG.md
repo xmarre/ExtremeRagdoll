@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.16
+
+- Fixed MCM setting names, group headings, and the Extreme Ragdoll title remaining in English after switching Bannerlord's text language.
+- Refreshes MCM's cached mod and setting view-models whenever the Mod Options category is selected.
+- Keeps tooltips, setting labels, group labels, and the mod title in the same active language without requiring a game restart.
+- Uses MCM's own `RefreshValues` path and explicit binding notifications instead of replacing translated text with hardcoded Chinese strings.
+- Remains event-driven with no mission tick, campaign scan, or persistent polling.
+- Preserved all v1.3.15 physics, corpse-finalization, and Dismemberment Plus behaviour.
+
 ## v1.3.15
 
 - Registered Extreme Ragdoll's language manifest in Bannerlord's live localization registry before MCM builds the menu.
