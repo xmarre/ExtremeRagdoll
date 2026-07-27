@@ -1,0 +1,84 @@
+name: Apply corpse finalization diagnostics
+
+on:
+  push:
+    branches:
+      - agent/fix-localization-corpse-collision-v1.3.15
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-2022
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-localization-corpse-collision-v1.3.15
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Apply diagnostic logging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{path}: expected one match, found {count}')
+              p.write_text(text.replace(old, new), encoding='utf-8')
+
+          replace_once(
+              'Source/SafeSubModule.cs',
+              '''                catch (Exception ex)\n                {\n                    // Retry failed paired finalization only inside the absolute three-second\n                    // collision ceiling. Clamp the next poll to that deadline so no 30-second\n                    // compatibility path can be reintroduced through failure handling.\n                    PendingDeath pending = i >= 0 && i < _pending.Count ? _pending[i] : null;''',
+              '''                catch (Exception ex)\n                {\n                    if (SafeSettings.DebugLogging)\n                    {\n                        TargetInvocationException invocationException = ex as TargetInvocationException;\n                        SafeLog.Error(\n                            "Corpse finalization retry failed",\n                            invocationException == null || invocationException.InnerException == null\n                                ? ex\n                                : invocationException.InnerException);\n                    }\n\n                    // Retry failed paired finalization only inside the absolute three-second\n                    // collision ceiling. Clamp the next poll to that deadline so no 30-second\n                    // compatibility path can be reintroduced through failure handling.\n                    PendingDeath pending = i >= 0 && i < _pending.Count ? _pending[i] : null;''')
+
+          replace_once(
+              'Source/Build/ValidateAssemblies.cs',
+              '''            Require(!behavior.Fields.Any(f =>\n                    f.Name == "CorpseFinalizationTimeout" ||\n                    f.Name == "CorpseFinalizationFailureGrace"),\n                "obsolete 30-second corpse finalization timing remains in the runtime");''',
+              '''            Require(!behavior.Fields.Any(f =>\n                    f.Name == "CorpseFinalizationTimeout" ||\n                    f.Name == "CorpseFinalizationFailureGrace"),\n                "obsolete 30-second corpse finalization timing remains in the runtime");\n            Require(MethodContainsStringContaining(\n                    processCorpseFinalizers,\n                    "Corpse finalization retry failed"),\n                "corpse-finalization retry failures are no longer diagnosable in debug logging");''')
+          '@ | Set-Content -Encoding UTF8 "$env:RUNNER_TEMP\apply_finalization_diagnostics.py"
+          python "$env:RUNNER_TEMP\apply_finalization_diagnostics.py"
+          Remove-Item '.github/workflows/apply-finalization-diagnostics.yml' -Force
+
+      - name: Install .NET Core SDK 3.1
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 3.1.426
+
+      - name: Build and verify runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll-v1.3.15-finalization-diagnostics'
+          .\Source\Build\build.ps1 -OutDir $out
+          if ($LASTEXITCODE -ne 0) { throw "build.ps1 failed with exit code $LASTEXITCODE." }
+          Copy-Item "$out\bin\ExtremeRagdoll.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Force
+          Copy-Item "$out\bin\ExtremeRagdoll.ClothSync.dll" '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Force
+          $main = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          $helper = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText(
+            'RUNTIME_SHA256.txt',
+            "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll`n$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll`n",
+            [System.Text.Encoding]::ASCII)
+          Remove-Item '.\Source\Build\Tools\obj' -Recurse -Force -ErrorAction SilentlyContinue
+
+      - name: Commit complete diagnostics
+        shell: pwsh
+        env:
+          GH_PUSH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git commit -m 'Add corpse finalization retry diagnostics'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to commit finalization diagnostics.' }
+          git push "https://x-access-token:$env:GH_PUSH_TOKEN@github.com/${{ github.repository }}.git" 'HEAD:agent/fix-localization-corpse-collision-v1.3.15'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to push finalization diagnostics.' }
