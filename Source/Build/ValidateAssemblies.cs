@@ -129,6 +129,10 @@ internal static class ValidateAssemblies
                     f.Name == "CorpseFinalizationTimeout" ||
                     f.Name == "CorpseFinalizationFailureGrace"),
                 "obsolete 30-second corpse finalization timing remains in the runtime");
+            Require(MethodContainsStringContaining(
+                    processCorpseFinalizers,
+                    "Corpse finalization retry failed"),
+                "corpse-finalization retry failures are no longer diagnosable in debug logging");
             Require(!CallsMethod(onMissionTick, "ForceUpdateCorpseBoneFrames"),
                 "confirmed-death path regained corpse skeleton resynchronization");
             Require(CallsMethod(onMissionTick, "TryApplyMappedCentralRagdollForce"),

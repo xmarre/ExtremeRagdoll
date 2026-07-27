@@ -2814,6 +2814,16 @@ namespace ExtremeRagdoll.SafeRuntime
                 }
                 catch (Exception ex)
                 {
+                    if (SafeSettings.DebugLogging)
+                    {
+                        TargetInvocationException invocationException = ex as TargetInvocationException;
+                        SafeLog.Error(
+                            "Corpse finalization retry failed",
+                            invocationException == null || invocationException.InnerException == null
+                                ? ex
+                                : invocationException.InnerException);
+                    }
+
                     // Retry failed paired finalization only inside the absolute three-second
                     // collision ceiling. Clamp the next poll to that deadline so no 30-second
                     // compatibility path can be reintroduced through failure handling.
