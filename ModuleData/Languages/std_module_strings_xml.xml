@@ -22,7 +22,7 @@
     <string id="ER_RagdollHandoffDelay_Name" text="Death Animation Time Before Ragdoll (seconds)" />
     <string id="ER_RagdollHandoffDelay_Hint" text="Original death-animation time before accelerated ragdoll handoff. The launch impulse is already part of the native death event. Default 0.005 seconds." />
     <string id="ER_MomentumCarryover_Name" text="Movement Momentum Carryover" />
-    <string id="ER_MomentumCarryover_Hint" text="Blends the victim&#x27;s movement at the instant of death into the native launch direction. Default 1.0." />
+    <string id="ER_MomentumCarryover_Hint" text="Carries the victim&#x27;s movement into the first death-force pulse once. Opposing longitudinal momentum is discarded so movement cannot reverse the killing blow. Default 1.0." />
     <string id="ER_MaximumForce_Name" text="Maximum Death Force (0 = Unlimited)" />
     <string id="ER_MaximumForce_Hint" text="Optional user ceiling. Leave 0 for no mod-imposed force cap." />
     <string id="ER_MountCollisionKillStrength_Name" text="Mount Collision Kill Strength" />

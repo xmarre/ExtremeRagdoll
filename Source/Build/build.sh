@@ -70,6 +70,7 @@ stubs="$BUILD_DIR/ReferenceStubs"
 
 "${common[@]}" "/out:$STUB_DIR/TaleWorlds.Library.dll" "$stubs/TaleWorlds.Library.Stub.cs"
 "${common[@]}" "/out:$STUB_DIR/TaleWorlds.Core.dll" "$stubs/TaleWorlds.Core.Stub.cs"
+"${common[@]}" "/out:$STUB_DIR/TaleWorlds.Localization.dll" "$stubs/TaleWorlds.Localization.Stub.cs"
 "${common[@]}" "/out:$STUB_DIR/TaleWorlds.Engine.dll" "/r:$STUB_DIR/TaleWorlds.Library.dll" "$stubs/TaleWorlds.Engine.Stub.cs"
 "${common[@]}" "/out:$STUB_DIR/MCMv5.dll" "$stubs/MCMv5.Stub.cs"
 "${common[@]}" "/out:$STUB_DIR/TaleWorlds.MountAndBlade.dll" \
@@ -82,7 +83,7 @@ stubs="$BUILD_DIR/ReferenceStubs"
 
 "${common[@]}" "/out:$BIN_DIR/ExtremeRagdoll.raw.dll" \
     "/r:$STUB_DIR/TaleWorlds.Library.dll" "/r:$STUB_DIR/TaleWorlds.Core.dll" "/r:$STUB_DIR/TaleWorlds.Engine.dll" \
-    "/r:$STUB_DIR/TaleWorlds.MountAndBlade.dll" "/r:$STUB_DIR/MCMv5.dll" "/r:$BIN_DIR/ExtremeRagdoll.ClothSync.dll" \
+    "/r:$STUB_DIR/TaleWorlds.MountAndBlade.dll" "/r:$STUB_DIR/TaleWorlds.Localization.dll" "/r:$STUB_DIR/MCMv5.dll" "/r:$BIN_DIR/ExtremeRagdoll.ClothSync.dll" \
     "$SOURCE_DIR/SafeSubModule.cs"
 
 netcore_refs=()
