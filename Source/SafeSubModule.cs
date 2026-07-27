@@ -7,6 +7,7 @@ using TaleWorlds.Core;
 using TaleWorlds.Engine;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
+using TaleWorlds.Localization;
 using MCM.Abstractions.Base.Global;
 using MCM.Abstractions.Attributes;
 using MCM.Abstractions.Attributes.v2;
@@ -155,7 +156,7 @@ namespace ExtremeRagdoll.SafeRuntime
     public sealed class Settings : AttributeGlobalSettings<Settings>
     {
         public override string Id { get { return "ExtremeRagdoll_Safe_v4"; } }
-        public override string DisplayName { get { return "{=ER_DisplayName}Extreme Ragdoll"; } }
+        public override string DisplayName { get { return new TextObject("{=ER_DisplayName}Extreme Ragdoll").ToString(); } }
         public override string FolderName { get { return "ExtremeRagdoll"; } }
         public override string FormatType { get { return "json"; } }
 
@@ -184,7 +185,7 @@ namespace ExtremeRagdoll.SafeRuntime
         public string RagdollHandoffDelay { get; set; } = "0.005";
 
         [SettingPropertyGroup("{=ER_Group_MainControls}Main Controls", GroupOrder = 0)]
-        [SettingPropertyText("{=ER_MomentumCarryover_Name}Movement Momentum Carryover", 6, false, "{=ER_MomentumCarryover_Hint}Blends the victim's movement at the instant of death into the native launch direction. Default 1.0.")]
+        [SettingPropertyText("{=ER_MomentumCarryover_Name}Movement Momentum Carryover", 6, false, "{=ER_MomentumCarryover_Hint}Carries the victim's movement into the first death-force pulse once. Opposing longitudinal momentum is discarded so movement cannot reverse the killing blow. Default 1.0.")]
         public string MomentumCarryover { get; set; } = "1.0";
 
         [SettingPropertyGroup("{=ER_Group_MainControls}Main Controls", GroupOrder = 0)]
@@ -1990,10 +1991,10 @@ namespace ExtremeRagdoll.SafeRuntime
                     Vec3 fullPulseForce = pulseDirection * pulseMagnitude;
                     float spinMagnitude = 0f;
 
-                    if (pending.PulseIndex == 0 && IsUsableVector(pending.VictimMomentum))
+                    if (pending.PulseIndex == 0)
                     {
-                        float momentumForceScale = 3000f * SafeSettings.OverallStrength * SafeSettings.MomentumCarryover;
-                        fullPulseForce += pending.VictimMomentum * momentumForceScale;
+                        fullPulseForce = ApplyMomentumCarryover(
+                            fullPulseForce, pending.VictimMomentum, pulseDirection);
                     }
 
                     if (spinPulse)
@@ -2240,8 +2241,10 @@ namespace ExtremeRagdoll.SafeRuntime
             string capturedSource,
             out string source)
         {
-            Vec3 capturedImpact = IsFinite(blowDirection) ? blowDirection : Vec3.Zero;
-            Vec3 direction = capturedImpact;
+            // The hit callback already provides the authoritative impact direction. A later
+            // KillingBlow.RagdollImpulseAmount is native death-result data and may be expressed
+            // with a different sign/space; it is used only when no impact or source geometry exists.
+            Vec3 direction = IsFinite(blowDirection) ? blowDirection : Vec3.Zero;
             source = IsUsableVector(direction)
                 ? (string.IsNullOrEmpty(capturedSource) ? "capturedImpact" : capturedSource)
                 : "unknown";
@@ -2250,44 +2253,22 @@ namespace ExtremeRagdoll.SafeRuntime
             bool hasAwayFromAffector = TryGetAwayFromAffectorDirection(
                 affected, affector, out awayFromAffector);
 
-            if (hasEngineImpulse && IsUsableVector(engineImpulse))
-            {
-                Vec3 engineDirection = engineImpulse.NormalizedCopy();
-                float influence = SafeSettings.EngineImpulseInfluence;
-                if (IsUsableVector(direction))
-                {
-                    Vec3 capturedDirection = direction.NormalizedCopy();
-                    if (IsOpposingDirection(capturedDirection, engineDirection))
-                    {
-                        // KillingBlow.RagdollImpulseAmount can be reported with the opposite sign,
-                        // especially during the first corpse initialization. The exact hit direction
-                        // is authoritative; an opposing engine vector must never cancel or reverse it.
-                        direction = capturedDirection;
-                        source += "+rejectedOpposingKillingBlow";
-                    }
-                    else
-                    {
-                        direction = capturedDirection + engineDirection * influence;
-                        source = "capturedImpact+KillingBlow";
-                    }
-                }
-                else
-                {
-                    direction = engineDirection;
-                    source = "KillingBlow.RagdollImpulseAmount";
-                }
-            }
-
             if (!IsUsableVector(direction) && hasAwayFromAffector)
             {
                 direction = awayFromAffector;
                 source = "awayFromAffector";
             }
 
+            if (!IsUsableVector(direction) && hasEngineImpulse && IsUsableVector(engineImpulse))
+            {
+                direction = engineImpulse;
+                source = "KillingBlow.RagdollImpulseAmountFallbackOnly";
+            }
+
             if (!IsUsableVector(direction) && IsUsableVector(victimMomentum))
             {
                 direction = victimMomentum;
-                source = "victimMomentum";
+                source = "victimMomentumFallbackOnly";
             }
 
             if (!IsUsableVector(direction))
@@ -2307,20 +2288,7 @@ namespace ExtremeRagdoll.SafeRuntime
             }
 
             direction = direction.NormalizedCopy();
-
-            if (IsUsableVector(victimMomentum) && SafeSettings.MomentumCarryover > 0f)
-            {
-                direction += victimMomentum * (0.10f * SafeSettings.MomentumCarryover);
-                source += "+momentum";
-            }
-
             direction.z += SafeSettings.UpwardLift;
-            if (hasAwayFromAffector)
-            {
-                direction = EnforceAwayFromAffectorInvariant(
-                    direction, capturedImpact, awayFromAffector, ref source);
-            }
-
             if (!IsUsableVector(direction))
                 return new Vec3(0f, 1f, 0.25f).NormalizedCopy();
             return direction.NormalizedCopy();
@@ -2352,68 +2320,28 @@ namespace ExtremeRagdoll.SafeRuntime
             return true;
         }
 
-        private static bool IsOpposingDirection(Vec3 left, Vec3 right)
+        private static Vec3 ApplyMomentumCarryover(
+            Vec3 baseForce,
+            Vec3 victimMomentum,
+            Vec3 launchDirection)
         {
-            if (!IsUsableVector(left) || !IsUsableVector(right))
-                return false;
-
-            Vec3 leftHorizontal = left;
-            Vec3 rightHorizontal = right;
-            leftHorizontal.z = 0f;
-            rightHorizontal.z = 0f;
-            if (IsUsableVector(leftHorizontal) && IsUsableVector(rightHorizontal))
+            if (!IsUsableVector(baseForce) || !IsUsableVector(victimMomentum) ||
+                !IsUsableVector(launchDirection) || SafeSettings.MomentumCarryover <= 0f)
             {
-                leftHorizontal = leftHorizontal.NormalizedCopy();
-                rightHorizontal = rightHorizontal.NormalizedCopy();
-                return HorizontalDot(leftHorizontal, rightHorizontal) < 0f;
+                return baseForce;
             }
 
-            left = left.NormalizedCopy();
-            right = right.NormalizedCopy();
-            return VectorDot(left, right) < 0f;
-        }
-
-        private static Vec3 EnforceAwayFromAffectorInvariant(
-            Vec3 direction,
-            Vec3 capturedImpact,
-            Vec3 awayFromAffector,
-            ref string source)
-        {
-            if (!IsUsableVector(direction) || !IsUsableVector(awayFromAffector))
-                return direction;
-
-            Vec3 horizontalDirection = direction;
-            horizontalDirection.z = 0f;
-            if (IsUsableVector(horizontalDirection) &&
-                HorizontalDot(horizontalDirection, awayFromAffector) >= 0f)
+            float momentumForceScale = 3000f * SafeSettings.OverallStrength * SafeSettings.MomentumCarryover;
+            Vec3 momentumForce = victimMomentum * momentumForceScale;
+            Vec3 axis = launchDirection.NormalizedCopy();
+            float parallel = VectorDot(momentumForce, axis);
+            if (parallel < 0f)
             {
-                return direction;
+                // Carry lateral/vertical movement once. Motion directly against the killing blow
+                // may reduce neither its sign nor its requested launch strength.
+                momentumForce -= axis * parallel;
             }
-
-            float vertical = direction.z;
-            Vec3 correctedHorizontal = capturedImpact;
-            correctedHorizontal.z = 0f;
-            if (!IsUsableVector(correctedHorizontal) ||
-                HorizontalDot(correctedHorizontal, awayFromAffector) <= 0f)
-            {
-                correctedHorizontal = awayFromAffector;
-            }
-            else
-            {
-                correctedHorizontal = correctedHorizontal.NormalizedCopy();
-            }
-
-            correctedHorizontal.z = vertical;
-            if (!IsUsableVector(correctedHorizontal))
-                return direction;
-
-            source += "+awayFromAffectorInvariant";
-            return correctedHorizontal.NormalizedCopy();
-        }
-
-        private static float HorizontalDot(Vec3 left, Vec3 right)
-        {
-            return left.x * right.x + left.y * right.y;
+            return baseForce + momentumForce;
         }
 
         private static float VectorDot(Vec3 left, Vec3 right)

@@ -83,12 +83,16 @@ internal static class ValidateAssemblies
             MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");
             MethodDefinition onMissionTick = RequireMethod(behavior, "OnMissionTick");
             MethodDefinition resolveDirection = RequireMethod(behavior, "ResolveDirection");
-            Require(CallsMethod(resolveDirection, "IsOpposingDirection"),
-                "death direction no longer rejects oppositely signed KillingBlow impulses");
-            Require(CallsMethod(resolveDirection, "EnforceAwayFromAffectorInvariant"),
-                "death direction no longer enforces the source-away invariant after momentum/lift blending");
+            Require(!CallsMethod(resolveDirection, "get_EngineImpulseInfluence"),
+                "captured death direction still blends native KillingBlow result data");
+            Require(!CallsMethod(resolveDirection, "get_MomentumCarryover"),
+                "victim momentum is still blended into direction before force construction");
             RequireMethod(behavior, "TryGetAwayFromAffectorDirection");
-            RequireMethod(behavior, "HorizontalDot");
+            MethodDefinition applyMomentumCarryover = RequireMethod(behavior, "ApplyMomentumCarryover");
+            Require(CallsMethod(applyMomentumCarryover, "VectorDot"),
+                "momentum carryover no longer removes the opposing longitudinal component");
+            Require(CallsMethod(onMissionTick, "ApplyMomentumCarryover"),
+                "first-pulse force construction no longer owns the single momentum carryover");
             RequireMethod(behavior, "VectorDot");
 
             Require(!CallsMethod(onSubModuleLoad, "EnsureNativeDeathPatch"),
@@ -138,10 +142,14 @@ internal static class ValidateAssemblies
                 "truthful queued fallback-force diagnostic is missing");
             Require(strings.Any(s => s.Contains("FIRST_COMBAT_DEATH_POST_RAGDOLL_WARMUP")),
                 "first actual combat death post-ragdoll warmup route is missing");
-            Require(strings.Any(s => s.Contains("rejectedOpposingKillingBlow")),
-                "opposing KillingBlow rejection telemetry is missing");
-            Require(strings.Any(s => s.Contains("awayFromAffectorInvariant")),
-                "source-away direction invariant telemetry is missing");
+            Require(strings.Any(s => s.Contains("KillingBlow.RagdollImpulseAmountFallbackOnly")),
+                "native KillingBlow result is no longer marked as fallback-only direction data");
+            Require(!strings.Any(s => s.Contains("capturedImpact+KillingBlow")),
+                "obsolete captured-impact/native-result direction blend remains");
+            Require(!strings.Any(s => s.Contains("rejectedOpposingKillingBlow")),
+                "v1.3.12 opposing-vector guard remains after root direction fix");
+            Require(!strings.Any(s => s.Contains("awayFromAffectorInvariant")),
+                "v1.3.12 final-direction correction remains after root direction fix");
             Require(!strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),
                 "obsolete non-missile-only route marker remains");
             Require(strings.Any(s => s.Contains("resultCallbackAgentVelocity=")),

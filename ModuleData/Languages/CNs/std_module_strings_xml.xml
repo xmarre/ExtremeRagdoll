@@ -22,7 +22,7 @@
     <string id="ER_RagdollHandoffDelay_Name" text="进入布娃娃前的死亡动画时间（秒）" />
     <string id="ER_RagdollHandoffDelay_Hint" text="加速切换到布娃娃前保留的原始死亡动画时间。抛飞冲量已包含在原生死亡事件中。默认值：0.005 秒。" />
     <string id="ER_MomentumCarryover_Name" text="移动动量继承" />
-    <string id="ER_MomentumCarryover_Hint" text="将受害者死亡瞬间的移动速度混入原生抛飞方向。默认值：1.0。" />
+    <string id="ER_MomentumCarryover_Hint" text="仅在第一次死亡推力脉冲中继承一次受害者的移动速度。与致命一击方向相反的纵向动量会被移除，因此移动不会反转抛飞方向。默认值：1.0。" />
     <string id="ER_MaximumForce_Name" text="最高死亡推力（0 = 无限制）" />
     <string id="ER_MaximumForce_Hint" text="可选的模组推力上限。设为 0 表示不施加模组上限。" />
     <string id="ER_MountCollisionKillStrength_Name" text="坐骑碰撞击杀强度" />

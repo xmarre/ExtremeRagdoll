@@ -2,12 +2,12 @@
 
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
-Current repository version: **v1.3.12**  
+Current repository version: **v1.3.13**  
 Supported Bannerlord range: **v1.3.15–v1.4.7**
 
 ## Repository layout
 
-- `Source/` — current v1.3.12 C# source and the minimal deterministic build toolchain.
+- `Source/` — current v1.3.13 C# source and the minimal deterministic build toolchain.
 - `bin/Win64_Shipping_Client/` — compiled runtime DLLs loaded by Bannerlord.
 - `ModuleData/Languages/` — English and Simplified Chinese MCM localization.
 - `SubModule.xml` — Bannerlord module manifest.
@@ -61,12 +61,13 @@ Build output is written to `Source/Build/out/bin`. The reference stubs are compi
 
 Pull-request CI rebuilds the current source and updates the checked-in runtime DLLs when their bytes differ. The default branch then rebuilds and fails if the committed binaries or `RUNTIME_SHA256.txt` do not match the source build.
 
-## v1.3.12 scope
+## v1.3.13 scope
 
-- Rejects a `KillingBlow.RagdollImpulseAmount` direction when it opposes the exact captured impact direction.
-- Enforces a final horizontal invariant that an externally caused death launch cannot point back toward the affector when valid positions are available.
-- Applies the same direction safeguards to the first combat death and every later death.
-- Preserves configured force magnitude, pulse delivery, impact-bone routing, upward lift, victim momentum, mount-collision scaling, and corpse lifecycle behavior.
-- Retains the v1.3.11 synchronized runtime baseline, Dismemberment Plus safeguards, and complete Simplified Chinese localization.
+- Makes the captured hit direction authoritative for normal death launches.
+- Uses `KillingBlow.RagdollImpulseAmount` only as a last-resort fallback when neither impact data nor attacker geometry exists.
+- Applies victim momentum exactly once during first-pulse force construction and removes only the opposing longitudinal component.
+- Registers the Simplified Chinese string file through `CNs/language_data.xml`.
+- Resolves the MCM display name through Bannerlord `TextObject` instead of exposing the raw localization token.
+- Retains force magnitude, pulse delivery, hit-bone routing, mount-collision scaling, corpse lifecycle behavior, and Dismemberment Plus safeguards.
 
-Runtime validation inside Bannerlord remains required for native physics behavior that cannot be executed in GitHub Actions.
+Runtime validation inside Bannerlord remains required for native physics and MCM rendering behavior that cannot be executed in GitHub Actions.

@@ -38,11 +38,12 @@ function Compile([string[]]$Arguments) { & $DotNet @Arguments; if ($LASTEXITCODE
 
 Compile ($Common + @("/out:$StubDir/TaleWorlds.Library.dll", "$Stubs/TaleWorlds.Library.Stub.cs"))
 Compile ($Common + @("/out:$StubDir/TaleWorlds.Core.dll", "$Stubs/TaleWorlds.Core.Stub.cs"))
+Compile ($Common + @("/out:$StubDir/TaleWorlds.Localization.dll", "$Stubs/TaleWorlds.Localization.Stub.cs"))
 Compile ($Common + @("/out:$StubDir/TaleWorlds.Engine.dll", "/r:$StubDir/TaleWorlds.Library.dll", "$Stubs/TaleWorlds.Engine.Stub.cs"))
 Compile ($Common + @("/out:$StubDir/MCMv5.dll", "$Stubs/MCMv5.Stub.cs"))
 Compile ($Common + @("/out:$StubDir/TaleWorlds.MountAndBlade.dll", "/r:$StubDir/TaleWorlds.Library.dll", "/r:$StubDir/TaleWorlds.Core.dll", "/r:$StubDir/TaleWorlds.Engine.dll", "$Stubs/TaleWorlds.MountAndBlade.Stub.cs"))
 Compile ($Common + @("/out:$BinDir/ExtremeRagdoll.ClothSync.dll", "/r:$StubDir/TaleWorlds.Library.dll", "/r:$StubDir/TaleWorlds.MountAndBlade.dll", "$SourceDir/ClothForceBridge.cs"))
-Compile ($Common + @("/out:$BinDir/ExtremeRagdoll.raw.dll", "/r:$StubDir/TaleWorlds.Library.dll", "/r:$StubDir/TaleWorlds.Core.dll", "/r:$StubDir/TaleWorlds.Engine.dll", "/r:$StubDir/TaleWorlds.MountAndBlade.dll", "/r:$StubDir/MCMv5.dll", "/r:$BinDir/ExtremeRagdoll.ClothSync.dll", "$SourceDir/SafeSubModule.cs"))
+Compile ($Common + @("/out:$BinDir/ExtremeRagdoll.raw.dll", "/r:$StubDir/TaleWorlds.Library.dll", "/r:$StubDir/TaleWorlds.Core.dll", "/r:$StubDir/TaleWorlds.Engine.dll", "/r:$StubDir/TaleWorlds.MountAndBlade.dll", "/r:$StubDir/TaleWorlds.Localization.dll", "/r:$StubDir/MCMv5.dll", "/r:$BinDir/ExtremeRagdoll.ClothSync.dll", "$SourceDir/SafeSubModule.cs"))
 
 $NetCoreRefs = Get-ChildItem $NetCoreRef -Filter "*.dll" | ForEach-Object { "/r:$($_.FullName)" }
 $ToolCommon = @($Csc, "/nologo", "/noconfig", "/nostdlib", "/deterministic+", "/optimize+", "/debug-", "/langversion:7.3", "/target:exe", "/nowarn:1701") + $NetCoreRefs + @("/r:$Cecil")
