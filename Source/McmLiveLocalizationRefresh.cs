@@ -8,7 +8,7 @@ namespace ExtremeRagdoll.SafeRuntime
     /// <summary>
     /// Resolves Extreme Ragdoll's cached MCM labels at binding-read time.
     /// MCM stores mod titles, group headings and setting names in view-model fields, while hint text
-    /// is resolved later on hover. Direct getter postfixes prevent those three cached fields from
+    /// is resolved later on hover. Direct getter postfixes prevent those cached fields from
     /// continuing to return the language that was active when MCM first created its hidden view-model.
     /// </summary>
     internal static class McmLiveLocalizationRefreshPatch
@@ -18,6 +18,8 @@ namespace ExtremeRagdoll.SafeRuntime
         private const string SettingsPropertyVmTypeName = "MCM.UI.GUI.ViewModels.SettingsPropertyVM";
         private const string SettingsPropertyGroupVmTypeName = "MCM.UI.GUI.ViewModels.SettingsPropertyGroupVM";
         private const string SettingsVmTypeName = "MCM.UI.GUI.ViewModels.SettingsVM";
+        private const string SettingsEntryVmTypeName = "MCM.UI.GUI.ViewModels.SettingsEntryVM";
+        private const string ModOptionsVmTypeName = "MCM.UI.GUI.ViewModels.ModOptionsVM";
         private const string McmMixinTypeName = "MCM.UI.UIExtenderEx.OptionsVMMixin";
 
         private static readonly object Gate = new object();
@@ -83,9 +85,12 @@ namespace ExtremeRagdoll.SafeRuntime
                 Type propertyVmType = FindLoadedType(SettingsPropertyVmTypeName);
                 Type groupVmType = FindLoadedType(SettingsPropertyGroupVmTypeName);
                 Type settingsVmType = FindLoadedType(SettingsVmTypeName);
+                Type entryVmType = FindLoadedType(SettingsEntryVmTypeName);
+                Type modOptionsVmType = FindLoadedType(ModOptionsVmTypeName);
                 Type harmonyType = FindLoadedType("HarmonyLib.Harmony");
                 Type harmonyMethodType = FindLoadedType("HarmonyLib.HarmonyMethod");
                 if (propertyVmType == null || groupVmType == null || settingsVmType == null ||
+                    entryVmType == null || modOptionsVmType == null ||
                     harmonyType == null || harmonyMethodType == null)
                 {
                     return false;
@@ -126,6 +131,20 @@ namespace ExtremeRagdoll.SafeRuntime
                     harmonyMethodConstructor,
                     RequireGetter(settingsVmType, "DisplayName"),
                     getterPostfix);
+                PatchPostfix(
+                    harmony,
+                    patchMethod,
+                    harmonyMethodType,
+                    harmonyMethodConstructor,
+                    RequireGetter(entryVmType, "DisplayName"),
+                    getterPostfix);
+                PatchPostfix(
+                    harmony,
+                    patchMethod,
+                    harmonyMethodType,
+                    harmonyMethodConstructor,
+                    RequireGetter(modOptionsVmType, "SelectedDisplayName"),
+                    getterPostfix);
 
                 // Retain MCM's own refresh path as a secondary optimisation. Correctness no longer
                 // depends on this setter firing because every visible cached label getter is patched.
@@ -157,7 +176,8 @@ namespace ExtremeRagdoll.SafeRuntime
 
                 Diagnostic(
                     "Installed direct MCM cached-label getter patches: SettingsPropertyVM.Name, " +
-                    "SettingsPropertyGroupVM.GroupNameDisplay, SettingsVM.DisplayName.");
+                    "SettingsPropertyGroupVM.GroupNameDisplay, SettingsVM.DisplayName, " +
+                    "SettingsEntryVM.DisplayName, ModOptionsVM.SelectedDisplayName.");
                 SafeLog.Info("Installed direct MCM cached-label localization getter patches.");
                 return true;
             }
@@ -298,8 +318,12 @@ namespace ExtremeRagdoll.SafeRuntime
                     token = GetStringProperty(definition, "GroupName");
                     diagnosticKind = 2;
                 }
-                else if (string.Equals(declaringType, SettingsVmTypeName, StringComparison.Ordinal) &&
-                         string.Equals(__originalMethod.Name, "get_DisplayName", StringComparison.Ordinal))
+                else if ((string.Equals(declaringType, SettingsVmTypeName, StringComparison.Ordinal) &&
+                          string.Equals(__originalMethod.Name, "get_DisplayName", StringComparison.Ordinal)) ||
+                         (string.Equals(declaringType, SettingsEntryVmTypeName, StringComparison.Ordinal) &&
+                          string.Equals(__originalMethod.Name, "get_DisplayName", StringComparison.Ordinal)) ||
+                         (string.Equals(declaringType, ModOptionsVmTypeName, StringComparison.Ordinal) &&
+                          string.Equals(__originalMethod.Name, "get_SelectedDisplayName", StringComparison.Ordinal)))
                 {
                     token = "{=ER_DisplayName}Extreme Ragdoll";
                     diagnosticKind = 3;
@@ -342,13 +366,23 @@ namespace ExtremeRagdoll.SafeRuntime
 
         private static bool IsExtremeRagdollViewModel(object instance)
         {
-            object settingsVm = instance;
-            if (!string.Equals(instance.GetType().FullName, SettingsVmTypeName, StringComparison.Ordinal))
+            string typeName = instance.GetType().FullName;
+            object settingsVm;
+            if (string.Equals(typeName, SettingsVmTypeName, StringComparison.Ordinal))
+            {
+                settingsVm = instance;
+            }
+            else if (string.Equals(typeName, ModOptionsVmTypeName, StringComparison.Ordinal))
+            {
+                settingsVm = GetPropertyValue(instance, "SelectedMod");
+            }
+            else
             {
                 settingsVm = GetPropertyValue(instance, "SettingsVM");
-                if (settingsVm == null)
-                    return false;
             }
+
+            if (settingsVm == null)
+                return false;
 
             object definition = GetPropertyValue(settingsVm, "SettingsDefinition");
             string id = GetStringProperty(definition, "SettingsId");
