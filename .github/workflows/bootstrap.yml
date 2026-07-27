@@ -84,10 +84,15 @@ jobs:
 
           $validator = '.\Source\Build\ValidateAssemblies.cs'
           $validatorContent = Get-Content -LiteralPath $validator -Raw
-          $oldInvariant = '            Require(strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),' + "`r`n" + '                "non-missile post-ragdoll route marker is missing");'
-          $newInvariant = '            Require(!strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),' + "`r`n" + '                "obsolete non-missile-only route marker remains");'
-          if (-not $validatorContent.Contains($oldInvariant)) { throw 'Expected stale route-marker invariant was not found.' }
-          $validatorContent.Replace($oldInvariant, $newInvariant) | Set-Content -LiteralPath $validator -Encoding utf8
+          $oldCondition = 'Require(strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),'
+          $newCondition = 'Require(!strings.Any(s => s.Contains("NONMISSILE_POST_RAGDOLL_ROUTE")),'
+          $oldMessage = '"non-missile post-ragdoll route marker is missing");'
+          $newMessage = '"obsolete non-missile-only route marker remains");'
+          if (-not $validatorContent.Contains($oldCondition)) { throw 'Expected stale route-marker condition was not found.' }
+          if (-not $validatorContent.Contains($oldMessage)) { throw 'Expected stale route-marker message was not found.' }
+          $validatorContent = $validatorContent.Replace($oldCondition, $newCondition)
+          $validatorContent = $validatorContent.Replace($oldMessage, $newMessage)
+          $validatorContent | Set-Content -LiteralPath $validator -Encoding utf8
 
       - name: Build v1.3.10
         id: build
