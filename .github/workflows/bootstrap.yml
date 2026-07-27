@@ -9,11 +9,10 @@ on:
       - master
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bootstrap:
-    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2022
     steps:
       - name: Check out bootstrap branch
@@ -94,43 +93,11 @@ jobs:
           $validatorContent = $validatorContent.Replace($oldMessage, $newMessage)
           $validatorContent | Set-Content -LiteralPath $validator -Encoding utf8
 
-      - name: Build v1.3.10
-        id: build
-        continue-on-error: true
+      - name: Build and validate v1.3.10
         shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll-build.log'
-          try {
-            & .\Source\Build\build.ps1 *>&1 | Tee-Object -FilePath $log
-            if ($LASTEXITCODE -ne 0) { throw "Build exited with code $LASTEXITCODE." }
-          }
-          catch {
-            ($_ | Out-String) | Tee-Object -FilePath $log -Append
-            exit 1
-          }
-
-      - name: Prepare build failure diagnostics
-        if: steps.build.outcome == 'failure'
-        shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll-build.log'
-          @(
-            'Extreme Ragdoll v1.3.10 clean build failure'
-            '==========================================='
-            ''
-            (Get-Content -LiteralPath $log -Tail 250)
-          ) | Set-Content -LiteralPath 'build-error.txt' -Encoding utf8
-
-      - name: Upload build failure diagnostics
-        if: steps.build.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ExtremeRagdoll-v1.3.10-build-error
-          path: build-error.txt
-          if-no-files-found: error
+        run: .\Source\Build\build.ps1
 
       - name: Stage runtime binaries and hashes
-        if: steps.build.outcome == 'success'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -144,18 +111,22 @@ jobs:
             "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
             "$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
           ) | Set-Content -LiteralPath '.\RUNTIME_SHA256.txt' -Encoding ascii
+          Remove-Item '.\Source\Build\out' -Recurse -Force
 
-      - name: Commit clean repository
-        if: steps.build.outcome == 'success'
-        shell: pwsh
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Clean repository and build v1.3.10'
-          git push origin HEAD:agent/clean-v1.3.10-source
-
-      - name: Fail after publishing diagnostics
-        if: steps.build.outcome == 'failure'
-        shell: pwsh
-        run: throw 'The clean v1.3.10 build failed; diagnostics were uploaded as an artifact.'
+      - name: Upload verified clean repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExtremeRagdoll-v1.3.10-clean-repository
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .gitattributes
+            .github/workflows/build.yml
+            .gitignore
+            CHANGELOG.md
+            README.md
+            RUNTIME_SHA256.txt
+            SubModule.xml
+            ModuleData
+            Source
+            bin
