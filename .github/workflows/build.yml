@@ -37,10 +37,15 @@ jobs:
 
           $main = (Get-FileHash ".\bin\Win64_Shipping_Client\ExtremeRagdoll.dll" -Algorithm SHA256).Hash.ToLowerInvariant()
           $helper = (Get-FileHash ".\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll" -Algorithm SHA256).Hash.ToLowerInvariant()
-          @(
+          $manifest = @(
             "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll"
             "$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll"
-          ) | Set-Content ".\RUNTIME_SHA256.txt" -Encoding ascii
+          )
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE "RUNTIME_SHA256.txt"
+          [System.IO.File]::WriteAllText(
+            $manifestPath,
+            ($manifest -join "`n") + "`n",
+            [System.Text.Encoding]::ASCII)
 
       - name: Update PR runtime binaries
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
