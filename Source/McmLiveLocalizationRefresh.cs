@@ -1,23 +1,50 @@
 using System;
-using System.Collections;
+using System.IO;
 using System.Reflection;
-using TaleWorlds.MountAndBlade;
+using TaleWorlds.Localization;
 
 namespace ExtremeRagdoll.SafeRuntime
 {
     /// <summary>
-    /// Refreshes MCM's cached label view-models when the Mod Options category is selected.
-    /// MCM v5.12.1 resolves setting hints on hover, but stores mod names, group names and
-    /// setting names when its hidden options view-model is first created. A language change
-    /// therefore updates hints while leaving those cached labels in the previous language.
+    /// Resolves Extreme Ragdoll's cached MCM labels at binding-read time.
+    /// MCM stores mod titles, group headings and setting names in view-model fields, while hint text
+    /// is resolved later on hover. Direct getter postfixes prevent those three cached fields from
+    /// continuing to return the language that was active when MCM first created its hidden view-model.
     /// </summary>
     internal static class McmLiveLocalizationRefreshPatch
     {
         private const string HarmonyId = "xmarre.extremeragdoll.mcm-live-localization-refresh";
+        private const string SettingsId = "ExtremeRagdoll_Safe_v4";
+        private const string SettingsPropertyVmTypeName = "MCM.UI.GUI.ViewModels.SettingsPropertyVM";
+        private const string SettingsPropertyGroupVmTypeName = "MCM.UI.GUI.ViewModels.SettingsPropertyGroupVM";
+        private const string SettingsVmTypeName = "MCM.UI.GUI.ViewModels.SettingsVM";
         private const string McmMixinTypeName = "MCM.UI.UIExtenderEx.OptionsVMMixin";
+
         private static readonly object Gate = new object();
         private static bool _installed;
         private static bool _assemblyHooked;
+        private static bool _diagnosticReset;
+        private static bool _settingNameTranslationObserved;
+        private static bool _groupNameTranslationObserved;
+        private static bool _displayNameTranslationObserved;
+
+        internal static void ResetDiagnosticLog()
+        {
+            lock (Gate)
+            {
+                if (_diagnosticReset)
+                    return;
+
+                _diagnosticReset = true;
+                try
+                {
+                    File.WriteAllText(GetDiagnosticPath(), string.Empty);
+                }
+                catch
+                {
+                }
+            }
+        }
 
         internal static void EnsureInstalled()
         {
@@ -33,7 +60,7 @@ namespace ExtremeRagdoll.SafeRuntime
                 {
                     AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
                     _assemblyHooked = true;
-                    SafeLog.Info("MCM localization refresh patch deferred until MCM.UI and Harmony are loaded.");
+                    Diagnostic("MCM getter patch deferred until MCM.UI and Harmony are loaded.");
                 }
             }
         }
@@ -53,56 +80,74 @@ namespace ExtremeRagdoll.SafeRuntime
         {
             try
             {
-                Type mixinType = FindLoadedType(McmMixinTypeName);
+                Type propertyVmType = FindLoadedType(SettingsPropertyVmTypeName);
+                Type groupVmType = FindLoadedType(SettingsPropertyGroupVmTypeName);
+                Type settingsVmType = FindLoadedType(SettingsVmTypeName);
                 Type harmonyType = FindLoadedType("HarmonyLib.Harmony");
                 Type harmonyMethodType = FindLoadedType("HarmonyLib.HarmonyMethod");
-                if (mixinType == null || harmonyType == null || harmonyMethodType == null)
+                if (propertyVmType == null || groupVmType == null || settingsVmType == null ||
+                    harmonyType == null || harmonyMethodType == null)
+                {
                     return false;
-
-                const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Static |
-                                           BindingFlags.Public | BindingFlags.NonPublic;
-                PropertyInfo selectedProperty = mixinType.GetProperty("ModOptionsSelected", Flags);
-                MethodInfo setter = selectedProperty == null ? null : selectedProperty.GetSetMethod(true);
-                if (setter == null)
-                    throw new MissingMethodException(McmMixinTypeName, "set_ModOptionsSelected");
+                }
 
                 ConstructorInfo harmonyConstructor = harmonyType.GetConstructor(new[] { typeof(string) });
                 ConstructorInfo harmonyMethodConstructor = harmonyMethodType.GetConstructor(new[] { typeof(MethodInfo) });
-                if (harmonyConstructor == null || harmonyMethodConstructor == null)
-                    throw new MissingMethodException("Harmony reflection constructors required for the MCM refresh patch were not found.");
-
-                MethodInfo postfixMethod = typeof(McmLiveLocalizationRefreshPatch).GetMethod(
-                    "ModOptionsSelectedPostfix", BindingFlags.Static | BindingFlags.NonPublic);
-                if (postfixMethod == null)
-                    throw new MissingMethodException(typeof(McmLiveLocalizationRefreshPatch).FullName, "ModOptionsSelectedPostfix");
-
                 MethodInfo patchMethod = FindHarmonyPatchMethod(harmonyType, harmonyMethodType);
-                if (patchMethod == null)
-                    throw new MissingMethodException("HarmonyLib.Harmony", "Patch");
+                MethodInfo getterPostfix = typeof(McmLiveLocalizationRefreshPatch).GetMethod(
+                    "LocalizedCachedStringGetterPostfix", BindingFlags.Static | BindingFlags.NonPublic);
+                MethodInfo selectionPostfix = typeof(McmLiveLocalizationRefreshPatch).GetMethod(
+                    "ModOptionsSelectedPostfix", BindingFlags.Static | BindingFlags.NonPublic);
+                if (harmonyConstructor == null || harmonyMethodConstructor == null || patchMethod == null ||
+                    getterPostfix == null || selectionPostfix == null)
+                {
+                    throw new MissingMethodException("Harmony reflection members required for the MCM localization patches were not found.");
+                }
 
                 object harmony = harmonyConstructor.Invoke(new object[] { HarmonyId });
-                object postfix = harmonyMethodConstructor.Invoke(new object[] { postfixMethod });
-                ParameterInfo[] parameters = patchMethod.GetParameters();
-                object[] arguments = new object[parameters.Length];
-                arguments[0] = setter;
-                for (int i = 1; i < parameters.Length; i++)
+                PatchPostfix(
+                    harmony,
+                    patchMethod,
+                    harmonyMethodType,
+                    harmonyMethodConstructor,
+                    RequireGetter(propertyVmType, "Name"),
+                    getterPostfix);
+                PatchPostfix(
+                    harmony,
+                    patchMethod,
+                    harmonyMethodType,
+                    harmonyMethodConstructor,
+                    RequireGetter(groupVmType, "GroupNameDisplay"),
+                    getterPostfix);
+                PatchPostfix(
+                    harmony,
+                    patchMethod,
+                    harmonyMethodType,
+                    harmonyMethodConstructor,
+                    RequireGetter(settingsVmType, "DisplayName"),
+                    getterPostfix);
+
+                // Retain MCM's own refresh path as a secondary optimisation. Correctness no longer
+                // depends on this setter firing because every visible cached label getter is patched.
+                Type mixinType = FindLoadedType(McmMixinTypeName);
+                if (mixinType != null)
                 {
-                    if (parameters[i].ParameterType == harmonyMethodType &&
-                        string.Equals(parameters[i].Name, "postfix", StringComparison.OrdinalIgnoreCase))
+                    PropertyInfo selectedProperty = mixinType.GetProperty(
+                        "ModOptionsSelected",
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    MethodInfo setter = selectedProperty == null ? null : selectedProperty.GetSetMethod(true);
+                    if (setter != null)
                     {
-                        arguments[i] = postfix;
-                    }
-                    else if (parameters[i].HasDefaultValue)
-                    {
-                        arguments[i] = parameters[i].DefaultValue;
-                    }
-                    else
-                    {
-                        arguments[i] = null;
+                        PatchPostfix(
+                            harmony,
+                            patchMethod,
+                            harmonyMethodType,
+                            harmonyMethodConstructor,
+                            setter,
+                            selectionPostfix);
                     }
                 }
 
-                patchMethod.Invoke(harmony, arguments);
                 _installed = true;
                 if (_assemblyHooked)
                 {
@@ -110,19 +155,68 @@ namespace ExtremeRagdoll.SafeRuntime
                     _assemblyHooked = false;
                 }
 
-                SafeLog.Info("Installed event-driven MCM label localization refresh patch.");
+                Diagnostic(
+                    "Installed direct MCM cached-label getter patches: SettingsPropertyVM.Name, " +
+                    "SettingsPropertyGroupVM.GroupNameDisplay, SettingsVM.DisplayName.");
+                SafeLog.Info("Installed direct MCM cached-label localization getter patches.");
                 return true;
             }
             catch (TargetInvocationException ex)
             {
-                SafeLog.Error("MCM label localization refresh patch failed", ex.InnerException ?? ex);
+                Exception actual = ex.InnerException ?? ex;
+                Diagnostic("MCM getter patch installation failed: " + actual);
+                SafeLog.Error("MCM cached-label localization patch failed", actual);
                 return false;
             }
             catch (Exception ex)
             {
-                SafeLog.Error("MCM label localization refresh patch failed", ex);
+                Diagnostic("MCM getter patch installation failed: " + ex);
+                SafeLog.Error("MCM cached-label localization patch failed", ex);
                 return false;
             }
+        }
+
+        private static MethodInfo RequireGetter(Type type, string propertyName)
+        {
+            PropertyInfo property = type.GetProperty(
+                propertyName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            MethodInfo getter = property == null ? null : property.GetGetMethod(true);
+            if (getter == null)
+                throw new MissingMethodException(type.FullName, "get_" + propertyName);
+            return getter;
+        }
+
+        private static void PatchPostfix(
+            object harmony,
+            MethodInfo patchMethod,
+            Type harmonyMethodType,
+            ConstructorInfo harmonyMethodConstructor,
+            MethodBase original,
+            MethodInfo postfixMethod)
+        {
+            object postfix = harmonyMethodConstructor.Invoke(new object[] { postfixMethod });
+            ParameterInfo[] parameters = patchMethod.GetParameters();
+            object[] arguments = new object[parameters.Length];
+            arguments[0] = original;
+            for (int i = 1; i < parameters.Length; i++)
+            {
+                if (parameters[i].ParameterType == harmonyMethodType &&
+                    string.Equals(parameters[i].Name, "postfix", StringComparison.OrdinalIgnoreCase))
+                {
+                    arguments[i] = postfix;
+                }
+                else if (parameters[i].HasDefaultValue)
+                {
+                    arguments[i] = parameters[i].DefaultValue;
+                }
+                else
+                {
+                    arguments[i] = null;
+                }
+            }
+
+            patchMethod.Invoke(harmony, arguments);
         }
 
         private static MethodInfo FindHarmonyPatchMethod(Type harmonyType, Type harmonyMethodType)
@@ -138,19 +232,14 @@ namespace ExtremeRagdoll.SafeRuntime
                 if (parameters.Length < 3 || !typeof(MethodBase).IsAssignableFrom(parameters[0].ParameterType))
                     continue;
 
-                bool hasPostfix = false;
                 for (int p = 1; p < parameters.Length; p++)
                 {
                     if (parameters[p].ParameterType == harmonyMethodType &&
                         string.Equals(parameters[p].Name, "postfix", StringComparison.OrdinalIgnoreCase))
                     {
-                        hasPostfix = true;
-                        break;
+                        return method;
                     }
                 }
-
-                if (hasPostfix)
-                    return method;
             }
 
             return null;
@@ -179,6 +268,156 @@ namespace ExtremeRagdoll.SafeRuntime
             return null;
         }
 
+        private static void LocalizedCachedStringGetterPostfix(
+            object __instance,
+            MethodBase __originalMethod,
+            ref string __result)
+        {
+            if (__instance == null || __originalMethod == null || !IsExtremeRagdollViewModel(__instance))
+                return;
+
+            try
+            {
+                string declaringType = __originalMethod.DeclaringType == null
+                    ? string.Empty
+                    : __originalMethod.DeclaringType.FullName;
+                string token = null;
+                int diagnosticKind = 0;
+
+                if (string.Equals(declaringType, SettingsPropertyVmTypeName, StringComparison.Ordinal) &&
+                    string.Equals(__originalMethod.Name, "get_Name", StringComparison.Ordinal))
+                {
+                    object definition = GetPropertyValue(__instance, "SettingPropertyDefinition");
+                    token = GetStringProperty(definition, "DisplayName");
+                    diagnosticKind = 1;
+                }
+                else if (string.Equals(declaringType, SettingsPropertyGroupVmTypeName, StringComparison.Ordinal) &&
+                         string.Equals(__originalMethod.Name, "get_GroupNameDisplay", StringComparison.Ordinal))
+                {
+                    object definition = GetPropertyValue(__instance, "SettingPropertyGroupDefinition");
+                    token = GetStringProperty(definition, "GroupName");
+                    diagnosticKind = 2;
+                }
+                else if (string.Equals(declaringType, SettingsVmTypeName, StringComparison.Ordinal) &&
+                         string.Equals(__originalMethod.Name, "get_DisplayName", StringComparison.Ordinal))
+                {
+                    token = "{=ER_DisplayName}Extreme Ragdoll";
+                    diagnosticKind = 3;
+                }
+
+                if (string.IsNullOrEmpty(token))
+                    return;
+
+                string translated = new TextObject(token).ToString();
+                if (string.IsNullOrEmpty(translated))
+                    return;
+
+                string previous = __result;
+                if (diagnosticKind == 2 && !string.IsNullOrEmpty(previous))
+                {
+                    string fallback = ExtractFallback(token);
+                    if (!string.IsNullOrEmpty(fallback) &&
+                        previous.IndexOf(fallback, StringComparison.Ordinal) >= 0)
+                    {
+                        __result = previous.Replace(fallback, translated);
+                    }
+                    else
+                    {
+                        __result = translated;
+                    }
+                }
+                else
+                {
+                    __result = translated;
+                }
+
+                if (!string.Equals(previous, __result, StringComparison.Ordinal))
+                    RecordFirstObservedTranslation(diagnosticKind, previous, __result);
+            }
+            catch (Exception ex)
+            {
+                Diagnostic("MCM cached-label getter translation failed: " + ex);
+            }
+        }
+
+        private static bool IsExtremeRagdollViewModel(object instance)
+        {
+            object settingsVm = instance;
+            if (!string.Equals(instance.GetType().FullName, SettingsVmTypeName, StringComparison.Ordinal))
+            {
+                settingsVm = GetPropertyValue(instance, "SettingsVM");
+                if (settingsVm == null)
+                    return false;
+            }
+
+            object definition = GetPropertyValue(settingsVm, "SettingsDefinition");
+            string id = GetStringProperty(definition, "SettingsId");
+            if (string.IsNullOrEmpty(id))
+            {
+                object settingsInstance = GetPropertyValue(settingsVm, "SettingsInstance");
+                id = GetStringProperty(settingsInstance, "Id");
+            }
+
+            return string.Equals(id, SettingsId, StringComparison.Ordinal);
+        }
+
+        private static object GetPropertyValue(object instance, string propertyName)
+        {
+            if (instance == null)
+                return null;
+
+            PropertyInfo property = instance.GetType().GetProperty(
+                propertyName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            return property == null ? null : property.GetValue(instance, null);
+        }
+
+        private static string GetStringProperty(object instance, string propertyName)
+        {
+            object value = GetPropertyValue(instance, propertyName);
+            return value as string;
+        }
+
+        private static string ExtractFallback(string token)
+        {
+            if (string.IsNullOrEmpty(token) || token[0] != '{')
+                return token;
+
+            int end = token.IndexOf('}');
+            return end >= 0 && end + 1 < token.Length ? token.Substring(end + 1) : token;
+        }
+
+        private static void RecordFirstObservedTranslation(int kind, string previous, string translated)
+        {
+            lock (Gate)
+            {
+                bool shouldWrite = false;
+                if (kind == 1 && !_settingNameTranslationObserved)
+                {
+                    _settingNameTranslationObserved = true;
+                    shouldWrite = true;
+                }
+                else if (kind == 2 && !_groupNameTranslationObserved)
+                {
+                    _groupNameTranslationObserved = true;
+                    shouldWrite = true;
+                }
+                else if (kind == 3 && !_displayNameTranslationObserved)
+                {
+                    _displayNameTranslationObserved = true;
+                    shouldWrite = true;
+                }
+
+                if (shouldWrite)
+                {
+                    Diagnostic(
+                        "Observed live cached-label translation kind=" + kind +
+                        "; previous=" + (previous ?? "<null>") +
+                        "; translated=" + translated + ".");
+                }
+            }
+        }
+
         private static void ModOptionsSelectedPostfix(object __instance, object[] __args)
         {
             if (__instance == null || __args == null || __args.Length == 0 ||
@@ -189,62 +428,41 @@ namespace ExtremeRagdoll.SafeRuntime
 
             try
             {
-                const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-                PropertyInfo modOptionsProperty = __instance.GetType().GetProperty("ModOptions", Flags);
-                object modOptions = modOptionsProperty == null ? null : modOptionsProperty.GetValue(__instance, null);
+                object modOptions = GetPropertyValue(__instance, "ModOptions");
                 if (modOptions == null)
                     return;
 
                 MethodInfo refreshValues = modOptions.GetType().GetMethod(
-                    "RefreshValues", Flags, null, Type.EmptyTypes, null);
-                if (refreshValues == null)
-                    throw new MissingMethodException(modOptions.GetType().FullName, "RefreshValues");
-
-                refreshValues.Invoke(modOptions, null);
-
-                PropertyInfo entriesProperty = modOptions.GetType().GetProperty("ModSettingsList", Flags);
-                IEnumerable entries = entriesProperty == null ? null : entriesProperty.GetValue(modOptions, null) as IEnumerable;
-                if (entries != null)
-                {
-                    foreach (object entry in entries)
-                    {
-                        if (entry != null)
-                            NotifyPropertyChanged(entry, "DisplayName");
-                    }
-                }
-
-                NotifyPropertyChanged(modOptions, "SelectedDisplayName");
-                NotifyPropertyChanged(modOptions, "SelectedMod");
-                SafeLog.Info("Refreshed MCM labels after Mod Options selection.");
-            }
-            catch (TargetInvocationException ex)
-            {
-                SafeLog.Error("MCM live label refresh failed", ex.InnerException ?? ex);
+                    "RefreshValues",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    Type.EmptyTypes,
+                    null);
+                if (refreshValues != null)
+                    refreshValues.Invoke(modOptions, null);
             }
             catch (Exception ex)
             {
-                SafeLog.Error("MCM live label refresh failed", ex);
+                Diagnostic("Secondary MCM view-model refresh failed: " + ex);
             }
         }
 
-        private static void NotifyPropertyChanged(object viewModel, string propertyName)
+        private static string GetDiagnosticPath()
         {
-            Type type = viewModel.GetType();
-            while (type != null)
-            {
-                MethodInfo method = type.GetMethod(
-                    "OnPropertyChanged",
-                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly,
-                    null,
-                    new[] { typeof(string) },
-                    null);
-                if (method != null)
-                {
-                    method.Invoke(viewModel, new object[] { propertyName });
-                    return;
-                }
+            string directory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            return Path.Combine(directory ?? ".", "ExtremeRagdoll.Localization.log");
+        }
 
-                type = type.BaseType;
+        private static void Diagnostic(string message)
+        {
+            try
+            {
+                File.AppendAllText(
+                    GetDiagnosticPath(),
+                    DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + message + Environment.NewLine);
+            }
+            catch
+            {
             }
         }
     }
@@ -253,14 +471,21 @@ namespace ExtremeRagdoll.SafeRuntime
 namespace ExtremeRagdoll
 {
     /// <summary>
-    /// Runtime entry point that installs the MCM language-refresh compatibility patch before
+    /// Runtime entry point that installs the MCM localization compatibility patches before
     /// delegating to the maintained safe ragdoll submodule.
     /// </summary>
     public sealed class LocalizedSubModule : ExtremeRagdoll.SafeRuntime.SafeSubModule
     {
         protected override void OnSubModuleLoad()
         {
+            ExtremeRagdoll.SafeRuntime.McmLiveLocalizationRefreshPatch.ResetDiagnosticLog();
             base.OnSubModuleLoad();
+            ExtremeRagdoll.SafeRuntime.McmLiveLocalizationRefreshPatch.EnsureInstalled();
+        }
+
+        protected override void OnBeforeInitialModuleScreenSetAsRoot()
+        {
+            base.OnBeforeInitialModuleScreenSetAsRoot();
             ExtremeRagdoll.SafeRuntime.McmLiveLocalizationRefreshPatch.EnsureInstalled();
         }
     }
