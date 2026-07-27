@@ -1,14 +1,14 @@
-name: Publish and verify Extreme Ragdoll v1.3.10
+name: Publish and verify Extreme Ragdoll v1.3.11
 
 on:
   pull_request:
     paths:
-      - .github/workflows/release-v1.3.10.yml
+      - .github/workflows/release-v1.3.11.yml
   push:
     branches:
       - master
     paths:
-      - .github/workflows/release-v1.3.10.yml
+      - .github/workflows/release-v1.3.11.yml
   workflow_dispatch:
 
 permissions:
@@ -18,10 +18,10 @@ jobs:
   release:
     runs-on: windows-2022
     env:
-      TAG_NAME: v1.3.10
-      RELEASE_NAME: Extreme Ragdoll v1.3.10
-      TARGET_COMMIT: a70b77cd58b33290b75ea9a4ddefc05d0f7a8ce2
-      ASSET_NAME: ExtremeRagdoll-v1.3.10-Bannerlord-1.3.15-to-1.4.7.zip
+      TAG_NAME: v1.3.11
+      RELEASE_NAME: Extreme Ragdoll v1.3.11
+      TARGET_COMMIT: 82cd7d5a8f790bb1c36b8df97ace0b2ec74944c9
+      ASSET_NAME: ExtremeRagdoll-v1.3.11-Bannerlord-1.3.15-to-1.4.7.zip
 
     steps:
       - name: Check out release source
@@ -33,6 +33,18 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 3.1.426
+
+      - name: Verify module version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$module = Get-Content '.\SubModule.xml' -Raw
+          $versionNode = $module.SelectSingleNode('/Module/Version')
+          if ($null -eq $versionNode) { throw 'SubModule.xml has no Version element.' }
+          $moduleVersion = $versionNode.GetAttribute('value')
+          if ($moduleVersion -ne $env:TAG_NAME) {
+            throw "SubModule.xml reports $moduleVersion, expected $($env:TAG_NAME)."
+          }
 
       - name: Build and verify release runtime
         shell: pwsh
@@ -100,20 +112,20 @@ jobs:
         shell: pwsh
         run: |
           $notes = @'
-          ## Extreme Ragdoll v1.3.10
+          ## Extreme Ragdoll v1.3.11
 
-          Directional death physics for Mount & Blade II: Bannerlord.
+          Corrective runtime-synchronisation release for Mount & Blade II: Bannerlord.
 
           **Supported Bannerlord versions:** v1.3.15–v1.4.7  
           **Required:** Harmony and Mod Configuration Menu v5
 
           ### Changes
 
-          - Added automatic Dismemberment Plus compatibility safeguards.
-          - Prevented Extreme Ragdoll from force-finalizing corpses while Dismemberment Plus may still be rebuilding body or armour meshes.
-          - Disabled only Extreme Ragdoll's nonlethal push and knockdown injection while Dismemberment Plus is loaded; lethal death-launch physics remain enabled.
-          - Added complete Simplified Chinese localisation for the MCM menu, including groups, setting names, and hints.
-          - Preserved normal v1.3.9 behaviour when Dismemberment Plus is not loaded.
+          - Rebuilt and republished the runtime DLLs from the maintained source after the earlier Nexus v1.3.10 package was found to contain stale binaries.
+          - Synchronized the module version, repository metadata, runtime verification, package naming, and release assets under v1.3.11.
+          - Retained the complete Dismemberment Plus compatibility safeguards.
+          - Retained complete Simplified Chinese MCM localisation.
+          - Added no further gameplay changes beyond the maintained v1.3.10 source.
 
           ### Installation
 
@@ -122,7 +134,7 @@ jobs:
           3. Ensure Harmony and MCM v5 are installed.
           4. Enable **Extreme Ragdoll** in the launcher or BLSE.
 
-          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.10-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
+          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.11-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
           '@
           $notes = $notes.Trim() + "`n`n### Build integrity`n`n"
           $notes += "- `ExtremeRagdoll.dll`: ``$($env:MAIN_DLL_SHA256)```n"
@@ -163,6 +175,7 @@ jobs:
           }
 
       - name: Verify published release and assets
+        if: github.event_name != 'pull_request'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -221,6 +234,14 @@ jobs:
           }
           if (Test-Path -LiteralPath (Join-Path $moduleRoot 'Source')) {
             throw 'Installable release unexpectedly contains the source tree.'
+          }
+
+          [xml]$releasedModule = Get-Content (Join-Path $moduleRoot 'SubModule.xml') -Raw
+          $releasedVersionNode = $releasedModule.SelectSingleNode('/Module/Version')
+          if ($null -eq $releasedVersionNode) { throw 'Published SubModule.xml has no Version element.' }
+          $releasedVersion = $releasedVersionNode.GetAttribute('value')
+          if ($releasedVersion -ne $env:TAG_NAME) {
+            throw "Published SubModule.xml reports $releasedVersion, expected $($env:TAG_NAME)."
           }
 
           $releasedMain = (Get-FileHash (Join-Path $moduleRoot 'bin/Win64_Shipping_Client/ExtremeRagdoll.dll') -Algorithm SHA256).Hash.ToLowerInvariant()
