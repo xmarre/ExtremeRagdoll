@@ -180,7 +180,7 @@ jobs:
             $buildText = Get-Content $buildScript -Raw
             foreach ($requiredSource in @('McmLiveLocalizationRefresh.cs', 'CompatibleLocalizedSubModule.cs')) {
               if (-not $buildText.Contains($requiredSource)) {
-                throw "Build script does not compile required source $requiredSource: $buildScript"
+                throw "Build script does not compile required source ${requiredSource}: $buildScript"
               }
             }
           }
