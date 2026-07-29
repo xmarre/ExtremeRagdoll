@@ -164,17 +164,19 @@ jobs:
             'TryInstallLocalizationPatches("OnSubModuleLoad")',
             'TryInstallLocalizationPatches("OnBeforeInitialModuleScreenSetAsRoot")',
             'TryInstallLocalizationPatches("OnMissionBehaviorInitialize")',
-            'All target types are already loaded',
+            'TryInstallNowMethod',
+            'Do not call EnsureInstalled',
             'Localization compatibility must never prevent a battle from loading')) {
             if (-not $entrySource.Contains($requiredMarker)) {
               throw "Compatible localization entry point is missing required marker: $requiredMarker"
             }
           }
           if ($entrySource.Contains('AppDomain.CurrentDomain.AssemblyLoad') -or
+              $entrySource.Contains('McmLiveLocalizationRefreshPatch.EnsureInstalled(') -or
               $entrySource.Contains('OnMissionTick') -or
               $entrySource.Contains('OnApplicationTick') -or
               $entrySource.Contains('System.Threading.Timer')) {
-            throw 'Active localization entry point must use bounded lifecycle retries only.'
+            throw 'Active localization entry point must use direct bounded lifecycle retries only.'
           }
           foreach ($buildScript in @('.\Source\Build\build.ps1', '.\Source\Build\build.sh')) {
             $buildText = Get-Content $buildScript -Raw
