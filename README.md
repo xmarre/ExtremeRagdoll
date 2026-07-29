@@ -40,7 +40,7 @@ The canonical build compiles against minimal Bannerlord 1.3.15-compatible refere
 Requirements:
 
 - .NET Core SDK 3.1
-- NuGet access or cached `Mono.Cecil` and Bannerlord reference-assembly packages
+- NuGet access or cached `Mono.Cecil 0.10.1` and `Bannerlord.ReferenceAssemblies 1.4.7.117484` packages
 - PowerShell on Windows, or Bash on Linux/macOS
 
 Windows:
