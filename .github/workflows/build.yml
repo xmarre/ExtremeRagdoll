@@ -48,7 +48,7 @@ jobs:
             ($manifest -join "`n") + "`n",
             [System.Text.Encoding]::ASCII)
 
-      - name: Validate Bannerlord 1.4.7 mission API compatibility
+      - name: Validate Bannerlord 1.4.7 API compatibility
         shell: pwsh
         run: |
           .\Source\Build\inspect-bannerlord-1.4.7.ps1 -RuntimeAssembly ".\bin\Win64_Shipping_Client\ExtremeRagdoll.dll"
@@ -85,10 +85,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           [xml]$module = Get-Content '.\SubModule.xml' -Raw
-          if ($module.Module.Version.value -ne 'v1.3.16') {
+          if ($module.Module.Version.value -ne 'v1.3.17') {
             throw "Unexpected module version: $($module.Module.Version.value)"
           }
-          if ($module.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.LocalizedSubModule') {
+          if ($module.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.CompatibleLocalizedSubModule') {
             throw "Unexpected runtime entry point: $($module.Module.SubModules.SubModule.SubModuleClassType.value)"
           }
 
@@ -122,9 +122,7 @@ jobs:
           $chineseIds = @($chineseNodes | ForEach-Object { [string]$_.id })
           if (($englishIds | Sort-Object -Unique).Count -ne $englishIds.Count) { throw 'Duplicate English localization IDs.' }
           if (($chineseIds | Sort-Object -Unique).Count -ne $chineseIds.Count) { throw 'Duplicate Chinese localization IDs.' }
-          $englishKeySet = ($englishIds | Sort-Object) -join "`n"
-          $chineseKeySet = ($chineseIds | Sort-Object) -join "`n"
-          if ($englishKeySet -ne $chineseKeySet) {
+          if ((($englishIds | Sort-Object) -join "`n") -ne (($chineseIds | Sort-Object) -join "`n")) {
             throw 'English and Simplified Chinese localization ID sets differ.'
           }
           if (@($englishNodes | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.text) }).Count -gt 0 -or
@@ -133,7 +131,8 @@ jobs:
           }
 
           $sourceText = (Get-Content '.\Source\SafeSubModule.cs' -Raw) + "`n" +
-                        (Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw)
+                        (Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw) + "`n" +
+                        (Get-Content '.\Source\CompatibleLocalizedSubModule.cs' -Raw)
           $referencedIds = @([regex]::Matches($sourceText, '\{=([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
           $missingIds = @($referencedIds | Where-Object { $_ -notin $englishIds })
           if ($missingIds.Count -gt 0) {
@@ -153,20 +152,36 @@ jobs:
             'RequireGetter(settingsVmType, "DisplayName")',
             'RequireGetter(entryVmType, "DisplayName")',
             'RequireGetter(modOptionsVmType, "SelectedDisplayName")',
-            'ExtremeRagdoll.Localization.log',
-            'OnBeforeInitialModuleScreenSetAsRoot',
-            'AppDomain.CurrentDomain.AssemblyLoad')) {
+            'ExtremeRagdoll.Localization.log')) {
             if (-not $refreshSource.Contains($requiredMarker)) {
               throw "MCM direct-localization source is missing required marker: $requiredMarker"
             }
           }
-          if ($refreshSource.Contains('OnMissionTick') -or $refreshSource.Contains('OnApplicationTick') -or
-              $refreshSource.Contains('System.Threading.Timer')) {
-            throw 'MCM localization integration must remain UI/event-driven and must not add a tick or timer path.'
+
+          $entrySource = Get-Content '.\Source\CompatibleLocalizedSubModule.cs' -Raw
+          foreach ($requiredMarker in @(
+            'CompatibleLocalizedSubModule',
+            'TryInstallLocalizationPatches("OnSubModuleLoad")',
+            'TryInstallLocalizationPatches("OnBeforeInitialModuleScreenSetAsRoot")',
+            'TryInstallLocalizationPatches("OnMissionBehaviorInitialize")',
+            'All target types are already loaded',
+            'Localization compatibility must never prevent a battle from loading')) {
+            if (-not $entrySource.Contains($requiredMarker)) {
+              throw "Compatible localization entry point is missing required marker: $requiredMarker"
+            }
+          }
+          if ($entrySource.Contains('AppDomain.CurrentDomain.AssemblyLoad') -or
+              $entrySource.Contains('OnMissionTick') -or
+              $entrySource.Contains('OnApplicationTick') -or
+              $entrySource.Contains('System.Threading.Timer')) {
+            throw 'Active localization entry point must use bounded lifecycle retries only.'
           }
           foreach ($buildScript in @('.\Source\Build\build.ps1', '.\Source\Build\build.sh')) {
-            if (-not (Get-Content $buildScript -Raw).Contains('McmLiveLocalizationRefresh.cs')) {
-              throw "Build script does not compile the MCM localization source: $buildScript"
+            $buildText = Get-Content $buildScript -Raw
+            foreach ($requiredSource in @('McmLiveLocalizationRefresh.cs', 'CompatibleLocalizedSubModule.cs')) {
+              if (-not $buildText.Contains($requiredSource)) {
+                throw "Build script does not compile required source $requiredSource: $buildScript"
+              }
             }
           }
 
@@ -178,11 +193,11 @@ jobs:
           Copy-Item ".\SubModule.xml" $stage
           Copy-Item ".\ModuleData" $stage -Recurse
           Copy-Item ".\bin" $stage -Recurse
-          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.16.zip" -Force
+          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.17.zip" -Force
 
       - name: Upload module artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.16
-          path: ExtremeRagdoll-v1.3.16.zip
+          name: ExtremeRagdoll-v1.3.17
+          path: ExtremeRagdoll-v1.3.17.zip
           if-no-files-found: error
