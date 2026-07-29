@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.17
+
+- Fixed a Bannerlord 1.4.7 battle-start hard crash introduced by v1.3.16's deferred MCM localization installer.
+- Removed localization patch installation from `AppDomain.AssemblyLoad` callbacks in the active submodule path.
+- Prevented Harmony's dynamic patch assemblies from re-entering localization installation before completion.
+- Retries localization integration only from bounded Bannerlord startup and mission-initialization lifecycle callbacks.
+- Keeps complete Simplified Chinese MCM labels when the required MCM UI types are available.
+- Validates the compiled runtime and every direct TaleWorlds member reference against Bannerlord 1.4.7 reference assemblies.
+- Added no ragdoll force, direction, corpse-finalization, campaign, or per-tick behavior changes.
+
 ## v1.3.16
 
 - Fixed MCM retaining cached English mod titles, group headings, and setting names after Simplified Chinese became active.
