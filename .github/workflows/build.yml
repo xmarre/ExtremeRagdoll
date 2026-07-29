@@ -48,6 +48,11 @@ jobs:
             ($manifest -join "`n") + "`n",
             [System.Text.Encoding]::ASCII)
 
+      - name: Validate Bannerlord 1.4.7 mission API compatibility
+        shell: pwsh
+        run: |
+          .\Source\Build\inspect-bannerlord-1.4.7.ps1 -RuntimeAssembly ".\bin\Win64_Shipping_Client\ExtremeRagdoll.dll"
+
       - name: Update PR runtime binaries
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         shell: pwsh
