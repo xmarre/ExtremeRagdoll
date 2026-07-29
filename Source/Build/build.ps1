@@ -53,7 +53,8 @@ Compile ($Common + @(
     "/r:$StubDir/MCMv5.dll",
     "/r:$BinDir/ExtremeRagdoll.ClothSync.dll",
     "$SourceDir/SafeSubModule.cs",
-    "$SourceDir/McmLiveLocalizationRefresh.cs"))
+    "$SourceDir/McmLiveLocalizationRefresh.cs",
+    "$SourceDir/CompatibleLocalizedSubModule.cs"))
 
 $NetCoreRefs = Get-ChildItem $NetCoreRef -Filter "*.dll" | ForEach-Object { "/r:$($_.FullName)" }
 $ToolCommon = @($Csc, "/nologo", "/noconfig", "/nostdlib", "/deterministic+", "/optimize+", "/debug-", "/langversion:7.3", "/target:exe", "/nowarn:1701") + $NetCoreRefs + @("/r:$Cecil")
