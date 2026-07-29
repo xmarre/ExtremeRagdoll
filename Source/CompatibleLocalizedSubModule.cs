@@ -24,6 +24,11 @@ namespace ExtremeRagdoll
             "MCM.UI.GUI.ViewModels.ModOptionsVM"
         };
 
+        private static readonly MethodInfo TryInstallNowMethod =
+            typeof(ExtremeRagdoll.SafeRuntime.McmLiveLocalizationRefreshPatch).GetMethod(
+                "TryInstall",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
         protected override void OnSubModuleLoad()
         {
             ExtremeRagdoll.SafeRuntime.McmLiveLocalizationRefreshPatch.ResetDiagnosticLog();
@@ -60,9 +65,21 @@ namespace ExtremeRagdoll
                     }
                 }
 
-                // All target types are already loaded, so EnsureInstalled completes synchronously
-                // and cannot register its AssemblyLoad fallback.
-                ExtremeRagdoll.SafeRuntime.McmLiveLocalizationRefreshPatch.EnsureInstalled();
+                if (TryInstallNowMethod == null)
+                {
+                    ExtremeRagdoll.SafeRuntime.SafeLog.Info(
+                        "MCM localization patch installer is unavailable during " + stage + ".");
+                    return;
+                }
+
+                // Invoke the synchronous installer directly. Do not call EnsureInstalled: that method
+                // owns the v1.3.16 AssemblyLoad fallback and must remain unreachable from this entry point.
+                object result = TryInstallNowMethod.Invoke(null, null);
+                if (!(result is bool) || !(bool)result)
+                {
+                    ExtremeRagdoll.SafeRuntime.SafeLog.Info(
+                        "MCM localization patch was not installed during " + stage + ".");
+                }
             }
             catch (Exception ex)
             {
