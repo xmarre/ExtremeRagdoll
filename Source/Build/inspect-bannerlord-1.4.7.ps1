@@ -18,7 +18,7 @@ $project = @'
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Mono.Cecil" Version="0.10.1" />
-    <PackageReference Include="Bannerlord.ReferenceAssemblies.Native" Version="1.4.7.117484" GeneratePathProperty="true" />
+    <PackageReference Include="Bannerlord.ReferenceAssemblies" Version="1.4.7.117484" />
   </ItemGroup>
 </Project>
 '@
@@ -26,7 +26,6 @@ $project = @'
 
 $program = @'
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Mono.Cecil;
@@ -36,13 +35,20 @@ internal static class Program
     private static int Main(string[] args)
     {
         if (args.Length != 2)
-            throw new ArgumentException("usage: Probe <package-root> <runtime.dll>");
+            throw new ArgumentException("usage: Probe <package-cache> <runtime.dll>");
 
-        string packageRoot = args[0];
+        string packageCache = args[0];
         string runtimePath = args[1];
-        string mountAndBladePath = Directory.GetFiles(packageRoot, "TaleWorlds.MountAndBlade.dll", SearchOption.AllDirectories).FirstOrDefault();
+        string mountAndBladePath = Directory.GetFiles(packageCache, "TaleWorlds.MountAndBlade.dll", SearchOption.AllDirectories)
+            .FirstOrDefault(path => path.IndexOf("1.4.7.117484", StringComparison.OrdinalIgnoreCase) >= 0);
         if (mountAndBladePath == null)
-            throw new FileNotFoundException("TaleWorlds.MountAndBlade.dll not found under " + packageRoot);
+        {
+            foreach (string file in Directory.GetFiles(packageCache, "*.dll", SearchOption.AllDirectories)
+                .Where(path => path.IndexOf("bannerlord.referenceassemblies", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                               path.IndexOf("1.4.7.117484", StringComparison.OrdinalIgnoreCase) >= 0))
+                Console.WriteLine("Reference asset: " + file);
+            throw new FileNotFoundException("TaleWorlds.MountAndBlade.dll was not restored in the complete Bannerlord 1.4.7 reference set.");
+        }
 
         Console.WriteLine("Bannerlord 1.4.7 assembly: " + mountAndBladePath);
         using (AssemblyDefinition mb = AssemblyDefinition.ReadAssembly(mountAndBladePath))
@@ -129,10 +135,8 @@ try {
     dotnet restore .\Probe.csproj
     if ($LASTEXITCODE -ne 0) { throw "Reference assembly restore failed with exit code $LASTEXITCODE." }
 
-    $packageRoot = Join-Path $HOME ".nuget\packages\bannerlord.referenceassemblies.native\$version"
-    if (-not (Test-Path $packageRoot)) { throw "Reference package root not found: $packageRoot" }
-
-    dotnet run --project .\Probe.csproj --no-restore -- $packageRoot ([System.IO.Path]::GetFullPath($RuntimeAssembly))
+    $packageCache = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $HOME '.nuget\packages' }
+    dotnet run --project .\Probe.csproj --no-restore -- $packageCache ([System.IO.Path]::GetFullPath($RuntimeAssembly))
     if ($LASTEXITCODE -ne 0) { throw "Bannerlord 1.4.7 API probe failed with exit code $LASTEXITCODE." }
 }
 finally {
