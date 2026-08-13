@@ -2,7 +2,7 @@
 <Module>
   <Name value="Extreme Ragdoll" />
   <Id value="ExtremeRagdoll" />
-  <Version value="v1.3.16" />
+  <Version value="v1.3.17" />
   <DefaultModule value="false" />
   <SingleplayerModule value="true" />
   <MultiplayerModule value="false" />
@@ -18,7 +18,7 @@
     <SubModule>
       <Name value="Extreme Ragdoll Safe Runtime" />
       <DLLName value="ExtremeRagdoll.dll" />
-      <SubModuleClassType value="ExtremeRagdoll.LocalizedSubModule" />
+      <SubModuleClassType value="ExtremeRagdoll.CompatibleLocalizedSubModule" />
       <Tags>
         <Tag key="DedicatedServerType" value="none" />
         <Tag key="IsNoRenderModeElement" value="false" />

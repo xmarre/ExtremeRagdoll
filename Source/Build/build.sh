@@ -84,7 +84,7 @@ stubs="$BUILD_DIR/ReferenceStubs"
 "${common[@]}" "/out:$BIN_DIR/ExtremeRagdoll.raw.dll" \
     "/r:$STUB_DIR/TaleWorlds.Library.dll" "/r:$STUB_DIR/TaleWorlds.Core.dll" "/r:$STUB_DIR/TaleWorlds.Engine.dll" \
     "/r:$STUB_DIR/TaleWorlds.MountAndBlade.dll" "/r:$STUB_DIR/TaleWorlds.Localization.dll" "/r:$STUB_DIR/MCMv5.dll" "/r:$BIN_DIR/ExtremeRagdoll.ClothSync.dll" \
-    "$SOURCE_DIR/SafeSubModule.cs" "$SOURCE_DIR/McmLiveLocalizationRefresh.cs"
+    "$SOURCE_DIR/SafeSubModule.cs" "$SOURCE_DIR/McmLiveLocalizationRefresh.cs" "$SOURCE_DIR/RegisterBlowCompatibility.cs" "$SOURCE_DIR/CompatibleLocalizedSubModule.cs"
 
 netcore_refs=()
 for reference in "$NETCORE_REF_DIR"/*.dll; do netcore_refs+=("/r:$reference"); done

@@ -53,7 +53,9 @@ Compile ($Common + @(
     "/r:$StubDir/MCMv5.dll",
     "/r:$BinDir/ExtremeRagdoll.ClothSync.dll",
     "$SourceDir/SafeSubModule.cs",
-    "$SourceDir/McmLiveLocalizationRefresh.cs"))
+    "$SourceDir/McmLiveLocalizationRefresh.cs",
+    "$SourceDir/RegisterBlowCompatibility.cs",
+    "$SourceDir/CompatibleLocalizedSubModule.cs"))
 
 $NetCoreRefs = Get-ChildItem $NetCoreRef -Filter "*.dll" | ForEach-Object { "/r:$($_.FullName)" }
 $ToolCommon = @($Csc, "/nologo", "/noconfig", "/nostdlib", "/deterministic+", "/optimize+", "/debug-", "/langversion:7.3", "/target:exe", "/nowarn:1701") + $NetCoreRefs + @("/r:$Cecil")
@@ -64,7 +66,7 @@ Compile ($ToolCommon + @("/out:$ToolDir/PatchOverride.dll", "$SourceDir/PatchOve
 Compile ($ToolCommon + @("/out:$ToolDir/ValidateAssemblies.dll", "$BuildDir/ValidateAssemblies.cs"))
 
 & $DotNet "$ToolDir/PatchOverride.dll" "$BinDir/ExtremeRagdoll.raw.dll" "$StubDir/TaleWorlds.MountAndBlade.dll" "$BinDir/ExtremeRagdoll.dll"
-if ($LASTEXITCODE -ne 0) { throw "Override patch failed" }
+if ($LASTEXITCODE -ne 0) { throw "Assembly normalization failed" }
 & $DotNet "$ToolDir/ValidateAssemblies.dll" "$BinDir/ExtremeRagdoll.dll" "$BinDir/ExtremeRagdoll.ClothSync.dll"
 if ($LASTEXITCODE -ne 0) { throw "Assembly validation failed" }
 Write-Host "Build complete: $BinDir"
