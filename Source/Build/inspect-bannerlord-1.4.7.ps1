@@ -4,7 +4,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$work = Join-Path $env:RUNNER_TEMP 'ExtremeRagdoll147Probe'
+$tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+$work = Join-Path $tempRoot 'ExtremeRagdoll147Probe'
 if (Test-Path $work) { Remove-Item $work -Recurse -Force }
 New-Item -ItemType Directory -Path $work -Force | Out-Null
 
@@ -66,6 +67,7 @@ internal static class Program
             TypeDefinition agent = RequireType(mb, "TaleWorlds.MountAndBlade.Agent");
             TypeDefinition subModule = RequireType(mb, "TaleWorlds.MountAndBlade.MBSubModuleBase");
             TypeDefinition behavior = RequireType(runtime, "ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior");
+            TypeDefinition registerBridge = RequireType(runtime, "ExtremeRagdoll.SafeRuntime.RegisterBlowCompatibility");
 
             PrintMethods(missionBehavior, "OnRegisterBlow");
             PrintMethods(agent, "HandleBlow");
@@ -75,20 +77,25 @@ internal static class Program
             PrintMethods(agent, "ApplyForceOnRagdoll");
             PrintMethods(subModule, "OnMissionBehaviorInitialize");
 
-            MethodDefinition runtimeOverride = behavior.Methods.SingleOrDefault(m => m.Name == "OnRegisterBlow");
-            if (runtimeOverride == null)
-                throw new InvalidOperationException("Runtime OnRegisterBlow override is missing.");
-            MethodDefinition[] candidates = missionBehavior.Methods
-                .Where(m => m.Name == "OnRegisterBlow" && m.Parameters.Count == runtimeOverride.Parameters.Count)
-                .ToArray();
-            bool signatureMatch = candidates.Any(candidate => SignatureEquals(runtimeOverride, candidate));
-            bool overrideTargetMatch = runtimeOverride.Overrides.Any(o =>
-                o.DeclaringType.FullName == missionBehavior.FullName &&
-                candidates.Any(candidate => MethodReferenceEquals(o, candidate)));
-            Console.WriteLine("1.4.7 OnRegisterBlow signature match: " + signatureMatch);
-            Console.WriteLine("1.4.7 explicit override target match: " + overrideTargetMatch);
-            if (!signatureMatch || !overrideTargetMatch)
-                throw new InvalidOperationException("ExtremeRagdoll.dll contains an invalid MissionBehavior.OnRegisterBlow override for Bannerlord 1.4.7.");
+            MethodDefinition compat = behavior.Methods.FirstOrDefault(m => m.Name == "OnRegisterBlowCompat");
+            if (compat == null)
+                throw new InvalidOperationException("Runtime OnRegisterBlowCompat dispatch target is missing.");
+            bool hardOverride = behavior.Methods.Any(m =>
+                m.Name == "OnRegisterBlow" ||
+                m.Overrides.Any(o => o.Name == "OnRegisterBlow" &&
+                    o.DeclaringType.FullName == missionBehavior.FullName));
+            if (hardOverride)
+                throw new InvalidOperationException("SafeRagdollBehavior still contains a hard MissionBehavior.OnRegisterBlow override.");
+            if (!registerBridge.Methods.Any(m => m.Name == "OnRegisterBlowPrefix") ||
+                !registerBridge.Methods.Any(m => m.Name == "FindCompatibleTargets"))
+            {
+                throw new InvalidOperationException("Late-bound MissionBehavior.OnRegisterBlow compatibility bridge is incomplete.");
+            }
+            if (!missionBehavior.Methods.Any(m => m.Name == "OnRegisterBlow"))
+                throw new InvalidOperationException("Bannerlord 1.4.7 no longer exposes MissionBehavior.OnRegisterBlow for compatibility validation.");
+
+            Console.WriteLine("1.4.7 hard OnRegisterBlow override encoded: false");
+            Console.WriteLine("1.4.7 late-bound register-blow bridge present: true");
 
             var failures = new SortedSet<string>(StringComparer.Ordinal);
             foreach (TypeDefinition type in AllTypes(runtime.MainModule.Types))
@@ -180,24 +187,6 @@ internal static class Program
     {
         foreach (MethodDefinition method in type.Methods.Where(m => m.Name == name))
             Console.WriteLine(type.FullName + "." + name + ": " + method.FullName + " attrs=" + method.Attributes);
-    }
-
-    private static bool SignatureEquals(MethodDefinition left, MethodDefinition right)
-    {
-        if (left.ReturnType.FullName != right.ReturnType.FullName || left.Parameters.Count != right.Parameters.Count)
-            return false;
-        for (int i = 0; i < left.Parameters.Count; i++)
-            if (left.Parameters[i].ParameterType.FullName != right.Parameters[i].ParameterType.FullName) return false;
-        return true;
-    }
-
-    private static bool MethodReferenceEquals(MethodReference left, MethodDefinition right)
-    {
-        if (left.Name != right.Name || left.ReturnType.FullName != right.ReturnType.FullName || left.Parameters.Count != right.Parameters.Count)
-            return false;
-        for (int i = 0; i < left.Parameters.Count; i++)
-            if (left.Parameters[i].ParameterType.FullName != right.Parameters[i].ParameterType.FullName) return false;
-        return true;
     }
 }
 '@

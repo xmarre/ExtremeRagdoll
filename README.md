@@ -3,7 +3,7 @@
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
 Current repository version: **v1.3.17**  
-Supported Bannerlord range: **v1.3.15–v1.4.7**
+Targeted Bannerlord range: **v1.3.15–v1.4.8**
 
 ## Repository layout
 
@@ -35,7 +35,7 @@ ExtremeRagdoll/
 
 ## Building
 
-The canonical build compiles against minimal Bannerlord 1.3.15-compatible reference stubs, patches the exact `MissionBehavior.OnRegisterBlow` override metadata, validates both assemblies, and resolves all direct TaleWorlds runtime references against the published Bannerlord 1.4.7 reference assemblies.
+The canonical build compiles against minimal Bannerlord 1.3.15-compatible reference stubs, keeps `MissionBehavior.OnRegisterBlow` late-bound instead of encoding an exact CLR override, validates both assemblies, and resolves all direct TaleWorlds runtime references against the currently published Bannerlord 1.4.7 reference assemblies.
 
 Requirements:
 
@@ -65,10 +65,13 @@ Pull-request CI rebuilds the current source and updates the checked-in runtime D
 
 - Fixes the Bannerlord 1.4.7 battle-start hard crash introduced by v1.3.16's deferred MCM localization installer.
 - Never enters Harmony patch installation from an `AppDomain.AssemblyLoad` callback in the active runtime path.
-- Performs at most three bounded installation attempts from normal Bannerlord lifecycle callbacks: submodule load, initial-screen setup, and mission-behavior initialization.
+- Performs at most three bounded localization installation attempts from normal Bannerlord lifecycle callbacks: submodule load, initial-screen setup, and mission-behavior initialization.
 - Installs the existing complete Chinese MCM getter patches only after Harmony and every required MCM UI type are already loaded.
 - Treats localization compatibility as optional so it cannot prevent a battle from loading.
-- Validates the compiled runtime's direct TaleWorlds references and mission override against Bannerlord 1.4.7 metadata.
+- Removes the hard CLR override dependency on one exact `MissionBehavior.OnRegisterBlow` signature and discovers compatible callback overloads at runtime from the combat-mission initialization path.
+- Dispatches whatever compatible attacker/victim/blow/collision/weapon arguments the running Bannerlord exposes into the existing hit-context logic; unexpected callback shapes fail closed to the existing health/state/removal death fallbacks.
+- Keeps the register-blow Harmony bridge reflection-only, with no hard Harmony assembly reference and no non-combat/tableau installation path.
+- Validates the compiled runtime's direct TaleWorlds references against Bannerlord 1.4.7 metadata and explicitly rejects reintroducing a hard `OnRegisterBlow` override.
 - Adds no mission tick, application tick, campaign scan, timer, persistent polling, physics, force, corpse-finalization, or Dismemberment Plus changes.
 
-Native battle startup still requires in-game confirmation because GitHub Actions cannot execute a Bannerlord mission.
+Bannerlord 1.4.8 native battle startup still requires in-game confirmation because no 1.4.8 crash log/runtime was supplied and the public reference-assembly validation package is currently available only through 1.4.7. The compatibility path is deliberately late-bound so an `OnRegisterBlow` signature/modifier change does not make `SafeRagdollBehavior` unloadable before managed fallback logic can run.

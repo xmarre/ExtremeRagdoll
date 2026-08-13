@@ -23,15 +23,29 @@ internal static class ValidateAssemblies
                 "unexpected helper assembly identity");
 
             TypeDefinition behavior = RequireType(main, "ExtremeRagdoll.SafeRuntime.SafeRagdollBehavior");
-            MethodDefinition onRegisterBlow = behavior.Methods.Single(m => m.Name == "OnRegisterBlow");
-            Require(onRegisterBlow.Parameters.Count == 6, "OnRegisterBlow parameter count changed");
-            Require(onRegisterBlow.IsVirtual && !onRegisterBlow.IsNewSlot && onRegisterBlow.Overrides.Count == 1,
-                "OnRegisterBlow is not an explicit base override");
-            Require(onRegisterBlow.Overrides[0].DeclaringType.FullName == "TaleWorlds.MountAndBlade.MissionBehavior",
-                "OnRegisterBlow override target changed");
-            Require(onRegisterBlow.Parameters[5].ParameterType.FullName.Contains(
-                    "modreq(System.Runtime.InteropServices.InAttribute)"),
-                "OnRegisterBlow final in-parameter modreq is missing");
+            MethodDefinition onRegisterBlowCompat = behavior.Methods.Single(m => m.Name == "OnRegisterBlowCompat");
+            Require(onRegisterBlowCompat.Parameters.Count == 6, "OnRegisterBlowCompat parameter count changed");
+            Require(!onRegisterBlowCompat.IsVirtual && onRegisterBlowCompat.Overrides.Count == 0,
+                "OnRegisterBlowCompat must remain a plain late-bound dispatch target");
+            Require(!behavior.Methods.Any(m => m.Name == "OnRegisterBlow" || m.Overrides.Any(o =>
+                    o.Name == "OnRegisterBlow" &&
+                    o.DeclaringType.FullName == "TaleWorlds.MountAndBlade.MissionBehavior")),
+                "SafeRagdollBehavior regained a hard MissionBehavior.OnRegisterBlow override");
+
+            TypeDefinition registerBlowBridge = RequireType(main, "ExtremeRagdoll.SafeRuntime.RegisterBlowCompatibility");
+            MethodDefinition registerInstall = RequireMethod(registerBlowBridge, "EnsureInstalled");
+            MethodDefinition registerPrefix = RequireMethod(registerBlowBridge, "OnRegisterBlowPrefix");
+            MethodDefinition registerTargets = RequireMethod(registerBlowBridge, "FindCompatibleTargets");
+            Require(CallsMethod(registerPrefix, "OnRegisterBlowCompat"),
+                "late-bound register-blow prefix no longer dispatches into SafeRagdollBehavior");
+            Require(MethodContainsString(registerTargets, "OnRegisterBlow"),
+                "register-blow target discovery no longer searches MissionBehavior.OnRegisterBlow");
+            Require(MethodContainsStringContaining(registerInstall, "no exact callback override is encoded"),
+                "register-blow installation telemetry lost the no-hard-override invariant");
+            Require(!main.MainModule.AssemblyReferences.Any(r =>
+                    string.Equals(r.Name, "0Harmony", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(r.Name, "HarmonyLib", StringComparison.OrdinalIgnoreCase)),
+                "main runtime gained a hard Harmony assembly reference");
 
             TypeDefinition bridge = RequireType(helper, "ExtremeRagdoll.ClothForceBridge");
             RequireMethod(bridge, "HandleBlowPrefix");
@@ -82,6 +96,12 @@ internal static class ValidateAssemblies
             MethodDefinition onSubModuleLoad = RequireMethod(subModule, "OnSubModuleLoad");
             MethodDefinition onBeforeInitialScreen = RequireMethod(subModule, "OnBeforeInitialModuleScreenSetAsRoot");
             MethodDefinition onMissionBehaviorInitialize = RequireMethod(subModule, "OnMissionBehaviorInitialize");
+            TypeDefinition compatibleEntry = RequireType(main, "ExtremeRagdoll.CompatibleLocalizedSubModule");
+            MethodDefinition compatibleMissionInitialize = RequireMethod(compatibleEntry, "OnMissionBehaviorInitialize");
+            Require(CallsMethod(compatibleMissionInitialize, "IsCombatMission"),
+                "compatible entry point no longer guards register-blow patching with the combat-mission boundary");
+            Require(CallsMethod(compatibleMissionInitialize, "EnsureInstalled"),
+                "compatible entry point no longer installs the late-bound register-blow bridge");
             TypeDefinition localizationBootstrap = RequireType(main, "ExtremeRagdoll.SafeRuntime.LocalizationBootstrap");
             MethodDefinition ensureLocalization = RequireMethod(localizationBootstrap, "EnsureRegistered");
             Require(CallsMethod(onSubModuleLoad, "EnsureRegistered"),
@@ -148,14 +168,14 @@ internal static class ValidateAssemblies
             TypeDefinition safeSettings = RequireType(main, "ExtremeRagdoll.SafeRuntime.SafeSettings");
             RequireMethod(safeSettings, "get_MountCollisionKillStrength");
 
-            Require(CallsMethod(onRegisterBlow, "get_IsColliderAgent"),
-                "OnRegisterBlow does not use Bannerlord AttackCollisionData.IsColliderAgent for mount-body collision detection");
-            Require(CallsMethod(onRegisterBlow, "get_ChargeVelocity"),
-                "OnRegisterBlow does not inspect charge velocity for mount-body collision detection");
-            Require(CallsMethod(onRegisterBlow, "get_IsMount") || CallsMethod(onRegisterBlow, "get_MountAgent"),
-                "OnRegisterBlow lost mount-context discrimination");
-            Require(MethodContainsStringContaining(onRegisterBlow, "mount-collision"),
-                "OnRegisterBlow does not classify mount collisions separately");
+            Require(CallsMethod(onRegisterBlowCompat, "get_IsColliderAgent"),
+                "OnRegisterBlowCompat does not use Bannerlord AttackCollisionData.IsColliderAgent for mount-body collision detection");
+            Require(CallsMethod(onRegisterBlowCompat, "get_ChargeVelocity"),
+                "OnRegisterBlowCompat does not inspect charge velocity for mount-body collision detection");
+            Require(CallsMethod(onRegisterBlowCompat, "get_IsMount") || CallsMethod(onRegisterBlowCompat, "get_MountAgent"),
+                "OnRegisterBlowCompat lost mount-context discrimination");
+            Require(MethodContainsStringContaining(onRegisterBlowCompat, "mount-collision"),
+                "OnRegisterBlowCompat does not classify mount collisions separately");
             Require(CallsMethod(onMissionTick, "get_MountCollisionKillStrength"),
                 "OnMissionTick does not apply the independent mount-collision strength setting");
             Require(MethodContainsStringContaining(onMissionTick, "mountCollisionScale="),
@@ -286,7 +306,6 @@ internal static class ValidateAssemblies
             method.Name + " is missing constrained disposal for the List<Agent>.Enumerator value type");
     }
 
-
     private static void ValidateGenericValueTypeIdentity(AssemblyDefinition assembly)
     {
         foreach (TypeDefinition type in AllTypes(assembly.MainModule.Types))
@@ -346,4 +365,3 @@ internal static class ValidateAssemblies
             throw new InvalidOperationException(message);
     }
 }
-

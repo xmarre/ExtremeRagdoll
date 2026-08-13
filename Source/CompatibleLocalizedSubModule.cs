@@ -5,7 +5,7 @@ using TaleWorlds.MountAndBlade;
 namespace ExtremeRagdoll
 {
     /// <summary>
-    /// Installs the live MCM localization patches only from stable Bannerlord lifecycle callbacks.
+    /// Installs optional compatibility patches only from stable Bannerlord lifecycle callbacks.
     /// v1.3.16 could subscribe before MCM.UI was available and then enter Harmony patching from an
     /// AppDomain.AssemblyLoad callback. Harmony itself loads dynamic assemblies while patching, so
     /// that route could re-enter the installer before its completed flag was set and terminate the
@@ -44,10 +44,31 @@ namespace ExtremeRagdoll
 
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
-            // Final bounded retry before any combat mission behavior or native death patch is added.
-            // This is a normal lifecycle call, not an assembly-load callback.
+            // Final bounded localization retry before mission initialization. The register-blow
+            // bridge is installed only for real combat missions, matching SafeSubModule's existing
+            // NoCombat/tableau boundary for all global combat patches.
             TryInstallLocalizationPatches("OnMissionBehaviorInitialize");
+            if (IsCombatMission(mission))
+                ExtremeRagdoll.SafeRuntime.RegisterBlowCompatibility.EnsureInstalled();
             base.OnMissionBehaviorInitialize(mission);
+        }
+
+        private static bool IsCombatMission(Mission mission)
+        {
+            if (mission == null)
+                return false;
+
+            try
+            {
+                return !string.Equals(
+                    mission.CombatType.ToString(),
+                    "NoCombat",
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void TryInstallLocalizationPatches(string stage)
