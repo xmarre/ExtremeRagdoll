@@ -85,7 +85,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           [xml]$module = Get-Content '.\SubModule.xml' -Raw
-          if ($module.Module.Version.value -ne 'v1.3.17') {
+          if ($module.Module.Version.value -ne 'v1.3.18') {
             throw "Unexpected module version: $($module.Module.Version.value)"
           }
           if ($module.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.CompatibleLocalizedSubModule') {
@@ -216,11 +216,11 @@ jobs:
           Copy-Item ".\SubModule.xml" $stage
           Copy-Item ".\ModuleData" $stage -Recurse
           Copy-Item ".\bin" $stage -Recurse
-          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.17.zip" -Force
+          Compress-Archive -Path $stage -DestinationPath ".\ExtremeRagdoll-v1.3.18.zip" -Force
 
       - name: Upload module artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ExtremeRagdoll-v1.3.17
-          path: ExtremeRagdoll-v1.3.17.zip
+          name: ExtremeRagdoll-v1.3.18
+          path: ExtremeRagdoll-v1.3.18.zip
           if-no-files-found: error
