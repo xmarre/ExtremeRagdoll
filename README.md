@@ -2,12 +2,12 @@
 
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
-Current repository version: **v1.3.17**  
+Current repository version: **v1.3.18**  
 Targeted Bannerlord range: **v1.3.15–v1.4.8**
 
 ## Repository layout
 
-- `Source/` — current v1.3.17 C# source and the minimal deterministic build toolchain.
+- `Source/` — current v1.3.18 C# source and the minimal deterministic build toolchain.
 - `bin/Win64_Shipping_Client/` — compiled runtime DLLs loaded by Bannerlord.
 - `ModuleData/Languages/` — English and Simplified Chinese MCM localization.
 - `SubModule.xml` — Bannerlord module manifest.
@@ -61,13 +61,9 @@ Build output is written to `Source/Build/out/bin`. Reference stubs and metadata-
 
 Pull-request CI rebuilds the current source and updates the checked-in runtime DLLs when their bytes differ. The default branch then rebuilds and fails if the committed binaries or `RUNTIME_SHA256.txt` do not match the source build.
 
-## v1.3.17 scope
+## v1.3.18 scope
 
-- Fixes the Bannerlord 1.4.7 battle-start hard crash introduced by v1.3.16's deferred MCM localization installer.
-- Never enters Harmony patch installation from an `AppDomain.AssemblyLoad` callback in the active runtime path.
-- Performs at most three bounded localization installation attempts from normal Bannerlord lifecycle callbacks: submodule load, initial-screen setup, and mission-behavior initialization.
-- Installs the existing complete Chinese MCM getter patches only after Harmony and every required MCM UI type are already loaded.
-- Treats localization compatibility as optional so it cannot prevent a battle from loading.
+- Builds on the v1.3.17 Bannerlord 1.4.7 battle-start crash fix, which moved localization patch installation out of `AppDomain.AssemblyLoad` and into bounded Bannerlord lifecycle callbacks.
 - Removes the hard CLR override dependency on one exact `MissionBehavior.OnRegisterBlow` signature and discovers compatible callback overloads at runtime from the combat-mission initialization path.
 - Dispatches whatever compatible attacker/victim/blow/collision/weapon arguments the running Bannerlord exposes into the existing hit-context logic; unexpected callback shapes fail closed to the existing health/state/removal death fallbacks.
 - Keeps the register-blow Harmony bridge reflection-only, with no hard Harmony assembly reference and no non-combat/tableau installation path.
@@ -75,3 +71,7 @@ Pull-request CI rebuilds the current source and updates the checked-in runtime D
 - Adds no mission tick, application tick, campaign scan, timer, persistent polling, physics, force, corpse-finalization, or Dismemberment Plus changes.
 
 Bannerlord 1.4.8 native battle startup still requires in-game confirmation because no 1.4.8 crash log/runtime was supplied and the public reference-assembly validation package is currently available only through 1.4.7. The compatibility path is deliberately late-bound so an `OnRegisterBlow` signature/modifier change does not make `SafeRagdollBehavior` unloadable before managed fallback logic can run.
+
+## Version history note
+
+The existing Nexus Mods v1.3.17 package remains the authoritative v1.3.17 build. Its runtime corresponds to the Bannerlord 1.4.7 crash-fix source state. Bannerlord 1.4.8 forward-compatibility work is versioned separately as v1.3.18 so the same version number never refers to two different runtimes.
