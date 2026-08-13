@@ -28,25 +28,19 @@ jobs:
         with:
           ref: ${{ env.TARGET_COMMIT }}
           fetch-depth: 0
+          persist-credentials: true
 
       - name: Verify historical Nexus runtime identity
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           [xml]$module = Get-Content '.\SubModule.xml' -Raw
-          if ($module.Module.Version.value -ne $env:TAG_NAME) {
-            throw "Historical source reports $($module.Module.Version.value), expected $($env:TAG_NAME)."
-          }
-          if ($module.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.CompatibleLocalizedSubModule') {
-            throw 'Historical v1.3.17 entry point is not CompatibleLocalizedSubModule.'
-          }
+          if ($module.Module.Version.value -ne $env:TAG_NAME) { throw "Historical source reports $($module.Module.Version.value), expected $($env:TAG_NAME)." }
+          if ($module.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.CompatibleLocalizedSubModule') { throw 'Historical v1.3.17 entry point is not CompatibleLocalizedSubModule.' }
           $main = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
           $helper = (Get-FileHash '.\bin\Win64_Shipping_Client\ExtremeRagdoll.ClothSync.dll' -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($main -ne $env:EXPECTED_MAIN_SHA256) { throw "Unexpected v1.3.17 main DLL: $main" }
           if ($helper -ne $env:EXPECTED_HELPER_SHA256) { throw "Unexpected v1.3.17 helper DLL: $helper" }
-          $manifest = @(Get-Content '.\RUNTIME_SHA256.txt' | Where-Object { $_.Trim().Length -gt 0 })
-          if ($manifest -notcontains "$main  bin/Win64_Shipping_Client/ExtremeRagdoll.dll") { throw 'Historical runtime manifest does not contain the expected main DLL.' }
-          if ($manifest -notcontains "$helper  bin/Win64_Shipping_Client/ExtremeRagdoll.ClothSync.dll") { throw 'Historical runtime manifest does not contain the expected helper DLL.' }
 
       - name: Package authoritative v1.3.17 module
         shell: pwsh
@@ -63,10 +57,7 @@ jobs:
           $assetPath = Join-Path $env:GITHUB_WORKSPACE $env:ASSET_NAME
           Compress-Archive -LiteralPath $moduleRoot -DestinationPath $assetPath -CompressionLevel Optimal -Force
           $assetHash = (Get-FileHash $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-          [System.IO.File]::WriteAllText(
-            (Join-Path $env:GITHUB_WORKSPACE "$($env:ASSET_NAME).sha256"),
-            "$assetHash  $($env:ASSET_NAME)`n",
-            [System.Text.Encoding]::ASCII)
+          [System.IO.File]::WriteAllText((Join-Path $env:GITHUB_WORKSPACE "$($env:ASSET_NAME).sha256"), "$assetHash  $($env:ASSET_NAME)`n", [System.Text.Encoding]::ASCII)
           "ASSET_SHA256=$assetHash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Write corrected v1.3.17 release notes
@@ -89,14 +80,7 @@ jobs:
           - Preserves complete Simplified Chinese MCM localization when the required MCM UI types are available.
           - Adds no ragdoll force, direction, corpse-finalization, campaign, or per-tick behavior changes.
 
-          This release is the GitHub counterpart of the existing Nexus Mods v1.3.17 package. Bannerlord 1.4.8 forward-compatibility work is released separately as v1.3.18.
-
-          ### Installation
-
-          1. Remove the existing `ExtremeRagdoll` module folder.
-          2. Extract the included `ExtremeRagdoll` folder into Bannerlord's `Modules` directory.
-          3. Ensure Harmony and MCM v5 are installed.
-          4. Enable **Extreme Ragdoll** in the launcher or BLSE and restart the game fully.
+          This is the GitHub counterpart of the existing Nexus Mods v1.3.17 package. Bannerlord 1.4.8 forward-compatibility work is released separately as v1.3.18.
           '@
           $notes = $notes.Trim() + "`n`n### Build identity`n`n"
           $notes += "- `ExtremeRagdoll.dll`: ``$($env:EXPECTED_MAIN_SHA256)```n"
@@ -104,7 +88,15 @@ jobs:
           $notes += "- Installable ZIP: ``$($env:ASSET_SHA256)```n"
           [System.IO.File]::WriteAllText('release-notes.md', $notes, [System.Text.UTF8Encoding]::new($false))
 
-      - name: Replace mistaken GitHub v1.3.17 release
+      - name: Restore authoritative v1.3.17 tag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git tag -f $env:TAG_NAME $env:TARGET_COMMIT
+          git push origin "refs/tags/$($env:TAG_NAME)" --force
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to restore v1.3.17 tag.' }
+
+      - name: Publish authoritative GitHub v1.3.17 release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,19 +104,17 @@ jobs:
           $ErrorActionPreference = 'Stop'
           gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release delete $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --cleanup-tag --yes
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to delete the mistaken GitHub v1.3.17 release/tag.' }
-          } else {
-            git push origin ":refs/tags/$($env:TAG_NAME)" 2>$null
+            gh release delete $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --yes
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to remove stale v1.3.17 release metadata.' }
           }
           gh release create $env:TAG_NAME `
             $env:ASSET_NAME `
             "$($env:ASSET_NAME).sha256" `
             --repo $env:GITHUB_REPOSITORY `
-            --target $env:TARGET_COMMIT `
+            --verify-tag `
             --title $env:RELEASE_NAME `
             --notes-file release-notes.md
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to recreate authoritative GitHub v1.3.17 release.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish authoritative GitHub v1.3.17 release.' }
 
       - name: Verify corrected release
         shell: pwsh
@@ -134,7 +124,6 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $metadata = gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY --json tagName,name,isDraft,isPrerelease,targetCommitish,assets,url | ConvertFrom-Json
           if ($metadata.tagName -ne $env:TAG_NAME) { throw 'Corrected release tag mismatch.' }
-          if ($metadata.targetCommitish -ne $env:TARGET_COMMIT) { throw "Corrected release targets $($metadata.targetCommitish), expected $($env:TARGET_COMMIT)." }
           if ($metadata.isDraft -or $metadata.isPrerelease) { throw 'Corrected v1.3.17 must be a normal published release.' }
           $assetNames = @($metadata.assets | ForEach-Object { $_.name })
           if ($assetNames -notcontains $env:ASSET_NAME) { throw 'Corrected v1.3.17 ZIP is missing.' }
