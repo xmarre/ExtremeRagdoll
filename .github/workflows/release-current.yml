@@ -1,4 +1,4 @@
-name: Publish and verify Extreme Ragdoll v1.3.16
+name: Publish and verify Extreme Ragdoll v1.3.17
 
 on:
   push:
@@ -15,10 +15,10 @@ jobs:
   release:
     runs-on: windows-2022
     env:
-      TAG_NAME: v1.3.16
-      RELEASE_NAME: Extreme Ragdoll v1.3.16
-      TARGET_COMMIT: 29682c05d513ea075d9ace67d68c1358147fcc66
-      ASSET_NAME: ExtremeRagdoll-v1.3.16-Bannerlord-1.3.15-to-1.4.7.zip
+      TAG_NAME: v1.3.17
+      RELEASE_NAME: Extreme Ragdoll v1.3.17
+      TARGET_COMMIT: b4fb4fee37e2248027850f20dd6422ee99eb42b6
+      ASSET_NAME: ExtremeRagdoll-v1.3.17-Bannerlord-1.3.15-to-1.4.8.zip
 
     steps:
       - name: Check out immutable release source
@@ -33,7 +33,7 @@ jobs:
         with:
           dotnet-version: 3.1.426
 
-      - name: Verify module and localization implementation
+      - name: Verify module and compatibility implementation
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -45,7 +45,7 @@ jobs:
             throw "SubModule.xml reports $($versionNode.GetAttribute('value')), expected $($env:TAG_NAME)."
           }
           $entryPoint = [string]$module.Module.SubModules.SubModule.SubModuleClassType.value
-          if ($entryPoint -ne 'ExtremeRagdoll.LocalizedSubModule') {
+          if ($entryPoint -ne 'ExtremeRagdoll.CompatibleLocalizedSubModule') {
             throw "Unexpected runtime entry point: $entryPoint"
           }
 
@@ -88,29 +88,41 @@ jobs:
             throw 'Localization contains an empty translation value.'
           }
 
-          $refreshSource = Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw
+          $entrySource = Get-Content '.\Source\CompatibleLocalizedSubModule.cs' -Raw
           foreach ($requiredMarker in @(
-            'MCM.UI.GUI.ViewModels.SettingsPropertyVM',
-            'MCM.UI.GUI.ViewModels.SettingsPropertyGroupVM',
-            'MCM.UI.GUI.ViewModels.SettingsVM',
-            'MCM.UI.GUI.ViewModels.SettingsEntryVM',
-            'MCM.UI.GUI.ViewModels.ModOptionsVM',
-            'RequireGetter(propertyVmType, "Name")',
-            'RequireGetter(groupVmType, "GroupNameDisplay")',
-            'RequireGetter(settingsVmType, "DisplayName")',
-            'RequireGetter(entryVmType, "DisplayName")',
-            'RequireGetter(modOptionsVmType, "SelectedDisplayName")',
-            'ExtremeRagdoll.Localization.log',
-            'OnBeforeInitialModuleScreenSetAsRoot',
-            'AppDomain.CurrentDomain.AssemblyLoad')) {
-            if (-not $refreshSource.Contains($requiredMarker)) {
-              throw "MCM direct-localization source is missing required marker: $requiredMarker"
+            'CompatibleLocalizedSubModule',
+            'TryInstallLocalizationPatches("OnSubModuleLoad")',
+            'TryInstallLocalizationPatches("OnBeforeInitialModuleScreenSetAsRoot")',
+            'TryInstallLocalizationPatches("OnMissionBehaviorInitialize")',
+            'RegisterBlowCompatibility.EnsureInstalled()',
+            'IsCombatMission(mission)',
+            'TryInstallNowMethod')) {
+            if (-not $entrySource.Contains($requiredMarker)) {
+              throw "Compatible entry point is missing required marker: $requiredMarker"
             }
           }
-          if ($refreshSource.Contains('OnMissionTick') -or
-              $refreshSource.Contains('OnApplicationTick') -or
-              $refreshSource.Contains('System.Threading.Timer')) {
-            throw 'MCM localization integration must remain UI/event-driven and must not add a tick or timer path.'
+          if ($entrySource.Contains('McmLiveLocalizationRefreshPatch.EnsureInstalled(') -or
+              $entrySource.Contains('OnMissionTick') -or
+              $entrySource.Contains('OnApplicationTick') -or
+              $entrySource.Contains('System.Threading.Timer')) {
+            throw 'Active compatibility entry point must remain bounded to normal lifecycle callbacks.'
+          }
+
+          $registerSource = Get-Content '.\Source\RegisterBlowCompatibility.cs' -Raw
+          foreach ($requiredMarker in @(
+            'OnRegisterBlowPrefix',
+            'FindCompatibleTargets',
+            'OnRegisterBlowCompat(',
+            'health/state/removal death fallbacks remain active')) {
+            if (-not $registerSource.Contains($requiredMarker)) {
+              throw "Register-blow compatibility source is missing required marker: $requiredMarker"
+            }
+          }
+          if ($registerSource.Contains('AppDomain.CurrentDomain.AssemblyLoad') -or
+              $registerSource.Contains('OnMissionTick') -or
+              $registerSource.Contains('OnApplicationTick') -or
+              $registerSource.Contains('System.Threading.Timer')) {
+            throw 'Register-blow compatibility must remain bounded and event-free outside the patched callback.'
           }
 
       - name: Build and verify release runtime
@@ -150,6 +162,12 @@ jobs:
           "MAIN_DLL_SHA256=$builtMain" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "HELPER_DLL_SHA256=$builtHelper" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Validate Bannerlord 1.4.7 API compatibility
+        shell: pwsh
+        run: |
+          .\Source\Build\inspect-bannerlord-1.4.7.ps1 -RuntimeAssembly (Join-Path $env:RELEASE_BUILD_OUT 'bin/ExtremeRagdoll.dll')
+          if ($LASTEXITCODE -ne 0) { throw "Bannerlord 1.4.7 API probe failed with exit code $LASTEXITCODE." }
+
       - name: Package installable module
         shell: pwsh
         run: |
@@ -178,21 +196,27 @@ jobs:
         shell: pwsh
         run: |
           $notes = @'
-          ## Extreme Ragdoll v1.3.16
+          ## Extreme Ragdoll v1.3.17
 
-          Complete Simplified Chinese MCM localization correction.
+          Bannerlord 1.4.7 battle-start crash fix and forward-compatible Bannerlord 1.4.8 support.
 
-          **Supported Bannerlord versions:** v1.3.15–v1.4.7  
+          **Targeted Bannerlord versions:** v1.3.15–v1.4.8  
           **Required:** Harmony and Mod Configuration Menu v5
 
           ### Changes
 
-          - Fixes the remaining English Extreme Ragdoll labels when Bannerlord uses Simplified Chinese.
-          - Resolves setting names, group headings, the internal mod display name, the left mod-list entry, and the selected-mod title through the active Bannerlord language dictionary whenever MCM reads them.
-          - Restricts the compatibility patch to Extreme Ragdoll's settings entry so other MCM mods are unaffected.
-          - Retries integration during startup and when MCM becomes available, with one-time diagnostic logging for native mismatches.
-          - Retains v1.3.15's authoritative death-direction pipeline and absolute three-second corpse-finalization ceiling.
-          - Adds no mission tick, campaign scan, persistent timer, force, physics, or Dismemberment Plus behaviour changes.
+          - Fixes the Bannerlord 1.4.7 battle-start hard crash introduced by v1.3.16's deferred MCM localization installer.
+          - Removes Harmony patch installation from the active `AppDomain.AssemblyLoad` localization path and retries localization only from bounded Bannerlord lifecycle callbacks.
+          - Preserves complete Simplified Chinese MCM localization when the required MCM UI types are available.
+          - Removes the hard CLR dependency on one exact `MissionBehavior.OnRegisterBlow` callback signature.
+          - Discovers compatible `OnRegisterBlow` callbacks at runtime and dispatches their available hit context through a reflection-only Harmony bridge.
+          - Keeps existing health/state/removal death tracking available if a future callback shape cannot be bound or dispatched.
+          - Installs the register-blow compatibility bridge only for real combat missions; `NoCombat`/tableau missions remain outside the global combat patch path.
+          - Preserves ragdoll forces, death direction, corpse finalization, Dismemberment Plus safeguards, campaign behavior, and per-tick behavior.
+
+          ### Bannerlord 1.4.8 status
+
+          The runtime is deliberately hardened for v1.4.8 by removing the known brittle callback ABI dependency. Native v1.4.8 gameplay could not be executed by the maintainer, so real in-game reports remain useful. The release build is fully validated against the published Bannerlord 1.4.7 reference assemblies and all deterministic runtime/source integrity checks.
 
           ### Installation
 
@@ -201,7 +225,7 @@ jobs:
           3. Ensure Harmony and MCM v5 are installed.
           4. Enable **Extreme Ragdoll** in the launcher or BLSE and restart the game fully.
 
-          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.16-Bannerlord-1.3.15-to-1.4.7.zip` for installation.
+          The GitHub-generated source archives are source snapshots. Use the attached `ExtremeRagdoll-v1.3.17-Bannerlord-1.3.15-to-1.4.8.zip` for installation.
           '@
           $notes = $notes.Trim() + "`n`n### Build integrity`n`n"
           $notes += "- `ExtremeRagdoll.dll`: ``$($env:MAIN_DLL_SHA256)```n"
@@ -307,7 +331,7 @@ jobs:
           if ($releasedModule.Module.Version.value -ne $env:TAG_NAME) {
             throw "Published SubModule.xml reports $($releasedModule.Module.Version.value), expected $($env:TAG_NAME)."
           }
-          if ($releasedModule.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.LocalizedSubModule') {
+          if ($releasedModule.Module.SubModules.SubModule.SubModuleClassType.value -ne 'ExtremeRagdoll.CompatibleLocalizedSubModule') {
             throw 'Published module uses the wrong runtime entry point.'
           }
           [xml]$releasedLanguage = Get-Content (Join-Path $moduleRoot 'ModuleData/Languages/CNs/language_data.xml') -Raw
