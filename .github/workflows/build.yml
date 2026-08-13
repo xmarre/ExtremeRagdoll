@@ -132,6 +132,7 @@ jobs:
 
           $sourceText = (Get-Content '.\Source\SafeSubModule.cs' -Raw) + "`n" +
                         (Get-Content '.\Source\McmLiveLocalizationRefresh.cs' -Raw) + "`n" +
+                        (Get-Content '.\Source\RegisterBlowCompatibility.cs' -Raw) + "`n" +
                         (Get-Content '.\Source\CompatibleLocalizedSubModule.cs' -Raw)
           $referencedIds = @([regex]::Matches($sourceText, '\{=([A-Za-z0-9_]+)\}') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
           $missingIds = @($referencedIds | Where-Object { $_ -notin $englishIds })
@@ -164,11 +165,13 @@ jobs:
             'TryInstallLocalizationPatches("OnSubModuleLoad")',
             'TryInstallLocalizationPatches("OnBeforeInitialModuleScreenSetAsRoot")',
             'TryInstallLocalizationPatches("OnMissionBehaviorInitialize")',
+            'RegisterBlowCompatibility.EnsureInstalled()',
+            'IsCombatMission(mission)',
             'TryInstallNowMethod',
             'Do not call EnsureInstalled',
             'Localization compatibility must never prevent a battle from loading')) {
             if (-not $entrySource.Contains($requiredMarker)) {
-              throw "Compatible localization entry point is missing required marker: $requiredMarker"
+              throw "Compatible runtime entry point is missing required marker: $requiredMarker"
             }
           }
           if ($entrySource.Contains('AppDomain.CurrentDomain.AssemblyLoad') -or
@@ -176,11 +179,29 @@ jobs:
               $entrySource.Contains('OnMissionTick') -or
               $entrySource.Contains('OnApplicationTick') -or
               $entrySource.Contains('System.Threading.Timer')) {
-            throw 'Active localization entry point must use direct bounded lifecycle retries only.'
+            throw 'Active compatibility entry point must use direct bounded lifecycle retries only.'
           }
+
+          $registerSource = Get-Content '.\Source\RegisterBlowCompatibility.cs' -Raw
+          foreach ($requiredMarker in @(
+            'OnRegisterBlowPrefix',
+            'FindCompatibleTargets',
+            'OnRegisterBlowCompat(',
+            'health/state/removal death fallbacks remain active')) {
+            if (-not $registerSource.Contains($requiredMarker)) {
+              throw "Register-blow compatibility source is missing required marker: $requiredMarker"
+            }
+          }
+          if ($registerSource.Contains('AppDomain.CurrentDomain.AssemblyLoad') -or
+              $registerSource.Contains('OnMissionTick') -or
+              $registerSource.Contains('OnApplicationTick') -or
+              $registerSource.Contains('System.Threading.Timer')) {
+            throw 'Register-blow compatibility must remain bounded and event-free outside the patched callback.'
+          }
+
           foreach ($buildScript in @('.\Source\Build\build.ps1', '.\Source\Build\build.sh')) {
             $buildText = Get-Content $buildScript -Raw
-            foreach ($requiredSource in @('McmLiveLocalizationRefresh.cs', 'CompatibleLocalizedSubModule.cs')) {
+            foreach ($requiredSource in @('McmLiveLocalizationRefresh.cs', 'RegisterBlowCompatibility.cs', 'CompatibleLocalizedSubModule.cs')) {
               if (-not $buildText.Contains($requiredSource)) {
                 throw "Build script does not compile required source ${requiredSource}: $buildScript"
               }
