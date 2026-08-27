@@ -229,6 +229,18 @@ namespace ExtremeRagdoll
             if (normalizedSourceId.Length == 0 ||
                 normalizedSourceId.Length > ExternalLaunchIntentSourceIdMaxLength)
                 return false;
+            for (int i = 0; i < normalizedSourceId.Length; i++)
+            {
+                if (char.IsControl(normalizedSourceId[i]))
+                    return false;
+            }
+
+            Vec3 normalizedDirection = launchDirection.NormalizedCopy();
+            Vec3 requestedForce = normalizedDirection * forceMagnitude;
+            if (!IsUsableVector(normalizedDirection) ||
+                !IsFinite(requestedForce) ||
+                !IsFinite(requestedForce.LengthSquared))
+                return false;
 
             int ownerId;
             sbyte boneIndex;
@@ -271,7 +283,7 @@ namespace ExtremeRagdoll
                     IsMissile = isMissile,
                     HitPosition = IsFinite(hitPosition) ? hitPosition : Vec3.Zero,
                     HasHitPosition = IsFinite(hitPosition),
-                    LaunchDirection = launchDirection.NormalizedCopy(),
+                    LaunchDirection = normalizedDirection,
                     ForceMagnitude = forceMagnitude,
                     SourceId = normalizedSourceId,
                     RegisteredAt = now,
@@ -421,7 +433,10 @@ namespace ExtremeRagdoll
             {
                 Queue.Clear();
                 lock (DeathRouteGate)
+                {
                     DeathRoutes.Clear();
+                    ExternalLaunchIntents.Clear();
+                }
                 return;
             }
 
@@ -651,7 +666,9 @@ namespace ExtremeRagdoll
                 for (int i = ExternalLaunchIntents.Count - 1; i >= 0; i--)
                 {
                     ExternalLaunchIntentRecord launchIntent = ExternalLaunchIntents[i];
-                    if (launchIntent != null && object.ReferenceEquals(launchIntent.Victim, agent))
+                    if (launchIntent != null &&
+                        (object.ReferenceEquals(launchIntent.Victim, agent) ||
+                         object.ReferenceEquals(launchIntent.Attacker, agent)))
                         ExternalLaunchIntents.RemoveAt(i);
                 }
 
