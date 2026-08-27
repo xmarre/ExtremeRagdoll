@@ -7,6 +7,7 @@ $SourceDir = Split-Path -Parent $BuildDir
 if (-not $OutDir) { $OutDir = Join-Path $BuildDir "out" }
 $StubDir = Join-Path $OutDir "stubs"
 $BinDir = Join-Path $OutDir "bin"
+$RawDir = Join-Path $OutDir "intermediate"
 $ToolDir = Join-Path $OutDir "tools"
 
 if (-not $env:DOTNET_ROOT) { throw "Set DOTNET_ROOT to a .NET Core 3.1 SDK installation." }
@@ -30,7 +31,7 @@ $Cecil = ($CecilCandidates | Where-Object { $_.FullName -match "netstandard" } |
 if (-not $Cecil) { $Cecil = ($CecilCandidates | Select-Object -First 1).FullName }
 if (-not $Cecil -or -not (Test-Path $Cecil)) { throw "Restored Mono.Cecil 0.10.1 assembly was not found under $NuGetPackages" }
 
-New-Item -ItemType Directory -Force $StubDir, $BinDir, $ToolDir | Out-Null
+New-Item -ItemType Directory -Force $StubDir, $BinDir, $RawDir, $ToolDir | Out-Null
 $Common = @($Csc, "/nologo", "/noconfig", "/nostdlib", "/deterministic+", "/optimize+", "/debug-", "/langversion:7.3", "/target:library", "/r:$NetStandard")
 $Stubs = Join-Path $BuildDir "ReferenceStubs"
 
@@ -44,7 +45,7 @@ Compile ($Common + @("/out:$StubDir/MCMv5.dll", "$Stubs/MCMv5.Stub.cs"))
 Compile ($Common + @("/out:$StubDir/TaleWorlds.MountAndBlade.dll", "/r:$StubDir/TaleWorlds.Library.dll", "/r:$StubDir/TaleWorlds.Core.dll", "/r:$StubDir/TaleWorlds.Engine.dll", "$Stubs/TaleWorlds.MountAndBlade.Stub.cs"))
 Compile ($Common + @("/out:$BinDir/ExtremeRagdoll.ClothSync.dll", "/r:$StubDir/TaleWorlds.Library.dll", "/r:$StubDir/TaleWorlds.MountAndBlade.dll", "$SourceDir/ClothForceBridge.cs"))
 Compile ($Common + @(
-    "/out:$BinDir/ExtremeRagdoll.raw.dll",
+    "/out:$RawDir/ExtremeRagdoll.dll",
     "/r:$StubDir/TaleWorlds.Library.dll",
     "/r:$StubDir/TaleWorlds.Core.dll",
     "/r:$StubDir/TaleWorlds.Engine.dll",
@@ -65,7 +66,7 @@ Copy-Item "$BuildDir/ValidateAssemblies.runtimeconfig.json" "$ToolDir/ValidateAs
 Compile ($ToolCommon + @("/out:$ToolDir/PatchOverride.dll", "$SourceDir/PatchOverride.cs"))
 Compile ($ToolCommon + @("/out:$ToolDir/ValidateAssemblies.dll", "$BuildDir/ValidateAssemblies.cs"))
 
-& $DotNet "$ToolDir/PatchOverride.dll" "$BinDir/ExtremeRagdoll.raw.dll" "$StubDir/TaleWorlds.MountAndBlade.dll" "$BinDir/ExtremeRagdoll.dll"
+& $DotNet "$ToolDir/PatchOverride.dll" "$RawDir/ExtremeRagdoll.dll" "$StubDir/TaleWorlds.MountAndBlade.dll" "$BinDir/ExtremeRagdoll.dll"
 if ($LASTEXITCODE -ne 0) { throw "Assembly normalization failed" }
 & $DotNet "$ToolDir/ValidateAssemblies.dll" "$BinDir/ExtremeRagdoll.dll" "$BinDir/ExtremeRagdoll.ClothSync.dll"
 if ($LASTEXITCODE -ne 0) { throw "Assembly validation failed" }

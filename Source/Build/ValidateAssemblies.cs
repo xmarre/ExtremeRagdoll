@@ -69,6 +69,11 @@ internal static class ValidateAssemblies
                     a.ConstructorArguments.Count == 1 &&
                     string.Equals((string)a.ConstructorArguments[0].Value, "ExtremeRagdoll", StringComparison.Ordinal)),
                 "helper no longer grants the main runtime narrow internal launch-intent consumption access");
+            Require(!helper.CustomAttributes.Any(a =>
+                    a.AttributeType.FullName == "System.Runtime.CompilerServices.InternalsVisibleToAttribute" &&
+                    a.ConstructorArguments.Count == 1 &&
+                    string.Equals((string)a.ConstructorArguments[0].Value, "ExtremeRagdoll.raw", StringComparison.Ordinal)),
+                "helper exposes internals to the obsolete temporary raw assembly identity");
 
             TypeDefinition bridge = RequireType(helper, "ExtremeRagdoll.ClothForceBridge");
             RequireMethod(bridge, "TryRegisterExternalLaunchIntent");
