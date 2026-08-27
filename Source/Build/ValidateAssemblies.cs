@@ -164,6 +164,16 @@ internal static class ValidateAssemblies
                 "main runtime no longer consumes exact-hit external launch intent");
             Require(MethodContainsStringContaining(applyExternalIntent, "ownership=CONDITIONAL_ON_CONFIRMED_DEATH"),
                 "external intent conditional-ownership telemetry is missing");
+            Require(applyExternalIntent.Body.Instructions.Any(i =>
+                    i.OpCode.Code == Code.Ldfld &&
+                    i.Operand is FieldReference &&
+                    ((FieldReference)i.Operand).Name == "PulseCount"),
+                "external launch-intent guard no longer checks corpse-finalizer pulse-count state");
+            Require(applyExternalIntent.Body.Instructions.Any(i =>
+                    i.OpCode.Code == Code.Ldfld &&
+                    i.Operand is FieldReference &&
+                    ((FieldReference)i.Operand).Name == "PulseIndex"),
+                "external launch-intent guard no longer checks pulse-index lifecycle state");
             Require(CallsMethod(onMissionTick, "TryAttachExternalLaunchIntent"),
                 "mission-tick ordering bridge no longer catches launch intents registered after OnRegisterBlow");
             Require(main.MainModule.GetMemberReferences().Any(m =>

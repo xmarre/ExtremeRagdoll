@@ -1427,7 +1427,8 @@ namespace ExtremeRagdoll.SafeRuntime
                 return;
 
             // Do not rewrite an in-flight force train if an integration registers unexpectedly late.
-            if (pending.PulseIndex > 0 ||
+            if (pending.PulseCount < 0 ||
+                pending.PulseIndex != 0 ||
                 pending.CurrentPulseChunkCount > 0 ||
                 IsUsableVector(pending.RemainingPulseForce))
             {

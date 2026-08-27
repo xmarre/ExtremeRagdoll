@@ -83,7 +83,9 @@ The API is implemented by `ExtremeRagdoll.ClothSync.dll`.
 - If the hit remains nonlethal, the intent expires without changing live-agent behavior.
 - `launchDirection` is treated as the external source's authoritative direction. Extreme Ragdoll does not add its normal upward lift, momentum carryover, or impact spin to that request.
 - `forceMagnitude` is expressed in `ApplyForceOnRagdoll` force units and represents one logical launch pulse. The pulse may be split into bounded native force chunks and remains subject to Extreme Ragdoll's configured delivered-force and ragdoll-velocity safety limits.
-- `sourceId` must be non-empty and at most 128 characters.
+- `sourceId` must be non-empty and at most 128 characters and may not contain control characters.
+- `attacker` and `victim` must be different agents that both belong to `Mission.Current`; self-inflicted launch intents are rejected.
+- A newer registration from the same `sourceId` for the same victim replaces that source's older still-pending intent.
 
 For an **optional** integration, isolate the direct reference to `ExtremeRagdoll.ClothSync.dll` in a compatibility assembly that is loaded only when Extreme Ragdoll is present. This keeps Extreme Ragdoll optional for the base mod and avoids reflecting into its private implementation.
 
