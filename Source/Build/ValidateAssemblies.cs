@@ -47,7 +47,32 @@ internal static class ValidateAssemblies
                     string.Equals(r.Name, "HarmonyLib", StringComparison.OrdinalIgnoreCase)),
                 "main runtime gained a hard Harmony assembly reference");
 
+            TypeDefinition integration = RequireType(helper, "ExtremeRagdoll.ExtremeRagdollIntegration");
+            Require(integration.IsPublic && integration.IsAbstract && integration.IsSealed,
+                "external integration surface must remain a public static class");
+            MethodDefinition registerLaunchIntent = RequireMethod(integration, "TryRegisterLaunchIntent");
+            Require(registerLaunchIntent.IsPublic && registerLaunchIntent.IsStatic,
+                "TryRegisterLaunchIntent must remain public static");
+            Require(registerLaunchIntent.ReturnType.FullName == "System.Boolean" &&
+                    registerLaunchIntent.Parameters.Count == 6 &&
+                    registerLaunchIntent.Parameters[0].ParameterType.FullName == "TaleWorlds.MountAndBlade.Agent" &&
+                    registerLaunchIntent.Parameters[1].ParameterType.FullName == "TaleWorlds.MountAndBlade.Agent" &&
+                    registerLaunchIntent.Parameters[2].ParameterType.FullName == "TaleWorlds.MountAndBlade.Blow" &&
+                    registerLaunchIntent.Parameters[3].ParameterType.FullName == "TaleWorlds.Library.Vec3" &&
+                    registerLaunchIntent.Parameters[4].ParameterType.FullName == "System.Single" &&
+                    registerLaunchIntent.Parameters[5].ParameterType.FullName == "System.String",
+                "TryRegisterLaunchIntent public ABI changed");
+            Require(CallsMethod(registerLaunchIntent, "TryRegisterExternalLaunchIntent"),
+                "public launch-intent API no longer delegates to the validated registry");
+            Require(helper.CustomAttributes.Any(a =>
+                    a.AttributeType.FullName == "System.Runtime.CompilerServices.InternalsVisibleToAttribute" &&
+                    a.ConstructorArguments.Count == 1 &&
+                    string.Equals((string)a.ConstructorArguments[0].Value, "ExtremeRagdoll", StringComparison.Ordinal)),
+                "helper no longer grants the main runtime narrow internal launch-intent consumption access");
+
             TypeDefinition bridge = RequireType(helper, "ExtremeRagdoll.ClothForceBridge");
+            RequireMethod(bridge, "TryRegisterExternalLaunchIntent");
+            RequireMethod(bridge, "TryConsumeExternalLaunchIntent");
             RequireMethod(bridge, "HandleBlowPrefix");
             MethodDefinition finalizer = RequireMethod(bridge, "HandleBlowFinalizer");
             Require(finalizer.ReturnType.FullName == "System.Exception", "HandleBlow finalizer must return Exception");
@@ -125,6 +150,18 @@ internal static class ValidateAssemblies
             Require(CallsMethod(onMissionTick, "ApplyMomentumCarryover"),
                 "first-pulse force construction no longer owns the single momentum carryover");
             RequireMethod(behavior, "VectorDot");
+            MethodDefinition attachExternalIntent = RequireMethod(behavior, "TryAttachExternalLaunchIntent");
+            MethodDefinition applyExternalIntent = RequireMethod(behavior, "ApplyExternalLaunchIntent");
+            Require(CallsMethod(attachExternalIntent, "TryConsumeExternalLaunchIntent"),
+                "main runtime no longer consumes exact-hit external launch intent");
+            Require(MethodContainsStringContaining(applyExternalIntent, "ownership=CONDITIONAL_ON_CONFIRMED_DEATH"),
+                "external intent conditional-ownership telemetry is missing");
+            Require(CallsMethod(onMissionTick, "TryAttachExternalLaunchIntent"),
+                "mission-tick ordering bridge no longer catches launch intents registered after OnRegisterBlow");
+            Require(main.MainModule.GetMemberReferences().Any(m =>
+                    m.Name == "TryConsumeExternalLaunchIntent" &&
+                    m.DeclaringType.FullName == "ExtremeRagdoll.ClothForceBridge"),
+                "main runtime lost the helper launch-intent consumption reference");
 
             Require(!CallsMethod(onSubModuleLoad, "EnsureNativeDeathPatch"),
                 "OnSubModuleLoad installs the global Agent patch before the NoCombat/tableau gate");
@@ -182,6 +219,13 @@ internal static class ValidateAssemblies
                 "mount-collision scale telemetry is missing");
 
             List<string> strings = ReadStrings(main).Concat(ReadStrings(helper)).ToList();
+            TypeDefinition pendingDeath = behavior.NestedTypes.SingleOrDefault(t => t.Name == "PendingDeath");
+            Require(pendingDeath != null && pendingDeath.Fields.Any(f => f.Name == "HasExternalLaunchIntent"),
+                "pending-death external launch ownership state is missing");
+            Require(strings.Any(value => value.Contains("externalLaunchIntent:")),
+                "external launch direction-source marker is missing");
+            Require(strings.Any(value => value.Contains("ownership=CONDITIONAL_ON_CONFIRMED_DEATH")),
+                "external launch conditional-ownership marker is missing");
             Require(!strings.Any(s => s.Contains("Applied temporally smoothed central-body ragdoll force chunk")),
                 "obsolete false Applied diagnostic remains");
             Require(strings.Any(s => s.Contains("Queued temporally smoothed central-body ragdoll force chunk")),

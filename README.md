@@ -61,6 +61,32 @@ Build output is written to `Source/Build/out/bin`. Reference stubs and metadata-
 
 Pull-request CI rebuilds the current source and updates the checked-in runtime DLLs when their bytes differ. The default branch then rebuilds and fails if the committed binaries or `RUNTIME_SHA256.txt` do not match the source build.
 
+## External lethal-launch integration
+
+Mods that implement special lethal launches can register the hit without taking over Extreme Ragdoll's corpse lifecycle:
+
+```csharp
+bool accepted = ExtremeRagdoll.ExtremeRagdollIntegration.TryRegisterLaunchIntent(
+    attacker,
+    victim,
+    blow,
+    launchDirection,
+    forceMagnitude,
+    "YourModId");
+```
+
+The API is implemented by `ExtremeRagdoll.ClothSync.dll`.
+
+- `true` means the launch intent was accepted for matching. It does **not** predict that the hit is lethal.
+- Extreme Ragdoll matches the intent to the same attacker, victim, blow owner, hit bone, missile state, and nearby hit position inside a short 0.75-second hit-context lifetime.
+- If that exact hit is authoritatively confirmed lethal, Extreme Ragdoll owns `StartRagdollAsCorpse`, force delivery, and paired corpse finalization.
+- If the hit remains nonlethal, the intent expires without changing live-agent behavior.
+- `launchDirection` is treated as the external source's authoritative direction. Extreme Ragdoll does not add its normal upward lift, momentum carryover, or impact spin to that request.
+- `forceMagnitude` is expressed in `ApplyForceOnRagdoll` force units and represents one logical launch pulse. The pulse may be split into bounded native force chunks and remains subject to Extreme Ragdoll's configured delivered-force and ragdoll-velocity safety limits.
+- `sourceId` must be non-empty and at most 128 characters.
+
+For an **optional** integration, isolate the direct reference to `ExtremeRagdoll.ClothSync.dll` in a compatibility assembly that is loaded only when Extreme Ragdoll is present. This keeps Extreme Ragdoll optional for the base mod and avoids reflecting into its private implementation.
+
 ## v1.3.18 scope
 
 - Builds on the v1.3.17 Bannerlord 1.4.7 battle-start crash fix, which moved localization patch installation out of `AppDomain.AssemblyLoad` and into bounded Bannerlord lifecycle callbacks.

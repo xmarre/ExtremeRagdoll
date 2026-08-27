@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Added the public `ExtremeRagdollIntegration.TryRegisterLaunchIntent` API for external mods that need a special lethal launch while leaving corpse-ragdoll ownership to Extreme Ragdoll.
+- External intent matching is tied to the same attacker/victim and stable blow identity inside a short hit-context lifetime; the API never predicts lethality.
+- External launch direction and force are applied only after Extreme Ragdoll's existing authoritative death confirmation.
+- External force uses one logical pulse, retains bounded native force chunks and velocity/force safety limits, and bypasses Extreme Ragdoll's normal lift, momentum carryover, impact spin, and damage-derived scaling.
+- Added callback-order resilience so intents registered immediately before or after Extreme Ragdoll observes `OnRegisterBlow` can still attach before force delivery.
+- Nonlethal intents expire without changing live-agent behavior, and mission/agent teardown clears integration state.
+
 ## v1.3.18
 
 - Added forward compatibility for Bannerlord 1.4.8 by removing the hard CLR override dependency on one exact `MissionBehavior.OnRegisterBlow` signature.

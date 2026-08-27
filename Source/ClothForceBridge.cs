@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using TaleWorlds.Library;
 using TaleWorlds.MountAndBlade;
 
 [assembly: AssemblyVersion("1.0.0.0")]
+[assembly: InternalsVisibleTo("ExtremeRagdoll")]
 
 namespace ExtremeRagdoll
 {
@@ -14,6 +16,34 @@ namespace ExtremeRagdoll
         NativeHandled = 1,
         NativeIneffective = 2,
         Fallback = 3
+    }
+
+    /// <summary>
+    /// Stable opt-in integration surface for mods that want Extreme Ragdoll to own a
+    /// potentially lethal launch without duplicating its corpse-ragdoll lifecycle.
+    /// </summary>
+    public static class ExtremeRagdollIntegration
+    {
+        /// <summary>
+        /// Registers launch intent for the supplied hit. A true result means that the intent
+        /// was accepted for matching; it does not predict lethality. If that exact hit is later
+        /// confirmed lethal, Extreme Ragdoll owns the corpse transition and launch.
+        ///
+        /// forceMagnitude is expressed in ApplyForceOnRagdoll force units. Extreme Ragdoll
+        /// delivers it as one logical pulse, split into its normal bounded force chunks and
+        /// subject to the configured delivered-force and ragdoll-velocity safety limits.
+        /// </summary>
+        public static bool TryRegisterLaunchIntent(
+            Agent attacker,
+            Agent victim,
+            Blow blow,
+            Vec3 launchDirection,
+            float forceMagnitude,
+            string sourceId)
+        {
+            return ClothForceBridge.TryRegisterExternalLaunchIntent(
+                attacker, victim, blow, launchDirection, forceMagnitude, sourceId);
+        }
     }
 
     // Historical assembly/type name retained as the binary ABI used by ExtremeRagdoll.dll.
@@ -43,6 +73,22 @@ namespace ExtremeRagdoll
             internal bool Consumed;
         }
 
+        private sealed class ExternalLaunchIntentRecord
+        {
+            internal Agent Attacker;
+            internal Agent Victim;
+            internal int OwnerId;
+            internal sbyte BoneIndex;
+            internal bool IsMissile;
+            internal Vec3 HitPosition;
+            internal bool HasHitPosition;
+            internal Vec3 LaunchDirection;
+            internal float ForceMagnitude;
+            internal string SourceId;
+            internal float RegisteredAt;
+            internal float ExpiresAt;
+        }
+
         private sealed class DeathRouteRecord
         {
             internal bool NativePrepared;
@@ -70,8 +116,13 @@ namespace ExtremeRagdoll
         private static readonly List<DeferredCall> Queue = new List<DeferredCall>(32);
         private static readonly Dictionary<Agent, DeathRouteRecord> DeathRoutes =
             new Dictionary<Agent, DeathRouteRecord>();
+        private static readonly List<ExternalLaunchIntentRecord> ExternalLaunchIntents =
+            new List<ExternalLaunchIntentRecord>(8);
         private static readonly object DeathRouteGate = new object();
 
+        private const float ExternalLaunchIntentLifetime = 0.75f;
+        private const float ExternalLaunchIntentHitPositionToleranceSq = 0.25f;
+        private const int ExternalLaunchIntentSourceIdMaxLength = 128;
         private const float HandoffRetryTimeout = 0.50f;
         private const float DeathRouteLifetime = 15.0f;
         private const float NativeForceToBlowMagnitudeScale = 1.0f;
@@ -155,6 +206,174 @@ namespace ExtremeRagdoll
             {
                 TryLog("Failed to install scoped native death-impulse patches: " + ex);
                 return false;
+            }
+        }
+
+        internal static bool TryRegisterExternalLaunchIntent(
+            Agent attacker,
+            Agent victim,
+            Blow blow,
+            Vec3 launchDirection,
+            float forceMagnitude,
+            string sourceId)
+        {
+            Mission current = Mission.Current;
+            if (!IsCurrentMissionAgent(attacker, current) ||
+                !IsCurrentMissionAgent(victim, current) ||
+                object.ReferenceEquals(attacker, victim))
+                return false;
+            if (!IsUsableVector(launchDirection) || !IsFinite(forceMagnitude) || forceMagnitude <= 0f)
+                return false;
+
+            string normalizedSourceId = sourceId == null ? string.Empty : sourceId.Trim();
+            if (normalizedSourceId.Length == 0 ||
+                normalizedSourceId.Length > ExternalLaunchIntentSourceIdMaxLength)
+                return false;
+
+            int ownerId;
+            sbyte boneIndex;
+            bool isMissile;
+            Vec3 hitPosition;
+            try
+            {
+                ownerId = blow.OwnerId;
+                boneIndex = blow.BoneIndex;
+                isMissile = blow.IsMissile;
+                hitPosition = blow.GlobalPosition;
+            }
+            catch
+            {
+                return false;
+            }
+
+            float now = GetMissionTime(victim);
+            lock (DeathRouteGate)
+            {
+                CleanupExpiredExternalLaunchIntentsLocked(now);
+
+                for (int i = ExternalLaunchIntents.Count - 1; i >= 0; i--)
+                {
+                    ExternalLaunchIntentRecord existing = ExternalLaunchIntents[i];
+                    if (existing != null &&
+                        object.ReferenceEquals(existing.Victim, victim) &&
+                        string.Equals(existing.SourceId, normalizedSourceId, StringComparison.Ordinal))
+                    {
+                        ExternalLaunchIntents.RemoveAt(i);
+                    }
+                }
+
+                ExternalLaunchIntents.Add(new ExternalLaunchIntentRecord
+                {
+                    Attacker = attacker,
+                    Victim = victim,
+                    OwnerId = ownerId,
+                    BoneIndex = boneIndex,
+                    IsMissile = isMissile,
+                    HitPosition = IsFinite(hitPosition) ? hitPosition : Vec3.Zero,
+                    HasHitPosition = IsFinite(hitPosition),
+                    LaunchDirection = launchDirection.NormalizedCopy(),
+                    ForceMagnitude = forceMagnitude,
+                    SourceId = normalizedSourceId,
+                    RegisteredAt = now,
+                    ExpiresAt = now + ExternalLaunchIntentLifetime
+                });
+            }
+
+            return true;
+        }
+
+        internal static bool TryConsumeExternalLaunchIntent(
+            Agent attacker,
+            Agent victim,
+            Blow blow,
+            out Vec3 launchDirection,
+            out float forceMagnitude,
+            out string sourceId)
+        {
+            launchDirection = Vec3.Zero;
+            forceMagnitude = 0f;
+            sourceId = null;
+
+            Mission current = Mission.Current;
+            if (!IsCurrentMissionAgent(attacker, current) || !IsCurrentMissionAgent(victim, current))
+                return false;
+
+            int ownerId;
+            sbyte boneIndex;
+            bool isMissile;
+            Vec3 hitPosition;
+            try
+            {
+                ownerId = blow.OwnerId;
+                boneIndex = blow.BoneIndex;
+                isMissile = blow.IsMissile;
+                hitPosition = blow.GlobalPosition;
+            }
+            catch
+            {
+                return false;
+            }
+
+            float now = GetMissionTime(victim);
+            ExternalLaunchIntentRecord matched = null;
+            lock (DeathRouteGate)
+            {
+                CleanupExpiredExternalLaunchIntentsLocked(now);
+
+                int matchedIndex = -1;
+                float newestRegistration = float.MinValue;
+                for (int i = 0; i < ExternalLaunchIntents.Count; i++)
+                {
+                    ExternalLaunchIntentRecord candidate = ExternalLaunchIntents[i];
+                    if (candidate == null ||
+                        !object.ReferenceEquals(candidate.Attacker, attacker) ||
+                        !object.ReferenceEquals(candidate.Victim, victim) ||
+                        candidate.OwnerId != ownerId ||
+                        candidate.BoneIndex != boneIndex ||
+                        candidate.IsMissile != isMissile)
+                        continue;
+
+                    if (candidate.HasHitPosition && IsFinite(hitPosition))
+                    {
+                        Vec3 delta = candidate.HitPosition - hitPosition;
+                        if (!IsFinite(delta) ||
+                            delta.LengthSquared > ExternalLaunchIntentHitPositionToleranceSq)
+                            continue;
+                    }
+
+                    if (candidate.RegisteredAt >= newestRegistration)
+                    {
+                        newestRegistration = candidate.RegisteredAt;
+                        matchedIndex = i;
+                    }
+                }
+
+                if (matchedIndex < 0)
+                    return false;
+
+                matched = ExternalLaunchIntents[matchedIndex];
+                ExternalLaunchIntents.RemoveAt(matchedIndex);
+            }
+
+            if (matched == null ||
+                !IsUsableVector(matched.LaunchDirection) ||
+                !IsFinite(matched.ForceMagnitude) ||
+                matched.ForceMagnitude <= 0f)
+                return false;
+
+            launchDirection = matched.LaunchDirection;
+            forceMagnitude = matched.ForceMagnitude;
+            sourceId = matched.SourceId;
+            return true;
+        }
+
+        private static void CleanupExpiredExternalLaunchIntentsLocked(float now)
+        {
+            for (int i = ExternalLaunchIntents.Count - 1; i >= 0; i--)
+            {
+                ExternalLaunchIntentRecord record = ExternalLaunchIntents[i];
+                if (record == null || record.ExpiresAt < now)
+                    ExternalLaunchIntents.RemoveAt(i);
             }
         }
 
@@ -424,8 +643,16 @@ namespace ExtremeRagdoll
                 if (object.ReferenceEquals(agent, null))
                 {
                     DeathRoutes.Clear();
+                    ExternalLaunchIntents.Clear();
                     _nextHandledCleanupAt = 0f;
                     return;
+                }
+
+                for (int i = ExternalLaunchIntents.Count - 1; i >= 0; i--)
+                {
+                    ExternalLaunchIntentRecord launchIntent = ExternalLaunchIntents[i];
+                    if (launchIntent != null && object.ReferenceEquals(launchIntent.Victim, agent))
+                        ExternalLaunchIntents.RemoveAt(i);
                 }
 
                 DeathRouteRecord record;
