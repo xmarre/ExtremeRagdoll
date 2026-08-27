@@ -8,6 +8,7 @@ using TaleWorlds.MountAndBlade;
 
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: InternalsVisibleTo("ExtremeRagdoll")]
+[assembly: InternalsVisibleTo("ExtremeRagdoll.raw")]
 
 namespace ExtremeRagdoll
 {
