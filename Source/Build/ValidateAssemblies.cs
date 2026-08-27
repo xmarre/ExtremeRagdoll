@@ -73,6 +73,9 @@ internal static class ValidateAssemblies
             TypeDefinition bridge = RequireType(helper, "ExtremeRagdoll.ClothForceBridge");
             RequireMethod(bridge, "TryRegisterExternalLaunchIntent");
             RequireMethod(bridge, "TryConsumeExternalLaunchIntent");
+            MethodDefinition cleanupDeathRoutes = RequireMethod(bridge, "CleanupDeathRoutes");
+            Require(CallsMethod(cleanupDeathRoutes, "CleanupExpiredExternalLaunchIntentsLocked"),
+                "existing once-per-second route cleanup no longer retires stale external launch intents");
             RequireMethod(bridge, "HandleBlowPrefix");
             MethodDefinition finalizer = RequireMethod(bridge, "HandleBlowFinalizer");
             Require(finalizer.ReturnType.FullName == "System.Exception", "HandleBlow finalizer must return Exception");
@@ -196,6 +199,11 @@ internal static class ValidateAssemblies
                 "fallback/native-ineffective post-ragdoll force delivery is missing");
             Require(MethodContainsStringContaining(onMissionTick, "Completed native-owned death launch"),
                 "native-handled single-actuator completion marker is missing");
+            Require(onMissionTick.Body.Instructions.Any(i =>
+                    (i.OpCode.Code == Code.Ldfld) &&
+                    i.Operand is FieldReference &&
+                    ((FieldReference)i.Operand).Name == "HasExternalLaunchIntent"),
+                "death launch routing no longer consults external ownership state");
 
             TypeDefinition settings = RequireType(main, "ExtremeRagdoll.SafeRuntime.Settings");
             PropertyDefinition mountStrength = settings.Properties.SingleOrDefault(p => p.Name == "MountCollisionKillStrength");

@@ -1040,6 +1040,8 @@ namespace ExtremeRagdoll
 
             lock (DeathRouteGate)
             {
+                CleanupExpiredExternalLaunchIntentsLocked(now);
+
                 if (DeathRoutes.Count == 0)
                     return;
 

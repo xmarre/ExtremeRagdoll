@@ -2137,7 +2137,7 @@ namespace ExtremeRagdoll.SafeRuntime
                 }
 
                 DeathLaunchRoute launchRoute = ClothForceBridge.GetDeathLaunchRoute(pending.Agent);
-                if (launchRoute == DeathLaunchRoute.NativeHandled)
+                if (launchRoute == DeathLaunchRoute.NativeHandled && !pending.HasExternalLaunchIntent)
                 {
                     // Genuine missile deaths with a verified non-zero native KillingBlow impulse use exactly
                     // one actuator. The controlled Start/End corpse lifecycle is retained, but no post-ragdoll
@@ -2164,7 +2164,8 @@ namespace ExtremeRagdoll.SafeRuntime
                     continue;
                 }
 
-                if (string.Equals(pending.KillKind, "mount-collision", StringComparison.Ordinal) &&
+                if (!pending.HasExternalLaunchIntent &&
+                    string.Equals(pending.KillKind, "mount-collision", StringComparison.Ordinal) &&
                     SafeSettings.MountCollisionKillStrength <= 0f)
                 {
                     // Explicit 0 means retain only Bannerlord's native mount shove/charge motion.
