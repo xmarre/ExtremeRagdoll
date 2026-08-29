@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.3.19
 
 - Added the public `ExtremeRagdollIntegration.TryRegisterLaunchIntent` API for external mods that need a special lethal launch while leaving corpse-ragdoll ownership to Extreme Ragdoll.
 - External intent matching is tied to the same attacker/victim and stable blow identity inside a short hit-context lifetime; the API never predicts lethality.

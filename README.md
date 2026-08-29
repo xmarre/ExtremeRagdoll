@@ -2,12 +2,12 @@
 
 Extreme Ragdoll is a Mount & Blade II: Bannerlord single-player mod that amplifies directional death physics while preserving Bannerlord's normal corpse and mission lifecycle.
 
-Current repository version: **v1.3.18**  
+Current repository version: **v1.3.19**  
 Targeted Bannerlord range: **v1.3.15–v1.4.8**
 
 ## Repository layout
 
-- `Source/` — current v1.3.18 C# source and the minimal deterministic build toolchain.
+- `Source/` — current v1.3.19 C# source and the minimal deterministic build toolchain.
 - `bin/Win64_Shipping_Client/` — compiled runtime DLLs loaded by Bannerlord.
 - `ModuleData/Languages/` — English and Simplified Chinese MCM localization.
 - `SubModule.xml` — Bannerlord module manifest.
@@ -89,17 +89,17 @@ The API is implemented by `ExtremeRagdoll.ClothSync.dll`.
 
 For an **optional** integration, isolate the direct reference to `ExtremeRagdoll.ClothSync.dll` in a compatibility assembly that is loaded only when Extreme Ragdoll is present. This keeps Extreme Ragdoll optional for the base mod and avoids reflecting into its private implementation.
 
-## v1.3.18 scope
+## v1.3.19 scope
 
-- Builds on the v1.3.17 Bannerlord 1.4.7 battle-start crash fix, which moved localization patch installation out of `AppDomain.AssemblyLoad` and into bounded Bannerlord lifecycle callbacks.
-- Removes the hard CLR override dependency on one exact `MissionBehavior.OnRegisterBlow` signature and discovers compatible callback overloads at runtime from the combat-mission initialization path.
-- Dispatches whatever compatible attacker/victim/blow/collision/weapon arguments the running Bannerlord exposes into the existing hit-context logic; unexpected callback shapes fail closed to the existing health/state/removal death fallbacks.
-- Keeps the register-blow Harmony bridge reflection-only, with no hard Harmony assembly reference and no non-combat/tableau installation path.
-- Validates the compiled runtime's direct TaleWorlds references against Bannerlord 1.4.7 metadata and explicitly rejects reintroducing a hard `OnRegisterBlow` override.
-- Adds no mission tick, application tick, campaign scan, timer, persistent polling, physics, force, corpse-finalization, or Dismemberment Plus changes.
-
-Bannerlord 1.4.8 native battle startup still requires in-game confirmation because no 1.4.8 crash log/runtime was supplied and the public reference-assembly validation package is currently available only through 1.4.7. The compatibility path is deliberately late-bound so an `OnRegisterBlow` signature/modifier change does not make `SafeRagdollBehavior` unloadable before managed fallback logic can run.
+- Adds the public `ExtremeRagdollIntegration.TryRegisterLaunchIntent` hook for external mods that need custom lethal-hit launch direction and force while leaving corpse ownership to Extreme Ragdoll.
+- Matches each accepted intent to the same attacker, victim, and stable blow context inside a bounded 0.75-second lifetime.
+- Applies external launch intent only after Extreme Ragdoll's existing authoritative death confirmation.
+- Keeps `StartRagdollAsCorpse`, bounded ragdoll-force delivery, velocity/force safety limits, and paired corpse finalization under Extreme Ragdoll ownership.
+- Preserves external direction and requested one-pulse force without reapplying Extreme Ragdoll's normal lift, momentum carryover, impact spin, or damage-derived scaling.
+- Handles integration registration immediately before or after the normal `OnRegisterBlow` observation path, while rejecting late intent once force delivery or corpse-finalizer sentinel processing has begun.
+- Cleans stale integration state on expiry, agent teardown, and mission teardown.
+- Retains the v1.3.18 Bannerlord v1.3.15–v1.4.8 compatibility path and its late-bound `OnRegisterBlow` handling.
 
 ## Version history note
 
-The existing Nexus Mods v1.3.17 package remains the authoritative v1.3.17 build. Its runtime corresponds to the Bannerlord 1.4.7 crash-fix source state. Bannerlord 1.4.8 forward-compatibility work is versioned separately as v1.3.18 so the same version number never refers to two different runtimes.
+v1.3.19 adds the external lethal-launch integration API on top of the v1.3.18 Bannerlord compatibility runtime.
