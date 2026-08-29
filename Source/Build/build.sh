@@ -9,6 +9,7 @@ SOURCE_DIR="$(cd "$BUILD_DIR/.." && pwd)"
 OUT_DIR="${1:-$BUILD_DIR/out}"
 STUB_DIR="$OUT_DIR/stubs"
 BIN_DIR="$OUT_DIR/bin"
+RAW_DIR="$OUT_DIR/intermediate"
 TOOL_DIR="$OUT_DIR/tools"
 
 if [[ -z "${DOTNET_ROOT:-}" ]]; then
@@ -63,7 +64,7 @@ if [[ ! -d "$NETCORE_REF_DIR" ]]; then
     exit 2
 fi
 
-mkdir -p "$STUB_DIR" "$BIN_DIR" "$TOOL_DIR"
+mkdir -p "$STUB_DIR" "$BIN_DIR" "$RAW_DIR" "$TOOL_DIR"
 
 common=("$DOTNET" "$CSC" /nologo /noconfig /nostdlib /deterministic+ /optimize+ /debug- /langversion:7.3 /target:library "/r:$NETSTANDARD_REF")
 stubs="$BUILD_DIR/ReferenceStubs"
@@ -81,7 +82,7 @@ stubs="$BUILD_DIR/ReferenceStubs"
     "/r:$STUB_DIR/TaleWorlds.Library.dll" "/r:$STUB_DIR/TaleWorlds.MountAndBlade.dll" \
     "$SOURCE_DIR/ClothForceBridge.cs"
 
-"${common[@]}" "/out:$BIN_DIR/ExtremeRagdoll.raw.dll" \
+"${common[@]}" "/out:$RAW_DIR/ExtremeRagdoll.dll" \
     "/r:$STUB_DIR/TaleWorlds.Library.dll" "/r:$STUB_DIR/TaleWorlds.Core.dll" "/r:$STUB_DIR/TaleWorlds.Engine.dll" \
     "/r:$STUB_DIR/TaleWorlds.MountAndBlade.dll" "/r:$STUB_DIR/TaleWorlds.Localization.dll" "/r:$STUB_DIR/MCMv5.dll" "/r:$BIN_DIR/ExtremeRagdoll.ClothSync.dll" \
     "$SOURCE_DIR/SafeSubModule.cs" "$SOURCE_DIR/McmLiveLocalizationRefresh.cs" "$SOURCE_DIR/RegisterBlowCompatibility.cs" "$SOURCE_DIR/CompatibleLocalizedSubModule.cs"
@@ -97,7 +98,7 @@ cp "$BUILD_DIR/ValidateAssemblies.runtimeconfig.json" "$TOOL_DIR/ValidateAssembl
 "${tool_common[@]}" "/out:$TOOL_DIR/ValidateAssemblies.dll" "$BUILD_DIR/ValidateAssemblies.cs"
 
 "$DOTNET" "$TOOL_DIR/PatchOverride.dll" \
-    "$BIN_DIR/ExtremeRagdoll.raw.dll" "$STUB_DIR/TaleWorlds.MountAndBlade.dll" "$BIN_DIR/ExtremeRagdoll.dll"
+    "$RAW_DIR/ExtremeRagdoll.dll" "$STUB_DIR/TaleWorlds.MountAndBlade.dll" "$BIN_DIR/ExtremeRagdoll.dll"
 "$DOTNET" "$TOOL_DIR/ValidateAssemblies.dll" \
     "$BIN_DIR/ExtremeRagdoll.dll" "$BIN_DIR/ExtremeRagdoll.ClothSync.dll"
 

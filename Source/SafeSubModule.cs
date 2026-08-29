@@ -513,6 +513,8 @@ namespace ExtremeRagdoll.SafeRuntime
             internal bool RagdollStartRequested;
             internal bool DeathConfirmed;
             internal bool CompletionGateArmed;
+            internal bool HasExternalLaunchIntent;
+            internal string ExternalLaunchSourceId;
             internal Vec3 RemainingPulseForce;
             internal float CurrentPulseBaseMagnitude;
             internal float CurrentPulseSpinMagnitude;
@@ -568,6 +570,10 @@ namespace ExtremeRagdoll.SafeRuntime
             internal string DirectionSource;
             internal Blow OriginalBlow;
             internal bool HasOriginalBlow;
+            internal bool HasExternalLaunchIntent;
+            internal Vec3 ExternalLaunchDirection;
+            internal float ExternalLaunchForceMagnitude;
+            internal string ExternalLaunchSourceId;
             internal float CapturedAt;
         }
 
@@ -882,7 +888,7 @@ namespace ExtremeRagdoll.SafeRuntime
             catch { }
             float now = GetMissionTime();
 
-            _recentImpacts[victim] = new RecentImpact
+            RecentImpact recentImpact = new RecentImpact
             {
                 Affector = attacker,
                 Direction = direction,
@@ -895,6 +901,8 @@ namespace ExtremeRagdoll.SafeRuntime
                 HasOriginalBlow = true,
                 CapturedAt = now
             };
+            _recentImpacts[victim] = recentImpact;
+            TryAttachExternalLaunchIntent(victim, recentImpact);
 
             float health;
             try { health = victim.Health; }
@@ -1382,6 +1390,89 @@ namespace ExtremeRagdoll.SafeRuntime
             catch { return -1; }
         }
 
+        private void TryAttachExternalLaunchIntent(Agent affected, RecentImpact recent)
+        {
+            if (affected == null || recent == null || recent.HasExternalLaunchIntent || !recent.HasOriginalBlow)
+                return;
+
+            Vec3 launchDirection;
+            float forceMagnitude;
+            string sourceId;
+            if (!ClothForceBridge.TryConsumeExternalLaunchIntent(
+                    recent.Affector,
+                    affected,
+                    recent.OriginalBlow,
+                    out launchDirection,
+                    out forceMagnitude,
+                    out sourceId))
+                return;
+
+            if (!IsUsableVector(launchDirection) || !IsFinite(forceMagnitude) || forceMagnitude <= 0f)
+                return;
+
+            recent.HasExternalLaunchIntent = true;
+            recent.ExternalLaunchDirection = launchDirection.NormalizedCopy();
+            recent.ExternalLaunchForceMagnitude = forceMagnitude;
+            recent.ExternalLaunchSourceId = sourceId;
+
+            PendingDeath pending = FindPending(affected);
+            if (pending != null)
+                ApplyExternalLaunchIntent(pending, recent);
+        }
+
+        private void ApplyExternalLaunchIntent(PendingDeath pending, RecentImpact recent)
+        {
+            if (pending == null || recent == null || !recent.HasExternalLaunchIntent ||
+                pending.HasExternalLaunchIntent)
+                return;
+
+            // Do not rewrite an in-flight force train if an integration registers unexpectedly late.
+            if (pending.PulseCount < 0 ||
+                pending.PulseIndex != 0 ||
+                pending.CurrentPulseChunkCount > 0 ||
+                IsUsableVector(pending.RemainingPulseForce))
+            {
+                if (SafeSettings.DebugLogging)
+                {
+                    SafeLog.Info(
+                        "Ignored late external launch intent for agent #" + pending.AgentIndex +
+                        " sourceId=" + (recent.ExternalLaunchSourceId ?? "<unknown>") +
+                        " because force delivery had already started.");
+                }
+                return;
+            }
+
+            pending.HasExternalLaunchIntent = true;
+            pending.ExternalLaunchSourceId = recent.ExternalLaunchSourceId;
+            pending.RawImpactDirection = recent.ExternalLaunchDirection;
+            pending.Direction = recent.ExternalLaunchDirection.NormalizedCopy();
+            pending.DirectionSource = "externalLaunchIntent:" +
+                (string.IsNullOrEmpty(recent.ExternalLaunchSourceId) ? "unknown" : recent.ExternalLaunchSourceId);
+            pending.ForceMagnitude = recent.ExternalLaunchForceMagnitude;
+
+            // The external magnitude is one complete logical launch pulse. Keep Extreme Ragdoll's
+            // bounded native chunks and velocity limits, without re-applying its own lift/momentum/spin.
+            pending.PulseIndex = 0;
+            pending.PulseCount = 1;
+            pending.PulseInterval = 0f;
+            pending.PulseDecay = 1f;
+            pending.RemainingPulseForce = Vec3.Zero;
+            pending.CurrentPulseBaseMagnitude = 0f;
+            pending.CurrentPulseSpinMagnitude = 0f;
+            pending.CurrentPulseChunkCount = 0;
+            pending.CompletionGateArmed = false;
+
+            if (SafeSettings.DebugLogging)
+            {
+                SafeLog.Info(
+                    "Accepted external lethal-launch intent for agent #" + pending.AgentIndex +
+                    " sourceId=" + (pending.ExternalLaunchSourceId ?? "<unknown>") +
+                    " direction=" + FormatVec(pending.Direction) +
+                    " force=" + pending.ForceMagnitude.ToString("0") +
+                    " ownership=CONDITIONAL_ON_CONFIRMED_DEATH.");
+            }
+        }
+
         private void QueueDeathFromRecentImpact(Agent affected, string source, int observedDamage, string fallbackKind)
         {
             if (affected == null || _tracked.Contains(affected))
@@ -1392,6 +1483,8 @@ namespace ExtremeRagdoll.SafeRuntime
             if (_recentImpacts.TryGetValue(affected, out recent) &&
                 recent != null && now - recent.CapturedAt <= RecentImpactLifetime)
             {
+                TryAttachExternalLaunchIntent(affected, recent);
+
                 Vec3 momentum = CaptureAgentMomentum(affected);
                 if (!IsUsableVector(momentum))
                     momentum = recent.VictimMomentum;
@@ -1476,6 +1569,10 @@ namespace ExtremeRagdoll.SafeRuntime
             };
             _pending.Add(pending);
 
+            RecentImpact recent;
+            if (_recentImpacts.TryGetValue(affected, out recent) && recent != null && recent.HasExternalLaunchIntent)
+                ApplyExternalLaunchIntent(pending, recent);
+
             if (SafeSettings.DebugLogging)
             {
                 SafeLog.Info(
@@ -1543,14 +1640,18 @@ namespace ExtremeRagdoll.SafeRuntime
             if (damage > pending.Damage)
             {
                 pending.Damage = damage;
-                pending.ForceMagnitude = Math.Max(pending.ForceMagnitude, ComputeForceMagnitude(damage));
+                if (!pending.HasExternalLaunchIntent)
+                    pending.ForceMagnitude = Math.Max(pending.ForceMagnitude, ComputeForceMagnitude(damage));
             }
 
-            string resolvedSource = string.IsNullOrEmpty(directionSource) ? pending.DirectionSource : directionSource;
-            pending.Direction = ResolveDirection(
-                affected, affector, pending.RawImpactDirection, pending.VictimMomentum, pending.EngineImpulse,
-                pending.HasEngineImpulse, resolvedSource, out resolvedSource);
-            pending.DirectionSource = resolvedSource;
+            if (!pending.HasExternalLaunchIntent)
+            {
+                string resolvedSource = string.IsNullOrEmpty(directionSource) ? pending.DirectionSource : directionSource;
+                pending.Direction = ResolveDirection(
+                    affected, affector, pending.RawImpactDirection, pending.VictimMomentum, pending.EngineImpulse,
+                    pending.HasEngineImpulse, resolvedSource, out resolvedSource);
+                pending.DirectionSource = resolvedSource;
+            }
 
             if (pending.Source == null || pending.Source.IndexOf(source, StringComparison.Ordinal) < 0)
                 pending.Source = string.IsNullOrEmpty(pending.Source) ? source : pending.Source + "+" + source;
@@ -1868,6 +1969,18 @@ namespace ExtremeRagdoll.SafeRuntime
             for (int i = _pending.Count - 1; i >= 0; i--)
             {
                 PendingDeath pending = _pending[i];
+
+                if (pending != null && pending.Agent != null && !pending.HasExternalLaunchIntent)
+                {
+                    RecentImpact pendingRecent;
+                    if (_recentImpacts.TryGetValue(pending.Agent, out pendingRecent) &&
+                        pendingRecent != null &&
+                        now - pendingRecent.CapturedAt <= RecentImpactLifetime)
+                    {
+                        TryAttachExternalLaunchIntent(pending.Agent, pendingRecent);
+                    }
+                }
+
                 if (pending.Agent == null || now - pending.CapturedAt > PendingLifetime)
                 {
                     // Never drop a corpse lifecycle that ExtremeRagdoll already took ownership of.
@@ -2025,7 +2138,7 @@ namespace ExtremeRagdoll.SafeRuntime
                 }
 
                 DeathLaunchRoute launchRoute = ClothForceBridge.GetDeathLaunchRoute(pending.Agent);
-                if (launchRoute == DeathLaunchRoute.NativeHandled)
+                if (launchRoute == DeathLaunchRoute.NativeHandled && !pending.HasExternalLaunchIntent)
                 {
                     // Genuine missile deaths with a verified non-zero native KillingBlow impulse use exactly
                     // one actuator. The controlled Start/End corpse lifecycle is retained, but no post-ragdoll
@@ -2052,7 +2165,8 @@ namespace ExtremeRagdoll.SafeRuntime
                     continue;
                 }
 
-                if (string.Equals(pending.KillKind, "mount-collision", StringComparison.Ordinal) &&
+                if (!pending.HasExternalLaunchIntent &&
+                    string.Equals(pending.KillKind, "mount-collision", StringComparison.Ordinal) &&
                     SafeSettings.MountCollisionKillStrength <= 0f)
                 {
                     // Explicit 0 means retain only Bannerlord's native mount shove/charge motion.
@@ -2116,7 +2230,7 @@ namespace ExtremeRagdoll.SafeRuntime
                     Vec3 fullPulseForce = pulseDirection * pulseMagnitude;
                     float spinMagnitude = 0f;
 
-                    if (pending.PulseIndex == 0)
+                    if (pending.PulseIndex == 0 && !pending.HasExternalLaunchIntent)
                     {
                         fullPulseForce = ApplyMomentumCarryover(
                             fullPulseForce, pending.VictimMomentum, pulseDirection);
@@ -2133,7 +2247,9 @@ namespace ExtremeRagdoll.SafeRuntime
                     // v1.2.74 force train. Non-mount deaths use a 50% post-ragdoll budget and a larger bounded
                     // central-body integration chunk, producing a compact reaction with far fewer native calls.
                     // Mount collisions retain their independently saved MountCollisionKillStrength scale.
-                    float postRagdollScale = mountCollision ? SafeSettings.MountCollisionKillStrength : 0.50f;
+                    float postRagdollScale = pending.HasExternalLaunchIntent
+                        ? 1f
+                        : (mountCollision ? SafeSettings.MountCollisionKillStrength : 0.50f);
                     if (!IsFinite(postRagdollScale) || postRagdollScale < 0f)
                         postRagdollScale = mountCollision ? 0.10f : 0.50f;
                     fullPulseForce *= postRagdollScale;
@@ -2155,18 +2271,21 @@ namespace ExtremeRagdoll.SafeRuntime
                         // strong common baseline, while damage only changes strength modestly. This
                         // prevents fallback/direct deaths from becoming a separate visual class and
                         // prevents the old ceiling saturation from erasing all damage variation.
-                        float damageInfluence = SafeSettings.DamageInfluence;
-                        if (!IsFinite(damageInfluence) || damageInfluence < 0f)
-                            damageInfluence = 0f;
-                        float normalizedDamage = pending.Damage * damageInfluence / 1250f;
-                        if (!IsFinite(normalizedDamage) || normalizedDamage < 0f)
-                            normalizedDamage = 0f;
-                        if (normalizedDamage > 1f)
-                            normalizedDamage = 1f;
-                        float damageDeliveryScale = 0.85f + 0.15f * normalizedDamage;
-                        deliveredForceCeiling *= damageDeliveryScale;
+                        if (!pending.HasExternalLaunchIntent)
+                        {
+                            float damageInfluence = SafeSettings.DamageInfluence;
+                            if (!IsFinite(damageInfluence) || damageInfluence < 0f)
+                                damageInfluence = 0f;
+                            float normalizedDamage = pending.Damage * damageInfluence / 1250f;
+                            if (!IsFinite(normalizedDamage) || normalizedDamage < 0f)
+                                normalizedDamage = 0f;
+                            if (normalizedDamage > 1f)
+                                normalizedDamage = 1f;
+                            float damageDeliveryScale = 0.85f + 0.15f * normalizedDamage;
+                            deliveredForceCeiling *= damageDeliveryScale;
 
-                        deliveredForceCeiling *= postRagdollScale;
+                            deliveredForceCeiling *= postRagdollScale;
+                        }
                     }
                     if (deliveredForceCeiling > 0f && IsFinite(fullPulseMagnitude) && fullPulseMagnitude > deliveredForceCeiling)
                         fullPulseForce *= deliveredForceCeiling / fullPulseMagnitude;
