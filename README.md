@@ -89,6 +89,24 @@ The API is implemented by `ExtremeRagdoll.ClothSync.dll`.
 
 For an **optional** integration, isolate the direct reference to `ExtremeRagdoll.ClothSync.dll` in a compatibility assembly that is loaded only when Extreme Ragdoll is present. This keeps Extreme Ragdoll optional for the base mod and avoids reflecting into its private implementation.
 
+### Practical example: Way of the Asura
+
+[**Way of the Asura - Unarmed Skill Tree**](https://www.nexusmods.com/mountandblade2bannerlord/mods/12966) by **woosocklee** is a practical example of what the external lethal-launch API can be used for.
+
+Way of the Asura adds a complete Unarmed skill and perk tree built around punches, kicks, shield bashes, and other close-combat abilities. One of its higher-impact mechanics allows powerful lethal kicks to launch an enemy and then use the launched body as part of a **bowling-pin collision** system capable of knocking into other enemies.
+
+When Extreme Ragdoll v1.3.19 or newer is installed alongside Way of the Asura, the two mods divide responsibility cleanly:
+
+- **Way of the Asura** detects the qualifying kick, chooses the intended launch direction and force, and registers that hit through `TryRegisterLaunchIntent`.
+- **Extreme Ragdoll** independently confirms whether that exact hit actually became lethal and, if so, owns the corpse-ragdoll transition, bounded launch-force delivery, and finalization.
+- **Way of the Asura** can then observe the launched corpse trajectory for its own bowling-pin collision gameplay without starting a second competing corpse-ragdoll pipeline.
+
+This is the intended use case for the API: a gameplay mod can request a distinctive lethal launch while Extreme Ragdoll remains the single owner of corpse-ragdoll lifecycle and force delivery when both mods are active.
+
+Way of the Asura does **not** require Extreme Ragdoll to function. Its Extreme Ragdoll support is an optional compatibility integration, so either mod can still be used independently.
+
+The integration was tested by Way of the Asura's author against the official Extreme Ragdoll v1.3.19 release, including both lethal kick launches and the bowling-pin collision feature.
+
 ## v1.3.19 scope
 
 - Adds the public `ExtremeRagdollIntegration.TryRegisterLaunchIntent` hook for external mods that need custom lethal-hit launch direction and force while leaving corpse ownership to Extreme Ragdoll.
